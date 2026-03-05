@@ -32,22 +32,35 @@ func main() {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
 
+	errCh := make(chan error, 1)
 	go func() {
-		if err := d.Start(); err != nil {
+		errCh <- d.Start()
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
 			slog.Error("daemon exited with error", "error", err)
 			os.Exit(1)
 		}
-	}()
-
-	sig := <-sigCh
-	slog.Info("received signal, shutting down", "signal", sig)
+		slog.Info("daemon stopped")
+		return
+	case sig := <-sigCh:
+		slog.Info("received signal, shutting down", "signal", sig)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := d.Shutdown(ctx); err != nil {
 		slog.Error("shutdown error", "error", err)
+		os.Exit(1)
+	}
+
+	if err := <-errCh; err != nil {
+		slog.Error("daemon exited with error", "error", err)
 		os.Exit(1)
 	}
 

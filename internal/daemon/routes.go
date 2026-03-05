@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/syndg/deck/internal/domain"
@@ -30,6 +32,7 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	req.Description = strings.TrimSpace(req.Description)
 	if req.Description == "" {
 		writeError(w, http.StatusBadRequest, "description is required")
 		return
@@ -127,12 +130,16 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		slog.Error("encoding JSON response", "status", status, "error", err)
+	}
 }
 
 // writeError writes a JSON error response with the given status code and message.
 func writeError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+		slog.Error("encoding JSON error response", "status", status, "error", err)
+	}
 }

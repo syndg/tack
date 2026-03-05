@@ -54,22 +54,33 @@ var daemonCmd = &cobra.Command{
 
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		defer signal.Stop(sigCh)
 
+		errCh := make(chan error, 1)
 		go func() {
-			if err := d.Start(); err != nil {
-				slog.Error("daemon exited with error", "error", err)
-				os.Exit(1)
-			}
+			errCh <- d.Start()
 		}()
 
-		sig := <-sigCh
-		slog.Info("received signal, shutting down", "signal", sig)
+		select {
+		case err := <-errCh:
+			if err != nil {
+				return fmt.Errorf("daemon exited with error: %w", err)
+			}
+			slog.Info("daemon stopped")
+			return nil
+		case sig := <-sigCh:
+			slog.Info("received signal, shutting down", "signal", sig)
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		if err := d.Shutdown(ctx); err != nil {
 			return fmt.Errorf("shutting down daemon: %w", err)
+		}
+
+		if err := <-errCh; err != nil {
+			return fmt.Errorf("daemon exited with error: %w", err)
 		}
 
 		slog.Info("daemon stopped")

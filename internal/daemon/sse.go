@@ -29,13 +29,19 @@ func (d *Daemon) handleSSE(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			d.logger.Info("SSE client disconnected", "remote", r.RemoteAddr)
 			return
-		case event := <-sub:
+		case event, ok := <-sub:
+			if !ok {
+				return
+			}
 			data, err := json.Marshal(event)
 			if err != nil {
 				d.logger.Error("marshaling SSE event", "error", err)
 				continue
 			}
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				d.logger.Error("writing SSE event", "error", err)
+				return
+			}
 			flusher.Flush()
 		}
 	}
