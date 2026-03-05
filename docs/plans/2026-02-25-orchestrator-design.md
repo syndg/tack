@@ -3,7 +3,7 @@
 **Date:** 2026-02-25
 **Status:** Draft — Under Review
 **Author:** SynDG + Claude
-**Prerequisite:** [MVP Design](2026-02-16-deck-design.md)
+**Supersedes:** MVP Design (removed — TUI is now a client to the daemon, not the product)
 
 ---
 
