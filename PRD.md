@@ -346,7 +346,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 ## Phase 3: Data Layer
 
-- [ ] **3.1** Create database manager
+- [x] **3.1** Create database manager
   Create `internal/db/db.go` with:
 
   ```go
@@ -383,7 +383,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   The driver name for modernc sqlite is `"sqlite"`.
   File: `internal/db/db.go`
 
-- [ ] **3.2** Create database schema migrations
+- [x] **3.2** Create database schema migrations
   Create `internal/db/migrations.go` with migration SQL as a Go const string.
 
   ```go
@@ -469,7 +469,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Wire `DB.Migrate()` in db.go to call `RunMigrations(d.conn)`.
   File: `internal/db/migrations.go`
 
-- [ ] **3.3** Create objectives and agents stores
+- [x] **3.3** Create objectives and agents stores
   Create `internal/db/objectives.go`:
   ```go
   type ObjectiveStore struct { db *sql.DB }
@@ -498,7 +498,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Import `github.com/syndg/deck/internal/domain` and `github.com/google/uuid`.
   Files: `internal/db/objectives.go`, `internal/db/agents.go`
 
-- [ ] **3.4** Create mail and events stores
+- [x] **3.4** Create mail and events stores
   Create `internal/db/mail.go`:
   ```go
   type MailStore struct { db *sql.DB }
@@ -526,7 +526,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Same import pattern as task 3.3.
   Files: `internal/db/mail.go`, `internal/db/events.go`
 
-- [ ] **3.5** Create event bus with persistence
+- [x] **3.5** Create event bus with persistence
   Create `internal/services/events/bus.go`:
   ```go
   package events
