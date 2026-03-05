@@ -1,0 +1,27 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+deck
+deck-daemon
+daemon
+/bin/
+/dist/
+
+# Ralph
+ralph.log
+
+# Vendor
+vendor/
+
+# Environment
+.env
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
