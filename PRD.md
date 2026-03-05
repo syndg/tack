@@ -677,7 +677,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 ## Phase 5: CLI Client
 
-- [ ] **5.1** Create cobra CLI root and daemon command
+- [x] **5.1** Create cobra CLI root and daemon command
   Rewrite `cmd/deck/main.go` to just call `Execute()`:
   ```go
   package main
@@ -723,7 +723,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Import `github.com/spf13/cobra` and internal packages.
   Files: `cmd/deck/main.go`, `cmd/deck/root.go`
 
-- [ ] **5.2** Create HTTP client for daemon communication
+- [x] **5.2** Create HTTP client for daemon communication
   Create `internal/client/client.go` with:
   ```go
   package client
@@ -757,7 +757,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Import: `net/http`, `encoding/json`, `bytes`, `fmt`, `context`, `io`, and `github.com/syndg/deck/internal/domain`.
   File: `internal/client/client.go`
 
-- [ ] **5.3** Create `deck status` command
+- [x] **5.3** Create `deck status` command
   Create `cmd/deck/status.go` with:
   ```go
   var statusCmd = &cobra.Command{
@@ -785,7 +785,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   ```
   File: `cmd/deck/status.go`
 
-- [ ] **5.4** Create `deck plan` command stub
+- [x] **5.4** Create `deck plan` command stub
   Create `cmd/deck/plan.go` with:
   ```go
   var planCmd = &cobra.Command{
