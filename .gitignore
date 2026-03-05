@@ -6,9 +6,9 @@
 *.dylib
 *.test
 *.out
-deck
-deck-daemon
-daemon
+/deck
+/deck-daemon
+/daemon
 /bin/
 /dist/
 
