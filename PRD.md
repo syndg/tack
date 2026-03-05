@@ -568,7 +568,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 ## Phase 4: HTTP Daemon
 
-- [ ] **4.1** Create daemon server
+- [x] **4.1** Create daemon server
   Create `internal/daemon/daemon.go` with:
   ```go
   package daemon
@@ -599,7 +599,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Import: `net/http`, `log/slog`, `time`, `context`, and internal packages (`config`, `db`, `events`).
   File: `internal/daemon/daemon.go`
 
-- [ ] **4.2** Create SSE event stream endpoint
+- [x] **4.2** Create SSE event stream endpoint
   Create `internal/daemon/sse.go` with:
   ```go
   func (d *Daemon) handleSSE(w http.ResponseWriter, r *http.Request)
@@ -616,7 +616,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Register as `GET /events` in registerRoutes.
   File: `internal/daemon/sse.go`
 
-- [ ] **4.3** Create objectives REST endpoints
+- [x] **4.3** Create objectives REST endpoints
   Create `internal/daemon/routes.go` with:
   ```go
   func (d *Daemon) registerRoutes()
@@ -641,7 +641,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Use `encoding/json` for marshal/unmarshal.
   File: `internal/daemon/routes.go`
 
-- [ ] **4.4** Create health and status endpoints
+- [x] **4.4** Create health and status endpoints
   Add to `internal/daemon/routes.go`:
   ```go
   func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request)
@@ -659,7 +659,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
     Query objectives, count by status, compute uptime from `d.startTime`. Respond 200 with JSON.
   File: `internal/daemon/routes.go`
 
-- [ ] **4.5** Wire daemon entry point
+- [x] **4.5** Wire daemon entry point
   Rewrite `cmd/daemon/main.go` to:
   1. Parse `--config` flag (default: `~/.config/deck/config.yaml`)
   2. Load config via `config.Load(configPath)` — falls back to defaults if file missing
