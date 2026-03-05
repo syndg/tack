@@ -65,7 +65,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 ## Phase 2: Domain Types & Interfaces
 
-- [ ] **2.1** Create core domain types
+- [x] **2.1** Create core domain types
   Create `internal/domain/types.go` with all domain types the system needs.
 
   **Objective lifecycle:**
@@ -192,7 +192,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Import `time` package. All types need JSON tags for API serialization.
   File: `internal/domain/types.go`
 
-- [ ] **2.2** Create sandbox provider interface
+- [x] **2.2** Create sandbox provider interface
   Create `internal/sandbox/provider.go` with the SandboxProvider and Sandbox interfaces.
   Create `internal/sandbox/types.go` with all supporting types.
 
@@ -225,7 +225,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   These are interfaces only — no implementations in this phase.
   Files: `internal/sandbox/provider.go`, `internal/sandbox/types.go`
 
-- [ ] **2.3** Create agent runtime interface
+- [x] **2.3** Create agent runtime interface
   Create `internal/runtime/runtime.go` with:
   ```go
   package runtime
@@ -276,7 +276,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Import the sandbox package for the Sandbox interface reference: `github.com/syndg/deck/internal/sandbox`.
   File: `internal/runtime/runtime.go`
 
-- [ ] **2.4** Create configuration types and YAML loader
+- [x] **2.4** Create configuration types and YAML loader
   Create `internal/config/config.go` with:
 
   ```go
