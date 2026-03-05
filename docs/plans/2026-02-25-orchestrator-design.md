@@ -13,6 +13,23 @@ The MVP defined Deck as a terminal-native TUI for embedding agent sessions, revi
 
 The MVP's TUI becomes one client interface into a headless orchestration engine that runs anywhere.
 
+### Deck as a Harness Engineering Framework
+
+OpenAI's "harness engineering" discipline — building infrastructure, constraints, and feedback loops that enable AI agents to operate reliably — describes exactly what Deck is. But where OpenAI and Stripe built proprietary harnesses for themselves, **Deck is the open-source, configurable harness framework that lets anyone build their own.**
+
+The four harness functions map directly to Deck's architecture:
+
+| Harness Function | What It Means | Deck's Implementation |
+|---|---|---|
+| **Constrain** | Architectural boundaries, dependency rules | Blueprint state machine, file scope isolation, deterministic gates |
+| **Inform** | Right context at the right time | Scoped rules, agent overlays, repo-aware context pipeline |
+| **Verify** | Testing, linting, CI validation | Quality gates in sandboxes, max retry cap, independent verification |
+| **Correct** | Feedback loops, self-repair | Watchdog triage, escalation chain, learned rules from failures |
+
+**Key insight from the field:** LangChain improved from 52.8% to 66.5% on Terminal Bench 2.0 by modifying only the harness, not the model. The harness matters more than the model. Deck's value proposition is the harness — users bring their own models, sandboxes, and quality gates.
+
+Everything in Deck that isn't an LLM decision is harness. The blueprint engine, the merge queue, the scoped rules, the tool curation, the watchdog — these are the deterministic infrastructure that makes agents reliable. The LLM is the horse; Deck is the equipment that channels its power.
+
 ---
 
 ## Problem
@@ -47,6 +64,11 @@ Borrowed from the best of what we studied:
 | **Daemon-first, TUI-as-client** | OpenClaw | Core runs headless on any machine. Multiple clients connect. |
 | **Clean service architecture** | OpenCode | Pub/sub broker, SQLite persistence, typed events |
 | **SDK-driven sandboxes** | Daytona | Programmatic sandbox lifecycle, not manual environment setup |
+| **Configurable blueprints** | Stripe | Blueprints are user-defined YAML files, not hardcoded logic |
+| **Scoped rules that compound** | Stripe, Hashimoto | Every mistake becomes a glob-scoped rule for future agents |
+| **Tool curation per task** | Stripe Tool Shed | Daemon curates which tools each Worker gets, not all 500 |
+| **Pluggable agent runtime** | Harness engineering | Runtime interface wraps Pi, Claude Code, Codex, or any agent |
+| **Progressive autonomy** | Anthropic research | 4-tier autonomy system tied to the blueprint state machine |
 
 ---
 
@@ -418,9 +440,121 @@ deck.done           — Signal task completion with summary
 - `@leads` — All lead agents
 - `@human` — Escalation to you (triggers TUI/OpenClaw notification)
 
-### 6. Blueprints (Deterministic + Agentic Workflow)
+### 6. Blueprints (Configurable Deterministic + Agentic Workflows)
 
 Inspired by Stripe's blueprint pattern: a state machine that interleaves deterministic code steps with agentic (LLM-driven) steps.
+
+**Blueprints are user-configurable YAML files, not hardcoded logic.** They live in `.deck/blueprints/` per project or `~/.config/deck/blueprints/` globally. Deck ships sensible defaults; users write their own for their specific workflows.
+
+```yaml
+# .deck/blueprints/feature.yaml — shipped default
+name: "Feature Implementation"
+description: "Plan, build, review, and merge a new feature"
+trigger: "default"  # used when no blueprint is specified
+
+steps:
+  - id: plan
+    type: agent        # LLM-driven
+    role: planner
+    description: "Explore codebase and decompose into streams"
+    next: approve
+
+  - id: approve
+    type: human        # requires human approval
+    description: "Review and approve the plan"
+    next: dispatch
+
+  - id: dispatch
+    type: deterministic  # code, not LLM
+    action: dispatch_streams
+    description: "Spawn sandboxes and agents per stream"
+    next: per_stream
+
+  - id: per_stream
+    type: blueprint_ref
+    ref: ".deck/blueprints/stream.yaml"  # nested blueprint per stream
+    next: merge
+
+  - id: merge
+    type: deterministic
+    action: merge_queue
+    description: "Merge all stream branches, run quality gates"
+    next: complete
+
+  - id: complete
+    type: deterministic
+    action: mark_complete
+```
+
+```yaml
+# .deck/blueprints/stream.yaml — per-stream execution
+name: "Stream Execution"
+steps:
+  - id: scout
+    type: agent
+    role: scout
+    optional: true     # skip if plan says scout: false
+    next: build
+
+  - id: build
+    type: agent
+    role: builder
+    next: lint
+
+  - id: lint
+    type: deterministic
+    action: run_quality_gates
+    retry: 2           # max retries before escalation
+    next: review
+
+  - id: review
+    type: agent
+    role: reviewer
+    next: merge_ready
+
+  - id: merge_ready
+    type: deterministic
+    action: signal_merge_ready
+```
+
+```yaml
+# .deck/blueprints/hotfix.yaml — user-defined for quick fixes
+name: "Hotfix"
+description: "Single-agent fix with minimal ceremony"
+trigger: "manual"
+
+steps:
+  - id: fix
+    type: agent
+    role: builder
+    description: "Fix the issue in a single agent session"
+    next: lint
+
+  - id: lint
+    type: deterministic
+    action: run_quality_gates
+    retry: 2
+    next: merge
+
+  - id: merge
+    type: deterministic
+    action: merge_queue
+    next: complete
+
+  - id: complete
+    type: deterministic
+    action: mark_complete
+```
+
+**Blueprint selection:** The Planner can recommend a blueprint based on task complexity (simple bug = `hotfix.yaml`, multi-stream feature = `feature.yaml`). Users can also specify: `deck plan "fix the auth bug" --blueprint hotfix`.
+
+**Step types:**
+- `agent` — LLM-driven. Spawns an agent with the specified role.
+- `deterministic` — Code. Runs a predefined action (quality gates, merge, dispatch).
+- `human` — Blocks until human approval via TUI/CLI/OpenClaw.
+- `blueprint_ref` — Nests another blueprint (for per-stream execution within an objective).
+
+**Why configurable:** Every team's workflow is different. Some want mandatory code review agents. Others trust CI and skip review. Some need security scanning steps. Others need database migration validation. The blueprint engine is the harness — users configure it for their project.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -494,7 +628,118 @@ FIFO merge queue with tiered conflict resolution:
 
 **Dependency handling:** If stream_2 depends on stream_1, stream_2's merge is held until stream_1 merges. Deck enforces this from the plan's dependency graph.
 
-### 8. Watchdog & Health Monitoring
+### 8. Scoped Rules (`.deck/rules/`)
+
+**Every mistake becomes a rule.** When a Worker fails and a human corrects it, the pattern should be captured as a scoped rule that prevents future agents from making the same mistake. This is the compounding loop that makes the harness smarter over time.
+
+Rules live in `.deck/rules/` as markdown files with glob-scoped frontmatter:
+
+```yaml
+# .deck/rules/auth-patterns.md
+---
+scope: "src/auth/**"
+---
+
+- Use the existing `AuthProvider` class — do NOT create a new auth abstraction.
+- JWT tokens must be signed with RS256, not HS256.
+- All auth endpoints require rate limiting via the `rateLimiter` middleware.
+- Token expiry is 15 minutes for access tokens, 7 days for refresh tokens.
+```
+
+```yaml
+# .deck/rules/testing.md
+---
+scope: "**/*.test.ts"
+---
+
+- Use vitest, not jest. Import from 'vitest'.
+- Use `vi.fn()` for mocks, not `jest.fn()`.
+- Integration tests go in `__tests__/integration/`, unit tests colocate with source.
+```
+
+```yaml
+# .deck/rules/payments.md
+---
+scope: "src/payments/**"
+priority: high
+---
+
+- NEVER modify payment amount calculations without explicit human approval.
+- All payment mutations must be idempotent (use idempotency keys).
+- Log all payment state transitions to the audit table.
+```
+
+**How rules are delivered to agents:**
+
+When the daemon constructs an agent's context package, it scans `.deck/rules/` for files whose `scope` glob matches the agent's assigned files. Matching rules are injected into the agent overlay alongside the task spec. The agent sees them as part of its system instructions — not optional reading.
+
+```
+Agent overlay for builder-payments-1:
+  1. Role definition (builder)
+  2. Task spec (from lead)
+  3. File scope (src/payments/**)
+  4. Matched rules:           ← auto-attached
+     - .deck/rules/payments.md (scope: src/payments/**)
+     - .deck/rules/testing.md  (scope: **/*.test.ts)
+  5. Quality gates
+  6. Communication config
+```
+
+**Rule sources:**
+- **Manual:** Developer writes rules based on project conventions
+- **Learned (future):** When a human corrects an agent and the correction reveals a pattern, the daemon prompts: "Save this as a rule for `src/auth/**`?" Stored in `.deck/rules/learned/` with timestamp and provenance.
+- **Inherited:** Global rules in `~/.config/deck/rules/` apply to all projects (e.g., "always use Bun, not npm")
+
+**Priority levels:** Rules can have `priority: high` which makes them appear at the top of the agent's context and are highlighted as constraints the agent must not violate.
+
+**Why this matters:** Stripe uses conditional `.mdc` rule files with glob patterns that auto-attach as agents traverse the filesystem. Mitchell Hashimoto's core insight: "anytime you find an agent makes a mistake, you engineer a solution such that the agent never makes that mistake again." Scoped rules are that engineering, version-controlled and shared across the team.
+
+### 9. Tool Curation
+
+Stripe built "Tool Shed" — a meta-MCP server managing ~500 internal tools — because loading all tools into every agent kills performance. As Deck becomes provider-agnostic and users bring their own MCP servers, the daemon needs the same tool selection layer.
+
+**The problem:** A project might have MCP servers for GitHub, database, Sentry, Figma, Slack, and custom internal tools. A Worker fixing a CSS bug doesn't need database tools. A Worker writing migrations doesn't need Figma tools. Loading everything wastes tokens and confuses the agent.
+
+**Solution: tool scoping in blueprints and rules.**
+
+Per-blueprint-step tool restrictions:
+```yaml
+# In a blueprint step
+- id: build
+  type: agent
+  role: builder
+  tools:
+    include: ["mcp:github:*", "mcp:filesystem:*"]
+    exclude: ["mcp:slack:*", "mcp:figma:*"]
+```
+
+Per-rule tool restrictions:
+```yaml
+# .deck/rules/database.md
+---
+scope: "src/db/**"
+tools:
+  include: ["mcp:database:*", "mcp:prisma:*"]
+---
+```
+
+Global tool budget in config:
+```yaml
+# .deck/config.yaml
+tools:
+  max_per_agent: 15          # max tools exposed to any single agent
+  always_include:             # always available to all agents
+    - "mcp:filesystem:*"
+    - "mcp:github:create_pr"
+  always_exclude:             # never available to agents
+    - "mcp:slack:send_message"
+```
+
+**How it works:** When the daemon constructs a Worker's environment, it resolves the effective tool set: blueprint step tools + matched rule tools + global config, deduplicated and capped at `max_per_agent`. The resulting tool list is passed to the agent runtime. Tools outside this list are not registered in the agent's session.
+
+**Why 15 tools max:** Stripe found that curating ~15 relevant tools per task (from 500+ available) was the sweet spot. Beyond that, agents spend tokens reasoning about tool selection instead of the actual task.
+
+### 10. Watchdog & Health Monitoring
 
 Three-tier health system:
 
@@ -514,7 +759,7 @@ Three-tier health system:
 - Notification via TUI or OpenClaw
 - You can: steer the agent, restart it, reassign the task, or take over manually
 
-### 9. Event Bus
+### 11. Event Bus
 
 All services communicate through a typed pub/sub event bus:
 
@@ -666,9 +911,77 @@ Agent Session (N) ──── (N) Mail Messages
 
 ---
 
-## Pi Agent Integration
+## Agent Runtime (Provider-Agnostic)
 
-Each agent is a Pi instance running in RPC mode inside a Daytona sandbox.
+Deck's harness is runtime-agnostic. Pi is the first supported runtime, but the architecture supports any agent that can run in a sandbox, receive prompts, and report results.
+
+### Agent Runtime Interface
+
+```go
+// AgentRuntime abstracts over different agent runtimes.
+// Implementations wrap specific agent tools (Pi, Claude Code, Codex CLI, etc).
+type AgentRuntime interface {
+    // Spawn starts an agent process in the given sandbox.
+    Spawn(ctx context.Context, sandbox Sandbox, opts AgentOpts) (AgentProcess, error)
+    // Name returns the runtime identifier ("pi", "claude-code", "codex", etc).
+    Name() string
+    // SupportsRPC returns whether the runtime supports mid-execution steering.
+    SupportsRPC() bool
+    // SupportsHooks returns whether the runtime supports hook injection (mail, scope).
+    SupportsHooks() bool
+}
+
+type AgentProcess interface {
+    // Send sends a prompt or steering message to the agent.
+    Send(ctx context.Context, msg AgentMessage) error
+    // Output returns a channel of agent output events.
+    Output() <-chan AgentEvent
+    // Wait blocks until the agent completes.
+    Wait() (AgentResult, error)
+    // Kill terminates the agent process.
+    Kill() error
+}
+
+type AgentOpts struct {
+    Role        string            // planner, lead, builder, reviewer, etc.
+    Overlay     string            // system prompt overlay (markdown)
+    Tools       []string          // curated tool list for this agent
+    Rules       []string          // matched scoped rules (markdown content)
+    Model       string            // model override (from config)
+    EnvVars     map[string]string // runtime-specific env vars
+    WorkDir     string            // working directory inside sandbox
+}
+```
+
+**Runtime selection in config:**
+```yaml
+agents:
+  runtime: "pi"                # default runtime
+  # future: "claude-code", "codex", "aider", "custom"
+  runtimes:
+    pi:
+      # Pi-specific config
+    claude-code:
+      # Claude Code-specific config (future)
+      api_key: "${ANTHROPIC_API_KEY}"
+```
+
+**Why this matters for open source:** Users shouldn't be locked into one agent runtime. A team using Claude Code locally should be able to use Deck's orchestration without switching to Pi. A team with Codex access should be able to plug that in. The harness (blueprints, rules, gates, merge queue) stays the same — only the runtime that executes agent steps changes.
+
+**Capability differences across runtimes:**
+
+| Capability | Pi (RPC) | Claude Code (future) | Codex CLI (future) |
+|---|---|---|---|
+| Mid-execution steering | Yes (stdin/stdout JSON) | Yes (--rpc flag) | Limited |
+| Hook injection (mail) | Yes (extension hooks) | Yes (hooks system) | No (prompt-level only) |
+| File scope enforcement | Yes (tool_call hook) | Yes (permission rules) | No (prompt-level only) |
+| Tool registration | Yes (extension tools) | Yes (MCP) | Limited |
+
+Runtimes that don't support hooks get mail and rules injected via prompt prepending instead — less reliable but functional. The daemon tracks which delivery mechanism each runtime supports and adapts.
+
+### Pi Runtime (First Implementation)
+
+Each agent is a Pi instance running in RPC mode inside a sandbox.
 
 ### Deck Extension for Pi
 
@@ -751,6 +1064,60 @@ agent.Send(RPCMessage{
     Content: "Use the existing bcrypt utility in src/utils/crypto.ts instead of adding a new dependency",
 })
 ```
+
+---
+
+## Autonomy Levels
+
+Deck implements progressive autonomy tied to the blueprint state machine. Higher autonomy = fewer human gates. Default is conservative; users unlock more autonomy as trust builds.
+
+| Level | Name | Plan | Execution | Review | Merge | Best For |
+|-------|------|------|-----------|--------|-------|----------|
+| 0 | **Supervised** | Human approves | Human reviews each Worker output | Human reviews | Human approves | New projects, unfamiliar codebases |
+| 1 | **Guided** | Human approves | Workers autonomous with deterministic gates | Human reviews final PR | Human approves | Default after test coverage established |
+| 2 | **Monitored** | Auto-generated, human reviews | Autonomous with retry cap | Auto-review if diff < threshold | Auto-merge if CI green | Projects with strong test suites |
+| 3 | **Autonomous** | Fully automatic | Fully automatic | Automatic | Auto-merge | Pre-defined task types only (deps, docs, tests) |
+
+**Configuration:**
+```yaml
+autonomy:
+  default_level: 1              # project-wide default
+  overrides:
+    - pattern: "deps:*"         # dependency updates
+      level: 3
+    - pattern: "docs:*"         # documentation
+      level: 3
+    - scope: "src/payments/**"  # security-sensitive paths
+      level: 0                  # always supervised
+```
+
+**Task classification:** The Planner emits a complexity score and risk assessment with each plan. Classification criteria: number of files modified, presence of security-sensitive patterns (auth, payments, crypto), test coverage of affected code, whether the change is additive vs. modifying existing behavior. The daemon routes to the appropriate autonomy level based on classification + config.
+
+**Stuck detection (enforced at all autonomy levels):**
+1. **Repeater** — same tool call with same arguments twice in a row → inject "try a different approach"
+2. **Spinner** — no file modifications after N tool calls → force progress report to Lead
+3. **Timeout** — hard wall clock limit per Worker (configurable, default 30 min)
+
+After 3 consecutive stuck signals: escalate to Lead. After Lead failure: escalate to human via SSE notification regardless of autonomy level. **Autonomy never means unmonitored.**
+
+## Simple Mode (Single-Agent Escape Hatch)
+
+Not every task needs the full Planner → Lead → Worker hierarchy. Simple mode collapses the pipeline to a single agent in a single sandbox — no decomposition, no streams, no inter-agent communication.
+
+```
+deck plan "fix the typo in README" --simple
+```
+
+Simple mode is:
+- One objective → one agent → one sandbox → one branch
+- Blueprint: `hotfix.yaml` (or any single-step blueprint)
+- Quality gates still run (deterministic, non-negotiable)
+- Merge queue still processes the result
+- No Lead, no Workers, no mail system
+
+**Why this matters:** The research consistently shows multi-agent benefits diminish as model capabilities improve. A single frontier model handles 80% of tasks better than a coordinated team of lesser agents. Simple mode proves value immediately without requiring users to understand the full hierarchy. Power users unlock the full orchestration for genuinely complex, multi-stream work.
+
+**Auto-detection (future):** The Planner could assess task complexity and automatically recommend simple mode for small tasks. "This looks like a single-file fix. Run in simple mode?" The user can override.
 
 ---
 
@@ -849,13 +1216,34 @@ deck/
 │   │   │   └── provider.go      # Daytona SDK implementation
 │   │   └── docker/
 │   │       └── provider.go      # (future) Docker implementation
+│   ├── runtime/
+│   │   ├── runtime.go           # AgentRuntime + AgentProcess interfaces
+│   │   ├── pi/
+│   │   │   ├── runtime.go       # Pi runtime implementation
+│   │   │   ├── rpc.go           # Pi RPC client (stdin/stdout JSON)
+│   │   │   └── hooks.go         # Hook definitions (mail inject, scope enforce)
+│   │   └── claudecode/
+│   │       └── runtime.go       # (future) Claude Code runtime implementation
+│   ├── harness/
+│   │   ├── blueprint/
+│   │   │   ├── engine.go        # Blueprint YAML loader + state machine executor
+│   │   │   ├── types.go         # Step types (agent, deterministic, human, ref)
+│   │   │   └── defaults/        # Shipped default blueprints
+│   │   │       ├── feature.yaml
+│   │   │       ├── hotfix.yaml
+│   │   │       └── stream.yaml
+│   │   ├── rules/
+│   │   │   ├── engine.go        # Rule loader, glob matching, context injection
+│   │   │   └── types.go         # Rule schema, priority levels
+│   │   └── tools/
+│   │       ├── curator.go       # Tool selection: blueprint + rules + config → tool set
+│   │       └── types.go         # Tool scope definitions
 │   ├── services/
 │   │   ├── planner/
 │   │   │   ├── planner.go       # Planning session management
 │   │   │   └── decompose.go     # Plan structure + validation
 │   │   ├── dispatch/
 │   │   │   ├── dispatcher.go    # Plan → agent team spawning
-│   │   │   ├── blueprint.go     # Blueprint state machine
 │   │   │   └── scheduler.go     # Stream dependency scheduling
 │   │   ├── mail/
 │   │   │   ├── broker.go        # Mail routing + broadcast
@@ -875,9 +1263,6 @@ deck/
 │   │       ├── registry.go      # Agent registration + state
 │   │       ├── overlay.go       # System prompt overlay generation
 │   │       └── roles.go         # Role definitions + constraints
-│   ├── pi/
-│   │   ├── rpc.go               # Pi RPC client (stdin/stdout JSON)
-│   │   └── hooks.go             # Hook definitions (mail inject, scope enforce)
 │   ├── tui/
 │   │   ├── app.go               # Root Bubble Tea model
 │   │   ├── dashboard.go         # Dashboard view
@@ -940,7 +1325,7 @@ sandbox:
   auto_delete_interval: 180       # minutes
 
 agents:
-  runtime: "pi"                   # agent runtime (pi is the only supported runtime for now)
+  runtime: "pi"                   # agent runtime ("pi", future: "claude-code", "codex")
   max_concurrent: 8               # max parallel agents
   max_depth: 2                    # hierarchy depth limit
   stagger_delay_ms: 2000          # delay between agent spawns
@@ -962,9 +1347,26 @@ watchdog:
   nudge_after_minutes: 15
   escalate_after_nudges: 3
 
+autonomy:
+  default_level: 1                # 0=supervised, 1=guided, 2=monitored, 3=autonomous
+  # Per-path and per-task-type overrides in project config
+
+tools:
+  max_per_agent: 15               # max tools exposed to any single agent
+  always_include: []              # always available to all agents
+  always_exclude: []              # never available to agents
+
 quality_gates:                    # default gates, overridable per project
   - "bun test"
   - "bun run lint"
+
+blueprints:
+  dir: "~/.config/deck/blueprints"  # global custom blueprints
+  # Project blueprints in .deck/blueprints/ take priority
+
+rules:
+  dir: "~/.config/deck/rules"      # global rules (apply to all projects)
+  # Project rules in .deck/rules/ are additive
 
 openclaw:
   enabled: false
@@ -985,12 +1387,43 @@ quality_gates:
   - "bun run lint"
   - "bun run typecheck"
 
+autonomy:
+  default_level: 1
+  overrides:
+    - scope: "src/payments/**"
+      level: 0
+
+tools:
+  max_per_agent: 15
+  always_include: ["mcp:filesystem:*"]
+
 # Project-specific agent guidance (injected into all agent overlays)
 guidance: |
   This project uses Bun, not npm.
   The auth module is in src/auth/.
   Tests use vitest, not jest.
 ```
+
+### Project `.deck/` Directory Structure
+
+```
+.deck/
+├── config.yaml              # project config (above)
+├── blueprints/              # workflow definitions
+│   ├── feature.yaml         # copied from defaults on deck init
+│   ├── hotfix.yaml
+│   ├── stream.yaml
+│   └── migration.yaml       # user-defined custom blueprint
+├── rules/                   # scoped rules (the compounding loop)
+│   ├── auth-patterns.md
+│   ├── testing.md
+│   ├── payments.md
+│   └── learned/             # auto-generated from human corrections (future)
+│       └── 2026-03-01-fix-jwt-signing.md
+└── sessions.yaml            # TUI session persistence
+```
+
+Everything in `.deck/` is version-controlled. Rules and blueprints are shared across the team. The harness improves with every commit.
 
 ---
 
@@ -999,32 +1432,39 @@ guidance: |
 ### Phase 1: Foundation
 - Daemon skeleton with HTTP server + SSE event stream
 - Sandbox provider interface + Daytona implementation
+- Agent runtime interface + Pi implementation
 - SQLite database layer (objectives, agents, mail, events)
 - Event bus (pub/sub)
-- Pi RPC client (spawn Pi in sandbox, send prompts, receive responses)
 - Basic CLI client (deck plan, deck status)
 
-### Phase 2: Planning
+### Phase 2: Harness Core
+- Blueprint engine (YAML loader, state machine executor, shipped defaults)
+- Scoped rules engine (glob matching, context injection)
+- Tool curator (blueprint + rules + config → per-agent tool set)
+- Quality gate runner (deterministic, sandbox-scoped)
+
+### Phase 3: Planning
 - Planner agent (interactive mode)
 - Plan data model and lifecycle
 - Plan approval flow (CLI-only initially)
 - Objective lifecycle state machine
+- Simple mode (single-agent escape hatch)
 
-### Phase 3: Execution
-- Blueprint state machine (stream dispatching)
-- Agent role definitions and overlay generation
+### Phase 4: Execution
+- Blueprint execution (step-by-step state machine with gates)
+- Agent role definitions and overlay generation (with rules + tools injection)
 - Deck Pi extension (mail injection hooks, tools, scope enforcement)
 - Lead → Worker spawning
 - Mail broker (send, receive, broadcast, inject)
 - Dependency-aware stream scheduling
 
-### Phase 4: Merge & Review
+### Phase 5: Merge & Review
 - Merge queue (FIFO, tier 1-2 resolution)
 - Quality gate execution in sandbox
 - AI merge (tier 3)
 - Diff data for client consumption
 
-### Phase 5: TUI Client
+### Phase 6: TUI Client
 - Dashboard view (objective/agent tree)
 - Agent session view (PTY forwarding to sandbox)
 - Plan review view
@@ -1032,10 +1472,17 @@ guidance: |
 - Merge queue view
 - Event log view
 
-### Phase 6: Health & Polish
+### Phase 7: Autonomy & Health
+- Autonomy levels (config-driven, per-path overrides)
+- Stuck detection (repeater, spinner, timeout)
 - Watchdog (tier 0-1)
 - Batch planning mode
 - OpenClaw adapter
+
+### Phase 8: Polish & Ecosystem
+- Learned rules (auto-capture from human corrections)
+- Additional agent runtimes (Claude Code, Codex CLI)
+- Additional sandbox providers (Docker, E2B)
 - Daytona snapshot management
 - Cost tracking and reporting
 
@@ -1043,20 +1490,31 @@ guidance: |
 
 ## What Deck Is Not
 
-- **Not an agent framework.** Pi is the agent runtime. Deck orchestrates Pi instances.
-- **Not a sandbox provider.** Daytona provides sandboxes. Deck manages their lifecycle.
+- **Not an agent framework.** Deck doesn't implement agents. Agent runtimes (Pi, Claude Code, Codex) do the thinking. Deck orchestrates them.
+- **Not a sandbox provider.** Daytona, Docker, E2B provide sandboxes. Deck manages their lifecycle through a provider interface.
 - **Not a messaging platform.** OpenClaw handles messaging. Deck is reachable through it.
 - **Not an IDE.** Deck doesn't edit code. Agents edit code. You review their work.
 - **Not a CI system.** Deck runs quality gates locally in sandboxes. CI is your existing pipeline.
+- **Not locked to any model or provider.** Bring your own agent runtime, sandbox provider, and model. The harness stays the same.
 
-Deck is the **orchestration layer** — it sits above agent runtimes, sandbox providers, and messaging platforms, coordinating all of them into a coherent workflow that turns your intent into merged, reviewed code.
+Deck is a **harness engineering framework** — the open-source, configurable infrastructure that makes AI coding agents reliable. It sits above agent runtimes, sandbox providers, and messaging platforms, coordinating all of them into a coherent workflow. Users configure blueprints for their workflows, write scoped rules for their conventions, plug in their preferred agent runtime and sandbox provider, and set their autonomy level.
+
+The harness is the product. Users bring the horse.
 
 ---
 
 ## Summary
 
-Deck transforms a solo developer into a team lead. You think, plan, and review. Agents explore, implement, and test. Deck manages the machinery in between — spawning sandboxes, routing communication, resolving conflicts, and keeping you informed from anywhere.
+Deck is an open-source harness engineering framework that transforms a solo developer into a team lead. You think, plan, and review. Agents explore, implement, and test. Deck manages the machinery in between — spawning sandboxes, routing communication, enforcing quality gates, resolving conflicts, and keeping you informed from anywhere.
 
-The architecture combines the best patterns from five different agent systems: Stripe's deterministic blueprints, Overstory's hook-injected communication, OpenClaw's hierarchical agent model, OpenCode's clean service architecture, and Daytona's elastic sandboxes. It avoids the weaknesses of each: no reliance on agents voluntarily communicating, no single-threaded human bottleneck, no uncontrolled agent spawning, no manual environment management.
+**What makes Deck different from every other tool in this space:**
+
+1. **The harness is the product, not the model.** OpenAI and Stripe built proprietary harnesses for themselves. Deck is the configurable harness framework anyone can use.
+2. **Daemon-first with pluggable everything.** No other tool offers a persistent headless orchestrator with pluggable agent runtimes, sandbox providers, and configurable blueprints.
+3. **Scoped rules that compound.** Every mistake becomes a version-controlled rule. The harness gets smarter with every task.
+4. **Progressive autonomy.** From fully supervised to fully autonomous, configured per project, per path, per task type.
+5. **Simple mode to full orchestration.** Works as a single-agent harness on day one. Unlocks multi-agent coordination when you need it.
+
+The architecture combines the best patterns from the field: Stripe's deterministic blueprints, Overstory's hook-injected communication, OpenClaw's hierarchical agent model, OpenCode's clean service architecture, Daytona's elastic sandboxes, and the emerging harness engineering discipline from OpenAI and the broader community. It avoids the weaknesses of each: no reliance on agents voluntarily communicating, no single-threaded human bottleneck, no uncontrolled agent spawning, no manual environment management, no lock-in to a single model or provider.
 
 One objective in. Reviewed, tested, merged code out.
