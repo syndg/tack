@@ -5,6 +5,28 @@ Phase 1 findings: `docs/phase1/FINDINGS.md`
 
 ---
 
+## Task 4.2: Create tool curator
+
+- Created `internal/harness/tools/curator.go` with `Curator`, `NewCurator`, `Curate`, and `matchGlob` per PRD spec.
+- Resolution follows the 9-step pipeline exactly: available → config always_exclude → config always_include → blueprint include → blueprint exclude → rule includes → rule excludes → deduplicate → cap.
+- After blueprint include filtering (step 4), always_include tools are re-ensured so they survive restrictive blueprint scopes.
+- `matchGlob` uses `:` as segment separator. Supports exact match, bare `*` (match all), trailing `:*` (namespace prefix match), and segment-level `*` wildcards.
+- Capping (step 9) partitions tools into always-keep (matching always_include patterns) and droppable; droppable tools are truncated to fit within MaxPerAgent.
+- Added helper functions (`filterOut`, `filterIn`, `ensurePresent`, `deduplicate`) as unexported utilities and `SortByName` as exported for deterministic output in tests/API responses.
+- Verified full project compiles with `go build ./...`.
+
+---
+
+## Task 4.1: Create tool curator types
+
+- Created `internal/harness/tools/types.go` with `ToolSpec`, `CurationResult`, `CurationInput`, `ToolScope`, and `ConfigToolScope` types per PRD spec.
+- `ToolScope` in the tools package is a third instance of this pattern (also exists in blueprint and rules packages). Kept separate per PRD design to avoid cross-package dependencies. Consolidation could be considered in a future refactor.
+- `ToolSpec` uses JSON tags only (not YAML) — tools are resolved at runtime, not loaded from YAML files.
+- `CurationInput` fields have no struct tags — it's an internal-only input struct, not serialized.
+- No external dependencies — pure Go types, compiles cleanly.
+
+---
+
 ## Task 3.2: Create rules loader and matcher
 
 - Created `internal/harness/rules/engine.go` with `Engine`, `ParseRule`, `Match`, `MatchSingle`, `All`, `BuildContext`, and `LoadDir` — all per PRD spec.

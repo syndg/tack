@@ -447,7 +447,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 ## Phase 4: Tool Curator
 
-- [ ] **4.1** Create tool curator types
+- [x] **4.1** Create tool curator types
   Create `internal/harness/tools/types.go` with:
 
   ```go
@@ -490,7 +490,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
   File: `internal/harness/tools/types.go`
 
-- [ ] **4.2** Create tool curator
+- [x] **4.2** Create tool curator
   Create `internal/harness/tools/curator.go` with:
 
   ```go
