@@ -6,10 +6,16 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/syndg/deck/internal/config"
 	"github.com/syndg/deck/internal/db"
+	"github.com/syndg/deck/internal/harness/blueprint"
+	"github.com/syndg/deck/internal/harness/gates"
+	"github.com/syndg/deck/internal/harness/rules"
+	"github.com/syndg/deck/internal/harness/tools"
 	"github.com/syndg/deck/internal/services/events"
 )
 
@@ -21,10 +27,18 @@ type Daemon struct {
 	objectives *db.ObjectiveStore
 	agents     *db.AgentStore
 	mail       *db.MailStore
-	mux        *http.ServeMux
-	server     *http.Server
-	startTime  time.Time
-	logger     *slog.Logger
+	executions *db.ExecutionStore
+
+	blueprintRegistry *blueprint.Registry
+	blueprintEngine   *blueprint.Engine
+	rulesEngine       *rules.Engine
+	toolCurator       *tools.Curator
+	gateRunner        *gates.Runner
+
+	mux       *http.ServeMux
+	server    *http.Server
+	startTime time.Time
+	logger    *slog.Logger
 }
 
 // New creates a new Daemon from the given config. It opens the database,
@@ -49,7 +63,61 @@ func New(cfg *config.Config) (*Daemon, error) {
 	agentStore := db.NewAgentStore(conn)
 	mailStore := db.NewMailStore(conn)
 	eventStore := db.NewEventStore(conn)
+	executionStore := db.NewExecutionStore(conn)
 	eventBus := events.NewPersistentBus(eventStore, logger)
+
+	// Initialize blueprint registry and load defaults
+	bpRegistry := blueprint.NewRegistry()
+	if err := bpRegistry.LoadDefaults(); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("loading default blueprints: %w", err)
+	}
+
+	// Optionally load project-local blueprints from .deck/blueprints/
+	projectBlueprintsDir := filepath.Join(".deck", "blueprints")
+	if info, err := os.Stat(projectBlueprintsDir); err == nil && info.IsDir() {
+		if err := bpRegistry.LoadFromDir(projectBlueprintsDir); err != nil {
+			logger.Warn("loading project blueprints", "dir", projectBlueprintsDir, "error", err)
+		}
+	}
+
+	// Optionally load user-level blueprints from ~/.config/deck/blueprints/
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		userBlueprintsDir := filepath.Join(home, ".config", "deck", "blueprints")
+		if info, err := os.Stat(userBlueprintsDir); err == nil && info.IsDir() {
+			if err := bpRegistry.LoadFromDir(userBlueprintsDir); err != nil {
+				logger.Warn("loading user blueprints", "dir", userBlueprintsDir, "error", err)
+			}
+		}
+	}
+
+	bpEngine := blueprint.NewEngine(bpRegistry, logger)
+
+	// Initialize rules engine
+	rulesEng := rules.NewEngine(logger)
+
+	// Optionally load project-local rules from .deck/rules/
+	projectRulesDir := filepath.Join(".deck", "rules")
+	if info, err := os.Stat(projectRulesDir); err == nil && info.IsDir() {
+		if err := rulesEng.LoadDir(projectRulesDir); err != nil {
+			logger.Warn("loading project rules", "dir", projectRulesDir, "error", err)
+		}
+	}
+
+	// Optionally load user-level rules from ~/.config/deck/rules/
+	if home != "" {
+		userRulesDir := filepath.Join(home, ".config", "deck", "rules")
+		if info, err := os.Stat(userRulesDir); err == nil && info.IsDir() {
+			if err := rulesEng.LoadDir(userRulesDir); err != nil {
+				logger.Warn("loading user rules", "dir", userRulesDir, "error", err)
+			}
+		}
+	}
+
+	// Initialize tool curator and gate runner
+	toolCur := tools.NewCurator(logger)
+	gateRun := gates.NewRunner(logger)
 
 	mux := http.NewServeMux()
 
@@ -60,7 +128,15 @@ func New(cfg *config.Config) (*Daemon, error) {
 		objectives: objectiveStore,
 		agents:     agentStore,
 		mail:       mailStore,
-		mux:        mux,
+		executions: executionStore,
+
+		blueprintRegistry: bpRegistry,
+		blueprintEngine:   bpEngine,
+		rulesEngine:       rulesEng,
+		toolCurator:       toolCur,
+		gateRunner:        gateRun,
+
+		mux: mux,
 		server: &http.Server{
 			Addr:    cfg.Daemon.Listen,
 			Handler: mux,

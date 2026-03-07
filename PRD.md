@@ -607,7 +607,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 ## Phase 6: Integration & Wiring
 
-- [ ] **6.1** Wire harness into daemon
+- [x] **6.1** Wire harness into daemon
   Update `internal/daemon/daemon.go` to:
   1. Add fields: `blueprintRegistry *blueprint.Registry`, `rulesEngine *rules.Engine`, `toolCurator *tools.Curator`, `gateRunner *gates.Runner`
   2. In `New()`: create blueprint registry, load defaults, optionally load from `.deck/blueprints/` and `~/.config/deck/blueprints/`
@@ -620,7 +620,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Import the new harness packages.
   File: `internal/daemon/daemon.go`
 
-- [ ] **6.2** Add blueprint API endpoints
+- [x] **6.2** Add blueprint API endpoints
   Add to `internal/daemon/routes.go`:
 
   ```go
@@ -642,7 +642,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
   File: `internal/daemon/routes.go`
 
-- [ ] **6.3** Add harness unit tests
+- [x] **6.3** Add harness unit tests
   Create test files:
 
   `internal/harness/blueprint/loader_test.go`:

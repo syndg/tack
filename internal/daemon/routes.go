@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/deck/internal/harness/blueprint"
 )
 
 // registerRoutes sets up all HTTP route handlers on the daemon's mux.
@@ -20,6 +21,11 @@ func (d *Daemon) registerRoutes() {
 	d.mux.HandleFunc("GET /events", d.handleSSE)
 	d.mux.HandleFunc("GET /health", d.handleHealth)
 	d.mux.HandleFunc("GET /status", d.handleStatus)
+
+	d.mux.HandleFunc("GET /blueprints", d.handleListBlueprints)
+	d.mux.HandleFunc("GET /blueprints/{name}", d.handleGetBlueprint)
+	d.mux.HandleFunc("GET /executions", d.handleListExecutions)
+	d.mux.HandleFunc("GET /executions/{id}", d.handleGetExecution)
 }
 
 // handleCreateObjective decodes a JSON body with a description, creates
@@ -124,6 +130,66 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleListBlueprints returns all available blueprints as a JSON array.
+func (d *Daemon) handleListBlueprints(w http.ResponseWriter, r *http.Request) {
+	names := d.blueprintRegistry.List()
+	blueprints := make([]blueprint.Blueprint, 0, len(names))
+	for _, name := range names {
+		bp, ok := d.blueprintRegistry.Get(name)
+		if ok {
+			blueprints = append(blueprints, *bp)
+		}
+	}
+	writeJSON(w, http.StatusOK, blueprints)
+}
+
+// handleGetBlueprint returns a specific blueprint by name.
+func (d *Daemon) handleGetBlueprint(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	bp, ok := d.blueprintRegistry.Get(name)
+	if !ok {
+		writeError(w, http.StatusNotFound, "blueprint not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, bp)
+}
+
+// handleListExecutions returns all blueprint executions as a JSON array.
+func (d *Daemon) handleListExecutions(w http.ResponseWriter, r *http.Request) {
+	executions, err := d.executions.List(r.Context())
+	if err != nil {
+		d.logger.Error("listing executions", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list executions")
+		return
+	}
+
+	if executions == nil {
+		executions = []blueprint.Execution{}
+	}
+
+	writeJSON(w, http.StatusOK, executions)
+}
+
+// handleGetExecution returns a specific execution by ID.
+func (d *Daemon) handleGetExecution(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	exec, err := d.executions.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "execution not found")
+			return
+		}
+		d.logger.Error("getting execution", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get execution")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, exec)
 }
 
 // writeJSON marshals data to JSON and writes it to the response with the given status code.
