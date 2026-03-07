@@ -1,0 +1,25 @@
+name: "Stream Execution"
+description: "Execute a single work stream: build, lint, review"
+
+steps:
+  - id: build
+    type: agent
+    role: builder
+    description: "Implement the stream's task"
+    next: lint
+
+  - id: lint
+    type: deterministic
+    action: run_quality_gates
+    retry: 2
+    next: review
+
+  - id: review
+    type: agent
+    role: reviewer
+    description: "Review the implementation"
+    next: merge_ready
+
+  - id: merge_ready
+    type: deterministic
+    action: signal_merge_ready

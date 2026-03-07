@@ -1,0 +1,25 @@
+name: "Hotfix"
+description: "Single-agent fix with minimal ceremony"
+trigger: "manual"
+
+steps:
+  - id: fix
+    type: agent
+    role: builder
+    description: "Fix the issue in a single agent session"
+    next: lint
+
+  - id: lint
+    type: deterministic
+    action: run_quality_gates
+    retry: 2
+    next: merge
+
+  - id: merge
+    type: deterministic
+    action: merge_queue
+    next: complete
+
+  - id: complete
+    type: deterministic
+    action: mark_complete

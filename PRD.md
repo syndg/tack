@@ -1,809 +1,684 @@
-# Deck Phase 1: Foundation — PRD & Implementation Plan
+# Deck Phase 2: Harness Core — PRD & Implementation Plan
 
-Establish the Go project structure, core domain types, database layer, event bus, HTTP daemon, and basic CLI. This phase produces a running daemon that accepts HTTP requests, persists data to SQLite, streams events via SSE, and a CLI client that can query status and create objectives.
+Build the deterministic harness infrastructure that constrains and informs agents. This phase produces the blueprint engine (YAML state machine), scoped rules engine (glob-matched context injection), tool curator (per-agent tool selection), and quality gate runner (deterministic validation in sandboxes).
 
-Atomic tasks for phased implementation. Each task targets 1-2 files max.
+Phase 1 artifacts: `docs/phase1/PRD.md`, `docs/phase1/FINDINGS.md`
+
+Atomic tasks for phased implementation. Each task targets 1-3 files max.
 Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 ---
 
-## Phase 1: Project Scaffolding
+## Phase 1: Blueprint Types & Loader
 
-- [x] **1.1** Initialize Go module and directory structure
-  Create `go.mod` with module path `github.com/syndg/deck` and minimum Go 1.22.
-  Create the directory tree (empty dirs with `.gitkeep` where needed):
-  ```
-  cmd/daemon/
-  cmd/deck/
-  internal/daemon/
-  internal/sandbox/
-  internal/runtime/
-  internal/services/events/
-  internal/db/
-  internal/config/
-  internal/domain/
-  internal/client/
-  configs/defaults/
-  ```
-  Create `.gitignore` with Go defaults: `*.exe`, `*.exe~`, `*.dll`, `*.so`, `*.dylib`, `*.test`, `*.out`, `vendor/`, `.env`, `*.db`, `*.db-wal`, `*.db-shm`, `deck`, `deck-daemon`, `/bin/`, `/dist/`.
-  Files: `go.mod`, `.gitignore`
+- [x] **1.1** Create blueprint domain types
+  Create `internal/harness/blueprint/types.go` with all blueprint-related types.
 
-- [x] **1.2** Add core dependencies
-  Run `go get` to add:
-  - `modernc.org/sqlite` — pure Go SQLite driver (no CGo)
-  - `github.com/spf13/cobra` — CLI framework
-  - `gopkg.in/yaml.v3` — YAML config parsing
-  - `github.com/google/uuid` — UUID generation
-  Run `go mod tidy` after.
-  Files: `go.mod`, `go.sum`
-
-- [x] **1.3** Create entry point stubs
-  Create `cmd/daemon/main.go`:
   ```go
-  package main
+  package blueprint
 
-  import "fmt"
+  type StepType string
+  const (
+      StepTypeAgent         StepType = "agent"
+      StepTypeDeterministic StepType = "deterministic"
+      StepTypeHuman         StepType = "human"
+      StepTypeBlueprintRef  StepType = "blueprint_ref"
+  )
 
-  func main() {
-      fmt.Println("deck daemon starting...")
+  type Blueprint struct {
+      Name        string `yaml:"name"`
+      Description string `yaml:"description"`
+      Trigger     string `yaml:"trigger"`
+      Steps       []Step `yaml:"steps"`
+  }
+
+  type Step struct {
+      ID          string   `yaml:"id"`
+      Type        StepType `yaml:"type"`
+      Role        string   `yaml:"role,omitempty"`
+      Action      string   `yaml:"action,omitempty"`
+      Ref         string   `yaml:"ref,omitempty"`
+      Description string   `yaml:"description,omitempty"`
+      Next        string   `yaml:"next,omitempty"`
+      Retry       int      `yaml:"retry,omitempty"`
+      Optional    bool     `yaml:"optional,omitempty"`
+      Tools       *ToolScope `yaml:"tools,omitempty"`
+  }
+
+  type ToolScope struct {
+      Include []string `yaml:"include,omitempty"`
+      Exclude []string `yaml:"exclude,omitempty"`
+  }
+
+  type StepStatus string
+  const (
+      StepStatusPending   StepStatus = "pending"
+      StepStatusRunning   StepStatus = "running"
+      StepStatusCompleted StepStatus = "completed"
+      StepStatusFailed    StepStatus = "failed"
+      StepStatusSkipped   StepStatus = "skipped"
+      StepStatusBlocked   StepStatus = "blocked"
+  )
+
+  // StepState tracks runtime state for a step within an execution.
+  type StepState struct {
+      StepID     string     `json:"step_id"`
+      Status     StepStatus `json:"status"`
+      RetryCount int        `json:"retry_count"`
+      Error      string     `json:"error,omitempty"`
   }
   ```
-  Create `cmd/deck/main.go`:
+
+  All types need both `yaml` tags (for loading blueprints) and `json` tags (for API/persistence where relevant).
+  File: `internal/harness/blueprint/types.go`
+
+- [x] **1.2** Create blueprint YAML loader
+  Create `internal/harness/blueprint/loader.go` with:
+
   ```go
-  package main
+  package blueprint
 
-  import "fmt"
+  // LoadFile loads a single blueprint from a YAML file.
+  func LoadFile(path string) (*Blueprint, error)
 
-  func main() {
-      fmt.Println("deck cli")
-  }
+  // LoadDir loads all blueprints from a directory (non-recursive).
+  // Returns a map keyed by blueprint name.
+  func LoadDir(dir string) (map[string]*Blueprint, error)
+
+  // Validate checks a blueprint for structural correctness:
+  // - All steps have a unique ID
+  // - All "next" references point to existing step IDs
+  // - Agent steps have a role
+  // - Deterministic steps have an action
+  // - BlueprintRef steps have a ref
+  // - No unreachable steps (except the first step, which is the entry point)
+  func Validate(bp *Blueprint) error
   ```
-  Both must compile: `go build ./cmd/daemon` and `go build ./cmd/deck`.
-  Files: `cmd/daemon/main.go`, `cmd/deck/main.go`
+
+  `LoadFile`: read YAML via `os.ReadFile` + `yaml.Unmarshal`. Call `Validate` after loading.
+  `LoadDir`: read directory via `os.ReadDir`, load all `.yaml`/`.yml` files, skip non-blueprint files gracefully.
+  `Validate`: return a `fmt.Errorf` with all validation errors joined (not just the first).
+
+  Import: `os`, `path/filepath`, `fmt`, `strings`, `gopkg.in/yaml.v3`.
+  File: `internal/harness/blueprint/loader.go`
+
+- [x] **1.3** Create shipped default blueprints
+  Create three default blueprint YAML files matching the design doc:
+
+  `internal/harness/blueprint/defaults/feature.yaml`:
+  ```yaml
+  name: "Feature Implementation"
+  description: "Plan, build, review, and merge a new feature"
+  trigger: "default"
+
+  steps:
+    - id: plan
+      type: agent
+      role: planner
+      description: "Explore codebase and decompose into streams"
+      next: approve
+
+    - id: approve
+      type: human
+      description: "Review and approve the plan"
+      next: dispatch
+
+    - id: dispatch
+      type: deterministic
+      action: dispatch_streams
+      description: "Spawn sandboxes and agents per stream"
+      next: per_stream
+
+    - id: per_stream
+      type: blueprint_ref
+      ref: ".deck/blueprints/stream.yaml"
+      next: merge
+
+    - id: merge
+      type: deterministic
+      action: merge_queue
+      description: "Merge all stream branches, run quality gates"
+      next: complete
+
+    - id: complete
+      type: deterministic
+      action: mark_complete
+  ```
+
+  `internal/harness/blueprint/defaults/stream.yaml`:
+  ```yaml
+  name: "Stream Execution"
+  description: "Execute a single work stream: build, lint, review"
+
+  steps:
+    - id: build
+      type: agent
+      role: builder
+      description: "Implement the stream's task"
+      next: lint
+
+    - id: lint
+      type: deterministic
+      action: run_quality_gates
+      retry: 2
+      next: review
+
+    - id: review
+      type: agent
+      role: reviewer
+      description: "Review the implementation"
+      next: merge_ready
+
+    - id: merge_ready
+      type: deterministic
+      action: signal_merge_ready
+  ```
+
+  `internal/harness/blueprint/defaults/hotfix.yaml`:
+  ```yaml
+  name: "Hotfix"
+  description: "Single-agent fix with minimal ceremony"
+  trigger: "manual"
+
+  steps:
+    - id: fix
+      type: agent
+      role: builder
+      description: "Fix the issue in a single agent session"
+      next: lint
+
+    - id: lint
+      type: deterministic
+      action: run_quality_gates
+      retry: 2
+      next: merge
+
+    - id: merge
+      type: deterministic
+      action: merge_queue
+      next: complete
+
+    - id: complete
+      type: deterministic
+      action: mark_complete
+  ```
+
+  Files: `internal/harness/blueprint/defaults/feature.yaml`, `internal/harness/blueprint/defaults/stream.yaml`, `internal/harness/blueprint/defaults/hotfix.yaml`
+
+- [x] **1.4** Create blueprint registry
+  Create `internal/harness/blueprint/registry.go` with:
+
+  ```go
+  package blueprint
+
+  // Registry holds loaded blueprints and provides lookup.
+  type Registry struct {
+      blueprints map[string]*Blueprint
+      mu         sync.RWMutex
+  }
+
+  func NewRegistry() *Registry
+
+  // LoadDefaults loads the shipped default blueprints from the embedded defaults/ directory.
+  // Use go:embed to embed the defaults/ directory.
+  func (r *Registry) LoadDefaults() error
+
+  // LoadFromDir loads blueprints from a directory (e.g., .deck/blueprints/ or ~/.config/deck/blueprints/).
+  // Blueprints loaded later override earlier ones with the same name.
+  func (r *Registry) LoadFromDir(dir string) error
+
+  // Get returns a blueprint by name. Returns nil, false if not found.
+  func (r *Registry) Get(name string) (*Blueprint, bool)
+
+  // GetDefault returns the blueprint with trigger "default". Returns nil, false if none.
+  func (r *Registry) GetDefault() (*Blueprint, bool)
+
+  // List returns all registered blueprint names.
+  func (r *Registry) List() []string
+  ```
+
+  Use `embed.FS` with `//go:embed defaults/*.yaml` to embed shipped defaults.
+  `LoadDefaults`: iterate embedded files, unmarshal each, validate, store by name.
+  `LoadFromDir`: call `LoadDir`, merge into registry (overwriting existing names).
+
+  Import: `embed`, `sync`, `sort`.
+  File: `internal/harness/blueprint/registry.go`
 
 ---
 
-## Phase 2: Domain Types & Interfaces
+## Phase 2: Blueprint Engine (State Machine)
 
-- [x] **2.1** Create core domain types
-  Create `internal/domain/types.go` with all domain types the system needs.
-
-  **Objective lifecycle:**
-  ```go
-  type ObjectiveStatus string
-  const (
-      ObjectiveStatusPlanning  ObjectiveStatus = "planning"
-      ObjectiveStatusApproved  ObjectiveStatus = "approved"
-      ObjectiveStatusExecuting ObjectiveStatus = "executing"
-      ObjectiveStatusReviewing ObjectiveStatus = "reviewing"
-      ObjectiveStatusCompleted ObjectiveStatus = "completed"
-      ObjectiveStatusFailed    ObjectiveStatus = "failed"
-  )
-
-  type Objective struct {
-      ID          string          `json:"id"`
-      Description string          `json:"description"`
-      Status      ObjectiveStatus `json:"status"`
-      Blueprint   string          `json:"blueprint"`
-      CreatedAt   time.Time       `json:"created_at"`
-      UpdatedAt   time.Time       `json:"updated_at"`
-  }
-  ```
-
-  **Plan and streams:**
-  ```go
-  type PlanStatus string
-  const (
-      PlanStatusDraft           PlanStatus = "draft"
-      PlanStatusPendingApproval PlanStatus = "pending_approval"
-      PlanStatusApproved        PlanStatus = "approved"
-      PlanStatusExecuting       PlanStatus = "executing"
-      PlanStatusCompleted       PlanStatus = "completed"
-      PlanStatusFailed          PlanStatus = "failed"
-  )
-
-  type Plan struct {
-      ID           string     `json:"id"`
-      ObjectiveID  string     `json:"objective_id"`
-      Status       PlanStatus `json:"status"`
-      QualityGates []string   `json:"quality_gates"`
-      CreatedAt    time.Time  `json:"created_at"`
-      UpdatedAt    time.Time  `json:"updated_at"`
-  }
-
-  type Stream struct {
-      ID           string   `json:"id"`
-      PlanID       string   `json:"plan_id"`
-      Title        string   `json:"title"`
-      Description  string   `json:"description"`
-      FileScope    []string `json:"file_scope"`
-      Dependencies []string `json:"dependencies"`
-      Status       string   `json:"status"`
-      CreatedAt    time.Time `json:"created_at"`
-  }
-  ```
-
-  **Agent sessions:**
-  ```go
-  type AgentRole string
-  const (
-      AgentRolePlanner AgentRole = "planner"
-      AgentRoleLead    AgentRole = "lead"
-      AgentRoleWorker  AgentRole = "worker"
-      AgentRoleMerger  AgentRole = "merger"
-  )
-
-  type AgentSession struct {
-      ID          string    `json:"id"`
-      ObjectiveID string    `json:"objective_id"`
-      StreamID    string    `json:"stream_id"`
-      Role        AgentRole `json:"role"`
-      SandboxID   string    `json:"sandbox_id"`
-      Status      string    `json:"status"`
-      CreatedAt   time.Time `json:"created_at"`
-      UpdatedAt   time.Time `json:"updated_at"`
-  }
-  ```
-
-  **Mail messages:**
-  ```go
-  type MailMessage struct {
-      ID        int64     `json:"id"`
-      From      string    `json:"from"`
-      To        string    `json:"to"`
-      Type      string    `json:"type"`
-      Payload   string    `json:"payload"`
-      Objective string    `json:"objective"`
-      Stream    string    `json:"stream"`
-      Read      bool      `json:"read"`
-      CreatedAt time.Time `json:"created_at"`
-  }
-  ```
-
-  **Events:**
-  ```go
-  type EventType string
-  const (
-      EventObjectiveCreated EventType = "objective.created"
-      EventObjectiveUpdated EventType = "objective.updated"
-      EventPlanCreated      EventType = "plan.created"
-      EventPlanApproved     EventType = "plan.approved"
-      EventAgentSpawned     EventType = "agent.spawned"
-      EventAgentCompleted   EventType = "agent.completed"
-      EventAgentFailed      EventType = "agent.failed"
-      EventMailSent         EventType = "mail.sent"
-      EventMergeQueued      EventType = "merge.queued"
-      EventMergeCompleted   EventType = "merge.completed"
-      EventMergeFailed      EventType = "merge.failed"
-      EventEscalation       EventType = "escalation"
-  )
-
-  type Event struct {
-      ID        int64     `json:"id"`
-      Type      EventType `json:"type"`
-      Objective string    `json:"objective"`
-      Stream    string    `json:"stream"`
-      Agent     string    `json:"agent"`
-      Payload   string    `json:"payload"`
-      CreatedAt time.Time `json:"created_at"`
-  }
-  ```
-
-  Import `time` package. All types need JSON tags for API serialization.
-  File: `internal/domain/types.go`
-
-- [x] **2.2** Create sandbox provider interface
-  Create `internal/sandbox/provider.go` with the SandboxProvider and Sandbox interfaces.
-  Create `internal/sandbox/types.go` with all supporting types.
-
-  **provider.go:**
-  ```go
-  package sandbox
-
-  import "context"
-
-  type SandboxProvider interface {
-      Create(ctx context.Context, opts CreateOpts) (Sandbox, error)
-      Get(ctx context.Context, id string) (Sandbox, error)
-      List(ctx context.Context, labels map[string]string) ([]Sandbox, error)
-      Delete(ctx context.Context, id string) error
-  }
-
-  type Sandbox interface {
-      ID() string
-      Status() SandboxStatus
-      Exec(ctx context.Context, cmd string, opts ExecOpts) (ExecResult, error)
-      Upload(ctx context.Context, content []byte, path string) error
-      Download(ctx context.Context, path string) ([]byte, error)
-      Stop(ctx context.Context) error
-      Start(ctx context.Context) error
-  }
-  ```
-
-  **types.go:** `SandboxStatus` (string type with constants: Running, Stopped, Creating, Error), `CreateOpts` (Name, Labels, Snapshot, Resources, EnvVars, AutoStop, AutoDelete, Ephemeral), `ResourceSpec` (CPU, Memory, Disk int), `ExecOpts` (WorkDir, Env, Timeout), `ExecResult` (ExitCode int, Stdout, Stderr string), `VolumeMount` (VolumeID, MountPath, Subpath string).
-
-  These are interfaces only — no implementations in this phase.
-  Files: `internal/sandbox/provider.go`, `internal/sandbox/types.go`
-
-- [x] **2.3** Create agent runtime interface
-  Create `internal/runtime/runtime.go` with:
-  ```go
-  package runtime
-
-  import "context"
-
-  type AgentRuntime interface {
-      Spawn(ctx context.Context, sandbox sandbox.Sandbox, opts AgentOpts) (AgentProcess, error)
-      Name() string
-      SupportsRPC() bool
-      SupportsHooks() bool
-  }
-
-  type AgentProcess interface {
-      Send(ctx context.Context, msg AgentMessage) error
-      Output() <-chan AgentEvent
-      Wait() (AgentResult, error)
-      Kill() error
-  }
-
-  type AgentOpts struct {
-      Role    string
-      Overlay string
-      Tools   []string
-      Rules   []string
-      Model   string
-      EnvVars map[string]string
-      WorkDir string
-  }
-
-  type AgentMessage struct {
-      Type    string // "prompt", "steer"
-      Content string
-  }
-
-  type AgentEvent struct {
-      Type    string // "output", "tool_call", "error"
-      Content string
-  }
-
-  type AgentResult struct {
-      Success bool
-      Summary string
-      Error   string
-  }
-  ```
-
-  Import the sandbox package for the Sandbox interface reference: `github.com/syndg/deck/internal/sandbox`.
-  File: `internal/runtime/runtime.go`
-
-- [x] **2.4** Create configuration types and YAML loader
-  Create `internal/config/config.go` with:
+- [ ] **2.1** Create blueprint execution engine
+  Create `internal/harness/blueprint/engine.go` with:
 
   ```go
-  type Config struct {
-      Daemon   DaemonConfig   `yaml:"daemon"`
-      Sandbox  SandboxConfig  `yaml:"sandbox"`
-      Agents   AgentsConfig   `yaml:"agents"`
-      Planning PlanningConfig `yaml:"planning"`
-      Watchdog WatchdogConfig `yaml:"watchdog"`
-      Tools    ToolsConfig    `yaml:"tools"`
-      QualityGates []string   `yaml:"quality_gates"`
+  package blueprint
+
+  // Execution represents a running blueprint instance tied to an objective.
+  type Execution struct {
+      ID          string                `json:"id"`
+      BlueprintName string             `json:"blueprint_name"`
+      ObjectiveID string               `json:"objective_id"`
+      CurrentStep string               `json:"current_step"`
+      StepStates  map[string]*StepState `json:"step_states"`
+      Status      string               `json:"status"` // "running", "completed", "failed", "waiting_human"
+      CreatedAt   time.Time            `json:"created_at"`
+      UpdatedAt   time.Time            `json:"updated_at"`
   }
 
-  type DaemonConfig struct {
-      Listen  string `yaml:"listen"`
-      DataDir string `yaml:"data_dir"`
+  // StepHandler is called by the engine when a step needs to execute.
+  // The engine itself does NOT implement agent spawning, merging, etc.
+  // Instead, callers register handlers for each step type.
+  type StepHandler func(ctx context.Context, exec *Execution, step *Step) (StepResult, error)
+
+  type StepResult struct {
+      Status StepStatus `json:"status"`
+      Error  string     `json:"error,omitempty"`
+      Output string     `json:"output,omitempty"`
   }
 
-  type SandboxConfig struct {
-      Provider         string       `yaml:"provider"`
-      DefaultResources ResourceConfig `yaml:"default_resources"`
-      AutoStopMinutes  int          `yaml:"auto_stop_interval"`
-      AutoDeleteMinutes int         `yaml:"auto_delete_interval"`
+  // Engine drives blueprint execution.
+  type Engine struct {
+      registry *Registry
+      handlers map[StepType]StepHandler
+      logger   *slog.Logger
   }
 
-  type ResourceConfig struct {
-      CPU    int `yaml:"cpu"`
-      Memory int `yaml:"memory"`
-      Disk   int `yaml:"disk"`
-  }
+  func NewEngine(registry *Registry, logger *slog.Logger) *Engine
 
-  type AgentsConfig struct {
-      Runtime           string `yaml:"runtime"`
-      MaxConcurrent     int    `yaml:"max_concurrent"`
-      MaxDepth          int    `yaml:"max_depth"`
-      StaggerDelayMs    int    `yaml:"stagger_delay_ms"`
-      IdleTimeoutMinutes int   `yaml:"idle_timeout_minutes"`
-  }
+  // RegisterHandler registers a handler for a step type.
+  func (e *Engine) RegisterHandler(stepType StepType, handler StepHandler)
 
-  type PlanningConfig struct {
-      DefaultMode string `yaml:"default_mode"`
-      Model       string `yaml:"model"`
-  }
+  // Start creates a new Execution for the given blueprint and objective,
+  // initializes all step states to "pending", sets the first step as current,
+  // and returns the execution. Does NOT advance — call Advance() to begin.
+  func (e *Engine) Start(ctx context.Context, blueprintName string, objectiveID string) (*Execution, error)
 
-  type WatchdogConfig struct {
-      CheckIntervalSeconds int `yaml:"check_interval_seconds"`
-      NudgeAfterMinutes    int `yaml:"nudge_after_minutes"`
-      EscalateAfterNudges  int `yaml:"escalate_after_nudges"`
-  }
+  // Advance moves the execution forward by running the current step's handler.
+  // If the step completes, it advances to the next step (via step.Next).
+  // If the step fails and has retries remaining, it retries.
+  // If the step is "human" type, it sets status to "waiting_human" and returns.
+  // Returns the updated execution.
+  func (e *Engine) Advance(ctx context.Context, exec *Execution) (*Execution, error)
 
-  type ToolsConfig struct {
-      MaxPerAgent    int      `yaml:"max_per_agent"`
-      AlwaysInclude  []string `yaml:"always_include"`
-      AlwaysExclude  []string `yaml:"always_exclude"`
-  }
+  // ApproveHuman unblocks a "waiting_human" execution and advances to the next step.
+  func (e *Engine) ApproveHuman(ctx context.Context, exec *Execution) (*Execution, error)
+
+  // GetStepByID returns the step definition from the blueprint.
+  func (e *Engine) GetStepByID(bp *Blueprint, stepID string) (*Step, error)
   ```
 
-  Functions:
-  - `Load(path string) (*Config, error)` — reads YAML file at path using `gopkg.in/yaml.v3`, returns parsed Config. If file not found, return `Default()`.
-  - `Default() *Config` — returns sensible defaults: listen `"0.0.0.0:9800"`, data_dir `"~/.deck/data"`, provider `"daytona"`, max_concurrent `8`, max_depth `2`, etc.
-  - `(c *Config) ExpandPaths()` — expands `~` in DataDir to actual home directory using `os.UserHomeDir()`.
+  The engine is a **synchronous state machine driver**. It does not manage goroutines or long-running processes — that's the dispatcher's job (Phase 4). The engine simply:
+  1. Looks up the current step
+  2. Calls the registered handler
+  3. Updates step state based on result
+  4. Advances to `step.Next` or handles retries/failures
 
-  Use `os.ReadFile` + `yaml.Unmarshal`. Import `gopkg.in/yaml.v3` and `os`.
-  File: `internal/config/config.go`
+  Import: `context`, `time`, `log/slog`, `fmt`, `github.com/google/uuid`.
+  File: `internal/harness/blueprint/engine.go`
 
----
-
-## Phase 3: Data Layer
-
-- [x] **3.1** Create database manager
-  Create `internal/db/db.go` with:
+- [ ] **2.2** Create blueprint persistence (DB store)
+  Create `internal/db/blueprints.go` with:
 
   ```go
   package db
 
-  import (
-      "database/sql"
-      "fmt"
-      "os"
-      "path/filepath"
-      _ "modernc.org/sqlite"
-  )
+  // ExecutionStore persists blueprint execution state.
+  type ExecutionStore struct { db *sql.DB }
 
-  type DB struct {
-      conn *sql.DB
-  }
+  func NewExecutionStore(db *sql.DB) *ExecutionStore
 
-  func Open(dataDir string) (*DB, error)
-  func (d *DB) Close() error
-  func (d *DB) Conn() *sql.DB
-  func (d *DB) Migrate() error
+  // Create inserts a new execution record.
+  func (s *ExecutionStore) Create(ctx context.Context, exec *blueprint.Execution) error
+
+  // Get retrieves an execution by ID.
+  func (s *ExecutionStore) Get(ctx context.Context, id string) (*blueprint.Execution, error)
+
+  // GetByObjective retrieves the execution for a given objective.
+  func (s *ExecutionStore) GetByObjective(ctx context.Context, objectiveID string) (*blueprint.Execution, error)
+
+  // Update saves the current execution state (current_step, step_states JSON, status, updated_at).
+  func (s *ExecutionStore) Update(ctx context.Context, exec *blueprint.Execution) error
+
+  // List returns all executions, ordered by created_at desc.
+  func (s *ExecutionStore) List(ctx context.Context) ([]blueprint.Execution, error)
   ```
 
-  `Open` must:
-  1. Create dataDir if it doesn't exist (`os.MkdirAll`)
-  2. Open SQLite at `{dataDir}/deck.db` using driver name `"sqlite"`
-  3. Set pragmas: `PRAGMA journal_mode=WAL`, `PRAGMA foreign_keys=ON`, `PRAGMA busy_timeout=5000`
-  4. Return `&DB{conn: sqlDB}`
+  `StepStates` is stored as a JSON blob in a TEXT column.
+  Timestamps stored as Unix seconds (matching Phase 1 pattern).
 
-  `Migrate` calls the migration function from task 3.2.
-  `Conn` returns the underlying `*sql.DB` for stores to use.
-
-  Register the sqlite driver import with blank identifier: `_ "modernc.org/sqlite"`.
-  The driver name for modernc sqlite is `"sqlite"`.
-  File: `internal/db/db.go`
-
-- [x] **3.2** Create database schema migrations
-  Create `internal/db/migrations.go` with migration SQL as a Go const string.
-
-  ```go
-  const migrationSQL = `
-  CREATE TABLE IF NOT EXISTS objectives (
+  Add the migration for the `executions` table to `internal/db/migrations.go`:
+  ```sql
+  CREATE TABLE IF NOT EXISTS executions (
       id TEXT PRIMARY KEY,
-      description TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'planning',
-      blueprint TEXT NOT NULL DEFAULT '',
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS plans (
-      id TEXT PRIMARY KEY,
-      objective_id TEXT NOT NULL REFERENCES objectives(id),
-      status TEXT NOT NULL DEFAULT 'draft',
-      quality_gates TEXT NOT NULL DEFAULT '[]',
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS streams (
-      id TEXT PRIMARY KEY,
-      plan_id TEXT NOT NULL REFERENCES plans(id),
-      title TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
-      file_scope TEXT NOT NULL DEFAULT '[]',
-      dependencies TEXT NOT NULL DEFAULT '[]',
-      status TEXT NOT NULL DEFAULT 'pending',
-      created_at INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS agent_sessions (
-      id TEXT PRIMARY KEY,
+      blueprint_name TEXT NOT NULL,
       objective_id TEXT NOT NULL,
-      stream_id TEXT NOT NULL DEFAULT '',
-      role TEXT NOT NULL,
-      sandbox_id TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'pending',
+      current_step TEXT NOT NULL,
+      step_states TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'running',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
   );
 
-  CREATE TABLE IF NOT EXISTS mail (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      from_agent TEXT NOT NULL,
-      to_agent TEXT NOT NULL,
-      type TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      objective TEXT NOT NULL,
-      stream TEXT NOT NULL DEFAULT '',
-      read INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      type TEXT NOT NULL,
-      objective TEXT NOT NULL DEFAULT '',
-      stream TEXT NOT NULL DEFAULT '',
-      agent TEXT NOT NULL DEFAULT '',
-      payload TEXT NOT NULL DEFAULT '{}',
-      created_at INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS merge_queue (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      stream_id TEXT NOT NULL,
-      branch TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_mail_to_unread ON mail(to_agent, read, created_at);
-  CREATE INDEX IF NOT EXISTS idx_events_type ON events(type, created_at);
-  CREATE INDEX IF NOT EXISTS idx_events_objective ON events(objective, created_at);
-  `
+  CREATE INDEX IF NOT EXISTS idx_executions_objective ON executions(objective_id);
   ```
 
-  Export a function `RunMigrations(db *sql.DB) error` that executes `migrationSQL` via `db.ExecContext`.
-  Wire `DB.Migrate()` in db.go to call `RunMigrations(d.conn)`.
-  File: `internal/db/migrations.go`
-
-- [x] **3.3** Create objectives and agents stores
-  Create `internal/db/objectives.go`:
-  ```go
-  type ObjectiveStore struct { db *sql.DB }
-  func NewObjectiveStore(db *sql.DB) *ObjectiveStore
-  func (s *ObjectiveStore) Create(ctx context.Context, obj *domain.Objective) error
-  func (s *ObjectiveStore) Get(ctx context.Context, id string) (*domain.Objective, error)
-  func (s *ObjectiveStore) List(ctx context.Context) ([]domain.Objective, error)
-  func (s *ObjectiveStore) UpdateStatus(ctx context.Context, id string, status domain.ObjectiveStatus) error
-  ```
-  - `Create`: if `obj.ID` is empty, generate UUID via `uuid.New().String()`. Store `CreatedAt`/`UpdatedAt` as Unix seconds (`time.Now().Unix()`). Set status to `"planning"` if empty.
-  - `Get`: query by ID, scan into `Objective`, convert Unix seconds back to `time.Unix(ts, 0)`. Return `sql.ErrNoRows` wrapped if not found.
-  - `List`: `SELECT * FROM objectives ORDER BY created_at DESC`.
-  - `UpdateStatus`: `UPDATE objectives SET status=?, updated_at=? WHERE id=?`.
-
-  Create `internal/db/agents.go`:
-  ```go
-  type AgentStore struct { db *sql.DB }
-  func NewAgentStore(db *sql.DB) *AgentStore
-  func (s *AgentStore) Create(ctx context.Context, session *domain.AgentSession) error
-  func (s *AgentStore) Get(ctx context.Context, id string) (*domain.AgentSession, error)
-  func (s *AgentStore) ListByObjective(ctx context.Context, objectiveID string) ([]domain.AgentSession, error)
-  func (s *AgentStore) UpdateStatus(ctx context.Context, id string, status string) error
-  ```
-  Same patterns as ObjectiveStore. Generate UUID if ID empty. Store times as Unix seconds.
-
-  Import `github.com/syndg/deck/internal/domain` and `github.com/google/uuid`.
-  Files: `internal/db/objectives.go`, `internal/db/agents.go`
-
-- [x] **3.4** Create mail and events stores
-  Create `internal/db/mail.go`:
-  ```go
-  type MailStore struct { db *sql.DB }
-  func NewMailStore(db *sql.DB) *MailStore
-  func (s *MailStore) Send(ctx context.Context, msg *domain.MailMessage) error
-  func (s *MailStore) GetUnread(ctx context.Context, agentName string) ([]domain.MailMessage, error)
-  func (s *MailStore) MarkRead(ctx context.Context, id int64) error
-  ```
-  - `Send`: INSERT into mail table. `created_at` as Unix seconds.
-  - `GetUnread`: `SELECT * FROM mail WHERE to_agent=? AND read=0 ORDER BY created_at ASC`.
-  - `MarkRead`: `UPDATE mail SET read=1 WHERE id=?`.
-
-  Create `internal/db/events.go`:
-  ```go
-  type EventStore struct { db *sql.DB }
-  func NewEventStore(db *sql.DB) *EventStore
-  func (s *EventStore) Insert(ctx context.Context, event *domain.Event) error
-  func (s *EventStore) ListByObjective(ctx context.Context, objectiveID string, limit int) ([]domain.Event, error)
-  func (s *EventStore) ListRecent(ctx context.Context, limit int) ([]domain.Event, error)
-  ```
-  - `Insert`: INSERT into events table. `created_at` as Unix seconds.
-  - `ListByObjective`: `SELECT * FROM events WHERE objective=? ORDER BY created_at DESC LIMIT ?`.
-  - `ListRecent`: `SELECT * FROM events ORDER BY created_at DESC LIMIT ?`.
-
-  Same import pattern as task 3.3.
-  Files: `internal/db/mail.go`, `internal/db/events.go`
-
-- [x] **3.5** Create event bus with persistence
-  Create `internal/services/events/bus.go`:
-  ```go
-  package events
-
-  type Subscriber chan domain.Event
-
-  type Bus struct {
-      mu          sync.RWMutex
-      subscribers map[int]Subscriber
-      nextID      int
-      logger      *slog.Logger
-  }
-
-  func NewBus(logger *slog.Logger) *Bus
-  func (b *Bus) Publish(event domain.Event)
-  func (b *Bus) Subscribe(buffer int) (Subscriber, func())
-  ```
-  - `Publish`: RLock, iterate subscribers, non-blocking send (use select with default to drop if full). Log event type via slog.
-  - `Subscribe`: Lock, assign incrementing ID, create buffered channel, store in map. Return channel and unsubscribe func that deletes from map.
-  - Use `sync.RWMutex` for thread safety.
-
-  Create `internal/services/events/persistent.go`:
-  ```go
-  type PersistentBus struct {
-      *Bus
-      store *db.EventStore
-  }
-
-  func NewPersistentBus(store *db.EventStore, logger *slog.Logger) *PersistentBus
-  func (pb *PersistentBus) Publish(event domain.Event)
-  ```
-  - `NewPersistentBus`: creates inner Bus, stores reference to EventStore.
-  - `Publish`: insert event into store via `pb.store.Insert(context.Background(), &event)`, then call `pb.Bus.Publish(event)` to broadcast to subscribers. Log errors from Insert but don't fail (event bus should be resilient).
-
-  Import `github.com/syndg/deck/internal/domain`, `github.com/syndg/deck/internal/db`, `sync`, `log/slog`.
-  Files: `internal/services/events/bus.go`, `internal/services/events/persistent.go`
+  Import: `database/sql`, `context`, `encoding/json`, `time`, `fmt`, `github.com/syndg/deck/internal/harness/blueprint`.
+  Files: `internal/db/blueprints.go`, `internal/db/migrations.go` (append)
 
 ---
 
-## Phase 4: HTTP Daemon
+## Phase 3: Scoped Rules Engine
 
-- [x] **4.1** Create daemon server
-  Create `internal/daemon/daemon.go` with:
+- [ ] **3.1** Create rules domain types
+  Create `internal/harness/rules/types.go` with:
+
   ```go
-  package daemon
+  package rules
 
-  type Daemon struct {
-      cfg       *config.Config
-      db        *db.DB
-      eventBus  *events.PersistentBus
-      objectives *db.ObjectiveStore
-      agents    *db.AgentStore
-      mail      *db.MailStore
-      mux       *http.ServeMux
-      server    *http.Server
-      startTime time.Time
-      logger    *slog.Logger
+  // Rule represents a scoped rule loaded from a markdown file with YAML frontmatter.
+  type Rule struct {
+      Scope    string   `yaml:"scope"`              // glob pattern (e.g., "src/auth/**")
+      Priority string   `yaml:"priority,omitempty"`  // "high", "normal" (default: "normal")
+      Tools    *ToolScope `yaml:"tools,omitempty"`   // optional tool restrictions
+      Body     string   `yaml:"-"`                   // markdown content after frontmatter
+      Source   string   `yaml:"-"`                   // file path this rule was loaded from
   }
 
-  func New(cfg *config.Config) (*Daemon, error)
-  func (d *Daemon) Start() error
-  func (d *Daemon) Shutdown(ctx context.Context) error
+  type ToolScope struct {
+      Include []string `yaml:"include,omitempty"`
+      Exclude []string `yaml:"exclude,omitempty"`
+  }
+
+  // MatchedRule is a rule that matched a specific file path, with its source.
+  type MatchedRule struct {
+      Rule     *Rule
+      MatchedOn string // the glob pattern that matched
+  }
   ```
-  - `New`: expand config paths, open DB, run migrations, create all stores, create PersistentBus, create `http.ServeMux`, call `d.registerRoutes()`, create `http.Server` with the mux, store start time.
-  - `Start`: log "Deck daemon listening on {addr}", call `d.server.ListenAndServe()`. Return `http.ErrServerClosed` as nil (expected on shutdown).
-  - `Shutdown`: call `d.server.Shutdown(ctx)`, then `d.db.Close()`.
 
-  Use `log/slog` for structured logging. Create a named logger: `slog.Default().With("component", "daemon")`.
+  File: `internal/harness/rules/types.go`
 
-  Import: `net/http`, `log/slog`, `time`, `context`, and internal packages (`config`, `db`, `events`).
+- [ ] **3.2** Create rules loader and matcher
+  Create `internal/harness/rules/engine.go` with:
+
+  ```go
+  package rules
+
+  // Engine loads rules from directories and matches them against file paths.
+  type Engine struct {
+      rules  []*Rule
+      mu     sync.RWMutex
+      logger *slog.Logger
+  }
+
+  func NewEngine(logger *slog.Logger) *Engine
+
+  // LoadDir loads all .md files from a directory, parsing YAML frontmatter and markdown body.
+  // Frontmatter is delimited by "---" lines at the start of the file.
+  // Can be called multiple times (e.g., for global + project rules).
+  func (e *Engine) LoadDir(dir string) error
+
+  // ParseRule parses a single rule file (frontmatter + body).
+  func ParseRule(content []byte, source string) (*Rule, error)
+
+  // Match returns all rules whose scope glob matches any of the given file paths.
+  // Results are sorted: high-priority rules first, then by source path.
+  func (e *Engine) Match(filePaths []string) []MatchedRule
+
+  // MatchSingle returns all rules whose scope glob matches a single file path.
+  func (e *Engine) MatchSingle(filePath string) []MatchedRule
+
+  // All returns all loaded rules.
+  func (e *Engine) All() []*Rule
+
+  // BuildContext generates the combined rules text for injection into an agent overlay.
+  // High-priority rules are prefixed with "IMPORTANT CONSTRAINT:" header.
+  func (e *Engine) BuildContext(filePaths []string) string
+  ```
+
+  Frontmatter parsing: split on `---` delimiters, unmarshal YAML portion, keep remainder as Body.
+  Glob matching: use `path.Match` or `filepath.Match` for simple globs. For `**` (recursive) patterns, implement a simple recursive matcher or use `doublestar` semantics manually (match any number of path segments).
+
+  Import: `os`, `path/filepath`, `strings`, `bytes`, `sync`, `log/slog`, `sort`, `fmt`, `gopkg.in/yaml.v3`.
+  File: `internal/harness/rules/engine.go`
+
+---
+
+## Phase 4: Tool Curator
+
+- [ ] **4.1** Create tool curator types
+  Create `internal/harness/tools/types.go` with:
+
+  ```go
+  package tools
+
+  // ToolSpec represents a tool that can be provided to an agent.
+  type ToolSpec struct {
+      Name     string `json:"name"`      // e.g., "mcp:github:create_pr"
+      Source   string `json:"source"`    // e.g., "mcp:github", "builtin"
+      Category string `json:"category"`  // e.g., "filesystem", "git", "database"
+  }
+
+  // CurationResult is the resolved tool set for a specific agent.
+  type CurationResult struct {
+      Tools    []ToolSpec `json:"tools"`
+      Included int        `json:"included"`   // count of tools included
+      Excluded int        `json:"excluded"`   // count of tools excluded by rules
+      Capped   int        `json:"capped"`     // count of tools dropped by max_per_agent cap
+  }
+
+  // CurationInput holds all the inputs for tool resolution.
+  type CurationInput struct {
+      AvailableTools []ToolSpec        // all tools available in the system
+      BlueprintTools *ToolScope        // tools from the current blueprint step (include/exclude)
+      RuleTools      []ToolScope       // tools from matched rules
+      ConfigAlways   ConfigToolScope   // global always_include / always_exclude from config
+      MaxPerAgent    int               // cap from config
+  }
+
+  type ToolScope struct {
+      Include []string
+      Exclude []string
+  }
+
+  type ConfigToolScope struct {
+      AlwaysInclude []string
+      AlwaysExclude []string
+  }
+  ```
+
+  File: `internal/harness/tools/types.go`
+
+- [ ] **4.2** Create tool curator
+  Create `internal/harness/tools/curator.go` with:
+
+  ```go
+  package tools
+
+  // Curator resolves the effective tool set for an agent.
+  type Curator struct {
+      logger *slog.Logger
+  }
+
+  func NewCurator(logger *slog.Logger) *Curator
+
+  // Curate resolves the effective tool set from all inputs.
+  // Resolution order:
+  // 1. Start with all available tools
+  // 2. Apply config always_exclude (remove matching)
+  // 3. Apply config always_include (ensure present)
+  // 4. Apply blueprint step include (if non-empty, filter to only matching)
+  // 5. Apply blueprint step exclude (remove matching)
+  // 6. Apply rule tool includes (union — add any matching available tools)
+  // 7. Apply rule tool excludes (remove matching)
+  // 8. Deduplicate
+  // 9. Cap at MaxPerAgent (keep always_include tools, drop lowest-priority extras)
+  func (c *Curator) Curate(input CurationInput) CurationResult
+
+  // matchGlob checks if a tool name matches a glob pattern.
+  // Supports "*" as wildcard segment: "mcp:github:*" matches "mcp:github:create_pr".
+  func matchGlob(pattern, name string) bool
+  ```
+
+  The curator is stateless — it takes all inputs and produces a result.
+  Tool name matching uses `:` as segment separator (not `/`), so `mcp:github:*` matches any tool under the `mcp:github` namespace.
+
+  Import: `log/slog`, `strings`, `sort`.
+  File: `internal/harness/tools/curator.go`
+
+---
+
+## Phase 5: Quality Gate Runner
+
+- [ ] **5.1** Create quality gate types and runner
+  Create `internal/harness/gates/types.go` with:
+
+  ```go
+  package gates
+
+  // Gate represents a single quality gate (a command to run in a sandbox).
+  type Gate struct {
+      Name    string `yaml:"name" json:"name"`       // e.g., "lint", "test", "build"
+      Command string `yaml:"command" json:"command"`  // e.g., "bun run lint", "go test ./..."
+      Timeout int    `yaml:"timeout" json:"timeout"`  // seconds, 0 = default (120s)
+  }
+
+  type GateResult struct {
+      Gate     Gate   `json:"gate"`
+      Passed   bool   `json:"passed"`
+      ExitCode int    `json:"exit_code"`
+      Stdout   string `json:"stdout"`
+      Stderr   string `json:"stderr"`
+      Duration int    `json:"duration_ms"`
+  }
+
+  type RunResult struct {
+      AllPassed bool         `json:"all_passed"`
+      Results   []GateResult `json:"results"`
+  }
+  ```
+
+  File: `internal/harness/gates/types.go`
+
+- [ ] **5.2** Create quality gate runner
+  Create `internal/harness/gates/runner.go` with:
+
+  ```go
+  package gates
+
+  import (
+      "context"
+      "github.com/syndg/deck/internal/sandbox"
+  )
+
+  // Runner executes quality gates inside a sandbox.
+  type Runner struct {
+      logger *slog.Logger
+  }
+
+  func NewRunner(logger *slog.Logger) *Runner
+
+  // Run executes all gates sequentially in the given sandbox.
+  // Stops on first failure unless continueOnFailure is true.
+  // Each gate runs as a command via sandbox.Exec().
+  func (r *Runner) Run(ctx context.Context, sb sandbox.Sandbox, gates []Gate, continueOnFailure bool) (*RunResult, error)
+
+  // RunSingle executes a single gate in the sandbox.
+  func (r *Runner) RunSingle(ctx context.Context, sb sandbox.Sandbox, gate Gate) (*GateResult, error)
+
+  // DefaultGates returns the default quality gates from config.
+  // Maps simple names to commands: "lint" -> the configured lint command, etc.
+  func DefaultGates(gateNames []string, commands map[string]string) []Gate
+  ```
+
+  `RunSingle` implementation:
+  1. Build `ExecOpts` with timeout from gate (default 120s if 0)
+  2. Call `sb.Exec(ctx, gate.Command, opts)`
+  3. Build `GateResult` from `ExecResult`
+  4. `Passed` = `ExitCode == 0`
+
+  `Run` iterates gates, calls `RunSingle` for each, collects results.
+
+  Import: `context`, `time`, `log/slog`, `github.com/syndg/deck/internal/sandbox`.
+  File: `internal/harness/gates/runner.go`
+
+---
+
+## Phase 6: Integration & Wiring
+
+- [ ] **6.1** Wire harness into daemon
+  Update `internal/daemon/daemon.go` to:
+  1. Add fields: `blueprintRegistry *blueprint.Registry`, `rulesEngine *rules.Engine`, `toolCurator *tools.Curator`, `gateRunner *gates.Runner`
+  2. In `New()`: create blueprint registry, load defaults, optionally load from `.deck/blueprints/` and `~/.config/deck/blueprints/`
+  3. In `New()`: create rules engine, optionally load from `.deck/rules/` and `~/.config/deck/rules/`
+  4. In `New()`: create tool curator and gate runner
+  5. Create `ExecutionStore` and add to daemon
+
+  Do NOT add new HTTP routes yet — just wire the harness components so they're available.
+
+  Import the new harness packages.
   File: `internal/daemon/daemon.go`
 
-- [x] **4.2** Create SSE event stream endpoint
-  Create `internal/daemon/sse.go` with:
-  ```go
-  func (d *Daemon) handleSSE(w http.ResponseWriter, r *http.Request)
-  ```
-  Implementation:
-  1. Set headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`
-  2. Check that `w` implements `http.Flusher` (cast and check)
-  3. Subscribe to event bus: `sub, unsub := d.eventBus.Subscribe(64)`
-  4. `defer unsub()`
-  5. Loop: `select` on `r.Context().Done()` (client disconnected) or `event := <-sub` (new event)
-  6. For each event, marshal to JSON, write `data: {json}\n\n` format, flush
-  7. On context done, return
-
-  Register as `GET /events` in registerRoutes.
-  File: `internal/daemon/sse.go`
-
-- [x] **4.3** Create objectives REST endpoints
-  Create `internal/daemon/routes.go` with:
-  ```go
-  func (d *Daemon) registerRoutes()
-  func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request)
-  func (d *Daemon) handleGetObjective(w http.ResponseWriter, r *http.Request)
-  func (d *Daemon) handleListObjectives(w http.ResponseWriter, r *http.Request)
-  ```
-  - `registerRoutes`: register all handlers using Go 1.22 pattern syntax:
-    ```go
-    d.mux.HandleFunc("POST /objectives", d.handleCreateObjective)
-    d.mux.HandleFunc("GET /objectives/{id}", d.handleGetObjective)
-    d.mux.HandleFunc("GET /objectives", d.handleListObjectives)
-    d.mux.HandleFunc("GET /events", d.handleSSE)
-    d.mux.HandleFunc("GET /health", d.handleHealth)
-    d.mux.HandleFunc("GET /status", d.handleStatus)
-    ```
-  - `handleCreateObjective`: decode JSON body `{"description": "..."}`, create `domain.Objective`, call `objectives.Create`, publish `EventObjectiveCreated` event, respond 201 with JSON objective.
-  - `handleGetObjective`: extract `{id}` from `r.PathValue("id")` (Go 1.22), call `objectives.Get`, respond 200 or 404.
-  - `handleListObjectives`: call `objectives.List`, respond 200 with JSON array.
-
-  Add helpers: `writeJSON(w, status, data)` and `writeError(w, status, message)`.
-  Use `encoding/json` for marshal/unmarshal.
-  File: `internal/daemon/routes.go`
-
-- [x] **4.4** Create health and status endpoints
+- [ ] **6.2** Add blueprint API endpoints
   Add to `internal/daemon/routes.go`:
+
   ```go
-  func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request)
-  func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request)
+  // GET /blueprints — list available blueprints
+  func (d *Daemon) handleListBlueprints(w http.ResponseWriter, r *http.Request)
+
+  // GET /blueprints/{name} — get a specific blueprint definition
+  func (d *Daemon) handleGetBlueprint(w http.ResponseWriter, r *http.Request)
+
+  // GET /executions — list all executions
+  func (d *Daemon) handleListExecutions(w http.ResponseWriter, r *http.Request)
+
+  // GET /executions/{id} — get execution state
+  func (d *Daemon) handleGetExecution(w http.ResponseWriter, r *http.Request)
   ```
-  - `handleHealth`: respond 200 with `{"status": "ok"}`.
-  - `handleStatus`: build a status response struct:
-    ```go
-    type StatusResponse struct {
-        Status     string         `json:"status"`
-        Uptime     string         `json:"uptime"`
-        Objectives map[string]int `json:"objectives"`
-    }
-    ```
-    Query objectives, count by status, compute uptime from `d.startTime`. Respond 200 with JSON.
+
+  Register these routes in `registerRoutes()`.
+  These are read-only endpoints for now — execution creation happens through `deck plan` which will be enhanced in Phase 3 (Planning).
+
   File: `internal/daemon/routes.go`
 
-- [x] **4.5** Wire daemon entry point
-  Rewrite `cmd/daemon/main.go` to:
-  1. Parse `--config` flag (default: `~/.config/deck/config.yaml`)
-  2. Load config via `config.Load(configPath)` — falls back to defaults if file missing
-  3. Call `config.ExpandPaths()` to resolve `~` in paths
-  4. Create daemon via `daemon.New(cfg)`
-  5. Set up OS signal handling: create channel for `os.Interrupt` and `syscall.SIGTERM`
-  6. Start daemon in a goroutine
-  7. Wait for signal, then call `daemon.Shutdown` with 10-second timeout context
-  8. Log startup and shutdown messages via `slog`
+- [ ] **6.3** Add harness unit tests
+  Create test files:
 
-  Import: `flag`, `os`, `os/signal`, `syscall`, `context`, `time`, `log/slog`, and internal packages.
-  File: `cmd/daemon/main.go`
+  `internal/harness/blueprint/loader_test.go`:
+  - Test `LoadFile` with a valid blueprint YAML
+  - Test `Validate` catches: duplicate step IDs, dangling next refs, agent step without role, deterministic step without action
+  - Test `LoadDir` loads multiple files
 
----
+  `internal/harness/blueprint/engine_test.go`:
+  - Test `Start` initializes step states correctly
+  - Test `Advance` calls the right handler and moves to next step
+  - Test `Advance` with retry on failure
+  - Test `ApproveHuman` unblocks execution
 
-## Phase 5: CLI Client
+  `internal/harness/blueprint/registry_test.go`:
+  - Test `LoadDefaults` loads the three shipped blueprints
+  - Test `GetDefault` returns feature.yaml
+  - Test `Get` returns specific blueprints
 
-- [x] **5.1** Create cobra CLI root and daemon command
-  Rewrite `cmd/deck/main.go` to just call `Execute()`:
-  ```go
-  package main
+  `internal/harness/rules/engine_test.go`:
+  - Test `ParseRule` extracts frontmatter and body
+  - Test `Match` with simple glob
+  - Test `Match` with `**` recursive glob
+  - Test `BuildContext` with high-priority rules
 
-  func main() {
-      Execute()
-  }
-  ```
+  `internal/harness/tools/curator_test.go`:
+  - Test basic curation with include/exclude
+  - Test always_include survives exclusion
+  - Test max_per_agent cap
+  - Test glob matching (`mcp:github:*`)
 
-  Create `cmd/deck/root.go` with:
-  ```go
-  var (
-      cfgPath   string
-      daemonURL string
-  )
+  `internal/harness/gates/runner_test.go`:
+  - Test `RunSingle` with a mock sandbox (create a simple mock that implements `sandbox.Sandbox`)
+  - Test `Run` stops on first failure
+  - Test `Run` with continueOnFailure=true
 
-  var rootCmd = &cobra.Command{
-      Use:   "deck",
-      Short: "Deck - agentic workflow orchestrator",
-  }
-
-  func Execute() { rootCmd.Execute() }
-
-  func init() {
-      rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "~/.config/deck/config.yaml", "config file path")
-      rootCmd.PersistentFlags().StringVar(&daemonURL, "daemon-url", "http://localhost:9800", "daemon HTTP address")
-  }
-  ```
-
-  Add `daemon` subcommand in the same file (or root.go):
-  ```go
-  var daemonCmd = &cobra.Command{
-      Use:   "daemon",
-      Short: "Start the Deck daemon",
-      RunE: func(cmd *cobra.Command, args []string) error {
-          // Same logic as cmd/daemon/main.go:
-          // load config, create daemon, signal handling, start
-      },
-  }
-  ```
-  Register with `rootCmd.AddCommand(daemonCmd)` in init().
-
-  Import `github.com/spf13/cobra` and internal packages.
-  Files: `cmd/deck/main.go`, `cmd/deck/root.go`
-
-- [x] **5.2** Create HTTP client for daemon communication
-  Create `internal/client/client.go` with:
-  ```go
-  package client
-
-  type Client struct {
-      baseURL    string
-      httpClient *http.Client
-  }
-
-  func New(baseURL string) *Client
-  func (c *Client) CreateObjective(ctx context.Context, description string) (*domain.Objective, error)
-  func (c *Client) GetObjective(ctx context.Context, id string) (*domain.Objective, error)
-  func (c *Client) ListObjectives(ctx context.Context) ([]domain.Objective, error)
-  func (c *Client) GetStatus(ctx context.Context) (*StatusResponse, error)
-
-  type StatusResponse struct {
-      Status     string         `json:"status"`
-      Uptime     string         `json:"uptime"`
-      Objectives map[string]int `json:"objectives"`
-  }
-  ```
-  - `New`: set baseURL, create `http.Client` with 10s timeout.
-  - `CreateObjective`: POST to `/objectives` with JSON body, decode response.
-  - `GetObjective`: GET `/objectives/{id}`, decode response.
-  - `ListObjectives`: GET `/objectives`, decode response array.
-  - `GetStatus`: GET `/status`, decode response.
-
-  Add helper: `(c *Client) do(ctx, method, path, body) (*http.Response, error)` for common request logic.
-  Handle non-2xx responses by returning an error with the status code and body.
-
-  Import: `net/http`, `encoding/json`, `bytes`, `fmt`, `context`, `io`, and `github.com/syndg/deck/internal/domain`.
-  File: `internal/client/client.go`
-
-- [x] **5.3** Create `deck status` command
-  Create `cmd/deck/status.go` with:
-  ```go
-  var statusCmd = &cobra.Command{
-      Use:   "status",
-      Short: "Show daemon status",
-      RunE: func(cmd *cobra.Command, args []string) error {
-          c := client.New(daemonURL)
-          status, err := c.GetStatus(cmd.Context())
-          // handle error: print "Daemon not reachable at {url}" and return
-          // print formatted status: uptime, objective counts by status
-      },
-  }
-  ```
-  Register with `rootCmd.AddCommand(statusCmd)` in init().
-  Format output as a simple table using `fmt.Printf` with alignment.
-  Example output:
-  ```
-  Deck Daemon Status
-    URL:      http://localhost:9800
-    Uptime:   2h15m
-    Objectives:
-      planning:   2
-      executing:  1
-      completed:  5
-  ```
-  File: `cmd/deck/status.go`
-
-- [x] **5.4** Create `deck plan` command stub
-  Create `cmd/deck/plan.go` with:
-  ```go
-  var planCmd = &cobra.Command{
-      Use:   "plan [description]",
-      Short: "Create a new objective",
-      Args:  cobra.ExactArgs(1),
-      RunE: func(cmd *cobra.Command, args []string) error {
-          c := client.New(daemonURL)
-          obj, err := c.CreateObjective(cmd.Context(), args[0])
-          // handle error
-          fmt.Printf("Created objective %s: %s\n", obj.ID, obj.Description)
-          return nil
-      },
-  }
-  ```
-  Register with `rootCmd.AddCommand(planCmd)` in init().
-  This is a stub — full planning with planner agents comes in a later phase.
-  File: `cmd/deck/plan.go`
+  Files: `internal/harness/blueprint/loader_test.go`, `internal/harness/blueprint/engine_test.go`, `internal/harness/blueprint/registry_test.go`, `internal/harness/rules/engine_test.go`, `internal/harness/tools/curator_test.go`, `internal/harness/gates/runner_test.go`
 
 ---
 
@@ -811,24 +686,18 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 | Step | Task | Phase |
 |------|------|-------|
-| 1 | 1.1 Initialize Go module and directory structure | 1 |
-| 2 | 1.2 Add core dependencies | 1 |
-| 3 | 1.3 Create entry point stubs | 1 |
-| 4 | 2.1 Create core domain types | 2 |
-| 5 | 2.2 Create sandbox provider interface | 2 |
-| 6 | 2.3 Create agent runtime interface | 2 |
-| 7 | 2.4 Create configuration types and YAML loader | 2 |
-| 8 | 3.1 Create database manager | 3 |
-| 9 | 3.2 Create database schema migrations | 3 |
-| 10 | 3.3 Create objectives and agents stores | 3 |
-| 11 | 3.4 Create mail and events stores | 3 |
-| 12 | 3.5 Create event bus with persistence | 3 |
-| 13 | 4.1 Create daemon server | 4 |
-| 14 | 4.2 Create SSE event stream endpoint | 4 |
-| 15 | 4.3 Create objectives REST endpoints | 4 |
-| 16 | 4.4 Create health and status endpoints | 4 |
-| 17 | 4.5 Wire daemon entry point | 4 |
-| 18 | 5.1 Create cobra CLI root and daemon command | 5 |
-| 19 | 5.2 Create HTTP client for daemon communication | 5 |
-| 20 | 5.3 Create deck status command | 5 |
-| 21 | 5.4 Create deck plan command stub | 5 |
+| 1 | 1.1 Create blueprint domain types | 1 |
+| 2 | 1.2 Create blueprint YAML loader | 1 |
+| 3 | 1.3 Create shipped default blueprints | 1 |
+| 4 | 1.4 Create blueprint registry | 1 |
+| 5 | 2.1 Create blueprint execution engine | 2 |
+| 6 | 2.2 Create blueprint persistence (DB store) | 2 |
+| 7 | 3.1 Create rules domain types | 3 |
+| 8 | 3.2 Create rules loader and matcher | 3 |
+| 9 | 4.1 Create tool curator types | 4 |
+| 10 | 4.2 Create tool curator | 4 |
+| 11 | 5.1 Create quality gate types and runner | 5 |
+| 12 | 5.2 Create quality gate runner | 5 |
+| 13 | 6.1 Wire harness into daemon | 6 |
+| 14 | 6.2 Add blueprint API endpoints | 6 |
+| 15 | 6.3 Add harness unit tests | 6 |

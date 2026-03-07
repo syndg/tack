@@ -1,0 +1,36 @@
+name: "Feature Implementation"
+description: "Plan, build, review, and merge a new feature"
+trigger: "default"
+
+steps:
+  - id: plan
+    type: agent
+    role: planner
+    description: "Explore codebase and decompose into streams"
+    next: approve
+
+  - id: approve
+    type: human
+    description: "Review and approve the plan"
+    next: dispatch
+
+  - id: dispatch
+    type: deterministic
+    action: dispatch_streams
+    description: "Spawn sandboxes and agents per stream"
+    next: per_stream
+
+  - id: per_stream
+    type: blueprint_ref
+    ref: ".deck/blueprints/stream.yaml"
+    next: merge
+
+  - id: merge
+    type: deterministic
+    action: merge_queue
+    description: "Merge all stream branches, run quality gates"
+    next: complete
+
+  - id: complete
+    type: deterministic
+    action: mark_complete
