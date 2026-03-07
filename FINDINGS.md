@@ -5,6 +5,27 @@ Phase 1 findings: `docs/phase1/FINDINGS.md`
 
 ---
 
+## Task 5.2: Create quality gate runner
+
+- Created `internal/harness/gates/runner.go` with `Runner`, `NewRunner`, `Run`, `RunSingle`, and `DefaultGates` per PRD spec.
+- `RunSingle` builds `ExecOpts` with timeout from gate (default 120s if 0), calls `sb.Exec()`, measures wall-clock duration via `time.Since`.
+- `Run` iterates gates sequentially, collects results, stops on first failure unless `continueOnFailure` is true. Returns error only for sandbox execution errors, not gate failures (those are captured in `GateResult.Passed`).
+- `DefaultGates` maps gate names to commands via a lookup map; silently skips names not present in the commands map.
+- Uses `log/slog` for structured logging at each gate start/completion.
+- Verified package compiles cleanly with `go build ./internal/harness/gates/...`.
+
+---
+
+## Task 5.1: Create quality gate types and runner
+
+- Created `internal/harness/gates/types.go` with `Gate`, `GateResult`, and `RunResult` types per PRD spec.
+- `Gate` has both `yaml` and `json` tags — loaded from config YAML, serialized to JSON for API responses.
+- `GateResult.Duration` is stored as `int` in milliseconds (`duration_ms`), matching the PRD spec.
+- `Gate.Timeout` is `int` in seconds with 0 meaning default (120s) — the runner (task 5.2) will interpret this.
+- No external dependencies — pure Go types, compiles cleanly with `go build ./...`.
+
+---
+
 ## Task 4.2: Create tool curator
 
 - Created `internal/harness/tools/curator.go` with `Curator`, `NewCurator`, `Curate`, and `matchGlob` per PRD spec.

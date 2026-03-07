@@ -531,7 +531,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 ## Phase 5: Quality Gate Runner
 
-- [ ] **5.1** Create quality gate types and runner
+- [x] **5.1** Create quality gate types and runner
   Create `internal/harness/gates/types.go` with:
 
   ```go
@@ -561,7 +561,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
   File: `internal/harness/gates/types.go`
 
-- [ ] **5.2** Create quality gate runner
+- [x] **5.2** Create quality gate runner
   Create `internal/harness/gates/runner.go` with:
 
   ```go
