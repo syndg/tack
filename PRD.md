@@ -248,7 +248,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 ## Phase 2: Blueprint Engine (State Machine)
 
-- [ ] **2.1** Create blueprint execution engine
+- [x] **2.1** Create blueprint execution engine
   Create `internal/harness/blueprint/engine.go` with:
 
   ```go
@@ -317,7 +317,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Import: `context`, `time`, `log/slog`, `fmt`, `github.com/google/uuid`.
   File: `internal/harness/blueprint/engine.go`
 
-- [ ] **2.2** Create blueprint persistence (DB store)
+- [x] **2.2** Create blueprint persistence (DB store)
   Create `internal/db/blueprints.go` with:
 
   ```go

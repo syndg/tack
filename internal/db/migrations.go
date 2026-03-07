@@ -81,6 +81,19 @@ CREATE TABLE IF NOT EXISTS merge_queue (
 CREATE INDEX IF NOT EXISTS idx_mail_to_unread ON mail(to_agent, read, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_objective ON events(objective, created_at);
+
+CREATE TABLE IF NOT EXISTS executions (
+    id TEXT PRIMARY KEY,
+    blueprint_name TEXT NOT NULL,
+    objective_id TEXT NOT NULL,
+    current_step TEXT NOT NULL,
+    step_states TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'running',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_executions_objective ON executions(objective_id);
 `
 
 // RunMigrations executes all schema migrations against the database.

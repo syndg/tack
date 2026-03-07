@@ -5,6 +5,30 @@ Phase 1 findings: `docs/phase1/FINDINGS.md`
 
 ---
 
+## Task 2.2: Create blueprint persistence (DB store)
+
+- Created `internal/db/blueprints.go` with `ExecutionStore` — `Create`, `Get`, `GetByObjective`, `Update`, `List` methods per PRD spec.
+- Added `executions` table migration and `idx_executions_objective` index to `internal/db/migrations.go`.
+- `StepStates` (map) is stored as a JSON TEXT column, marshaled/unmarshaled via `encoding/json` on write/read.
+- Timestamps stored as Unix seconds (matching Phase 1 pattern from objectives/agents stores).
+- Extracted `scanExecution` helper shared by `Get` and `GetByObjective` since they have identical scan logic.
+- `Update` sets `updated_at` to `time.Now()` and checks `RowsAffected` returning `sql.ErrNoRows` if no row matched (consistent with `UpdateStatus` pattern from Phase 1 stores).
+- Verified full project compiles with `go build ./...`.
+
+---
+
+## Task 2.1: Create blueprint execution engine
+
+- Created `internal/harness/blueprint/engine.go` with `Execution`, `StepHandler`, `StepResult`, and `Engine` types per PRD spec.
+- `Engine` is a synchronous state machine driver — looks up current step, calls registered handler, updates state, advances to `step.Next` or handles retries/failures. No goroutines or async.
+- `Start` creates an `Execution` with all step states initialized to `pending`, first step as `current_step`, UUID via `github.com/google/uuid`.
+- `Advance` handles: human steps (sets `waiting_human`), handler dispatch, retry logic (retry count < `step.Retry`), optional step skip on failure, and terminal state transitions (`completed`/`failed`).
+- `ApproveHuman` validates status is `waiting_human`, marks the human step completed, and advances to next.
+- Extracted `advanceToNext` helper shared by `Advance` and `ApproveHuman` — moves to `step.Next` or marks execution completed if no next step.
+- Verified full project compiles with `go build ./...`.
+
+---
+
 ## Task 1.4: Create blueprint registry
 
 - Created `internal/harness/blueprint/registry.go` with `Registry` struct, `NewRegistry`, `LoadDefaults`, `LoadFromDir`, `Get`, `GetDefault`, and `List` — all per PRD spec.
