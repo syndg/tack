@@ -5,6 +5,28 @@ Phase 1 findings: `docs/phase1/FINDINGS.md`
 
 ---
 
+## Task 3.2: Create rules loader and matcher
+
+- Created `internal/harness/rules/engine.go` with `Engine`, `ParseRule`, `Match`, `MatchSingle`, `All`, `BuildContext`, and `LoadDir` — all per PRD spec.
+- Frontmatter parsing: `splitFrontmatter` splits on `---` delimiters, extracts YAML portion, keeps remainder as Body. Requires frontmatter to be present (returns error if missing).
+- Implemented custom `matchGlob` with `**` support (recursive path segment matching) rather than using `filepath.Match` which lacks `**`. The `doMatchGlob` function handles `*`, `?`, `[...]` character classes, and `**` via recursive descent.
+- `Match` deduplicates: each rule appears at most once in results even if it matches multiple file paths.
+- `BuildContext` joins matched rule bodies separated by `---`, prefixing high-priority rules with "IMPORTANT CONSTRAINT:" header.
+- Priority defaults to "normal" in `ParseRule` when not specified in frontmatter.
+- Verified full project compiles with `go build ./...`.
+
+---
+
+## Task 3.1: Create rules domain types
+
+- Created `internal/harness/rules/types.go` with `Rule`, `ToolScope`, and `MatchedRule` types per PRD spec.
+- `Rule` has yaml tags for frontmatter fields (`scope`, `priority`, `tools`) and `yaml:"-"` for `Body` and `Source` (populated by the loader, not from YAML).
+- `ToolScope` mirrors the blueprint package's `ToolScope` (same structure, separate type in rules package to avoid cross-package dependency). Task 4.1 will introduce a third `ToolScope` in the tools package — potential consolidation deferred.
+- `MatchedRule` pairs a matched `*Rule` with the glob pattern that triggered the match.
+- Verified package compiles cleanly with `go build ./internal/harness/rules/`.
+
+---
+
 ## Task 2.2: Create blueprint persistence (DB store)
 
 - Created `internal/db/blueprints.go` with `ExecutionStore` — `Create`, `Get`, `GetByObjective`, `Update`, `List` methods per PRD spec.

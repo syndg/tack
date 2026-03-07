@@ -370,7 +370,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 ## Phase 3: Scoped Rules Engine
 
-- [ ] **3.1** Create rules domain types
+- [x] **3.1** Create rules domain types
   Create `internal/harness/rules/types.go` with:
 
   ```go
@@ -399,7 +399,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
   File: `internal/harness/rules/types.go`
 
-- [ ] **3.2** Create rules loader and matcher
+- [x] **3.2** Create rules loader and matcher
   Create `internal/harness/rules/engine.go` with:
 
   ```go
