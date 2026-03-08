@@ -124,18 +124,35 @@ func Validate(bp *Blueprint) error {
 	}
 
 	// Check for unreachable steps.
-	// The first step is the entry point; all others must be referenced by some step's Next.
-	reachable := make(map[string]bool, len(bp.Steps))
-	if len(bp.Steps) > 0 {
-		reachable[bp.Steps[0].ID] = true
-	}
+	// A step is reachable only if it can be reached by following Next pointers
+	// starting from the first step (the entry point).
+	stepByID := make(map[string]Step, len(bp.Steps))
 	for _, step := range bp.Steps {
-		if step.Next != "" {
-			reachable[step.Next] = true
+		if step.ID != "" {
+			stepByID[step.ID] = step
 		}
 	}
+
+	reachable := make(map[string]bool, len(bp.Steps))
+	var visit func(string)
+	visit = func(stepID string) {
+		if stepID == "" || reachable[stepID] {
+			return
+		}
+		step, ok := stepByID[stepID]
+		if !ok {
+			return
+		}
+		reachable[stepID] = true
+		visit(step.Next)
+	}
+
+	if len(bp.Steps) > 0 {
+		visit(bp.Steps[0].ID)
+	}
+
 	for _, step := range bp.Steps {
-		if !reachable[step.ID] {
+		if step.ID != "" && !reachable[step.ID] {
 			errs = append(errs, fmt.Sprintf("step %q is unreachable", step.ID))
 		}
 	}

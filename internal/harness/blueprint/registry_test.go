@@ -56,6 +56,38 @@ func TestGet_ReturnsSpecificBlueprint(t *testing.T) {
 	}
 }
 
+func TestStreamExecutionDefaultIncludesOptionalScout(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.LoadDefaults(); err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+
+	bp, ok := reg.Get("Stream Execution")
+	if !ok {
+		t.Fatal("Get('Stream Execution') returned false")
+	}
+	if len(bp.Steps) != 5 {
+		t.Fatalf("steps = %d, want 5", len(bp.Steps))
+	}
+
+	first := bp.Steps[0]
+	if first.ID != "scout" {
+		t.Fatalf("first step id = %q, want %q", first.ID, "scout")
+	}
+	if first.Type != StepTypeAgent {
+		t.Fatalf("first step type = %q, want %q", first.Type, StepTypeAgent)
+	}
+	if first.Role != "scout" {
+		t.Fatalf("first step role = %q, want %q", first.Role, "scout")
+	}
+	if !first.Optional {
+		t.Fatal("expected scout step to be optional")
+	}
+	if first.Next != "build" {
+		t.Fatalf("first step next = %q, want %q", first.Next, "build")
+	}
+}
+
 func TestLoadFromDir_OverridesExisting(t *testing.T) {
 	reg := NewRegistry()
 	if err := reg.LoadDefaults(); err != nil {

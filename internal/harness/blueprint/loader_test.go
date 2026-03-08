@@ -109,6 +109,29 @@ func TestValidate_DeterministicWithoutAction(t *testing.T) {
 	}
 }
 
+func TestValidate_UnreachableStepChain(t *testing.T) {
+	bp := &Blueprint{
+		Name: "unreachable",
+		Steps: []Step{
+			{ID: "entry", Type: StepTypeAgent, Role: "planner", Next: "done"},
+			{ID: "done", Type: StepTypeDeterministic, Action: "finish"},
+			{ID: "orphan", Type: StepTypeAgent, Role: "builder", Next: "orphan_done"},
+			{ID: "orphan_done", Type: StepTypeDeterministic, Action: "noop"},
+		},
+	}
+
+	err := Validate(bp)
+	if err == nil {
+		t.Fatal("expected error for unreachable steps")
+	}
+	if !strings.Contains(err.Error(), `step "orphan" is unreachable`) {
+		t.Fatalf("error = %q, want orphan step to be unreachable", err.Error())
+	}
+	if !strings.Contains(err.Error(), `step "orphan_done" is unreachable`) {
+		t.Fatalf("error = %q, want orphan_done step to be unreachable", err.Error())
+	}
+}
+
 func TestLoadDir_MultipleFiles(t *testing.T) {
 	dir := t.TempDir()
 

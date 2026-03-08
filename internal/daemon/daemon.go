@@ -73,15 +73,8 @@ func New(cfg *config.Config) (*Daemon, error) {
 		return nil, fmt.Errorf("loading default blueprints: %w", err)
 	}
 
-	// Optionally load project-local blueprints from .deck/blueprints/
-	projectBlueprintsDir := filepath.Join(".deck", "blueprints")
-	if info, err := os.Stat(projectBlueprintsDir); err == nil && info.IsDir() {
-		if err := bpRegistry.LoadFromDir(projectBlueprintsDir); err != nil {
-			logger.Warn("loading project blueprints", "dir", projectBlueprintsDir, "error", err)
-		}
-	}
-
 	// Optionally load user-level blueprints from ~/.config/deck/blueprints/
+	// before project-local blueprints so project files take precedence.
 	home, _ := os.UserHomeDir()
 	if home != "" {
 		userBlueprintsDir := filepath.Join(home, ".config", "deck", "blueprints")
@@ -89,6 +82,15 @@ func New(cfg *config.Config) (*Daemon, error) {
 			if err := bpRegistry.LoadFromDir(userBlueprintsDir); err != nil {
 				logger.Warn("loading user blueprints", "dir", userBlueprintsDir, "error", err)
 			}
+		}
+	}
+
+	// Optionally load project-local blueprints from .deck/blueprints/
+	// last so they override both defaults and user-level blueprints.
+	projectBlueprintsDir := filepath.Join(".deck", "blueprints")
+	if info, err := os.Stat(projectBlueprintsDir); err == nil && info.IsDir() {
+		if err := bpRegistry.LoadFromDir(projectBlueprintsDir); err != nil {
+			logger.Warn("loading project blueprints", "dir", projectBlueprintsDir, "error", err)
 		}
 	}
 
@@ -172,4 +174,3 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 	}
 	return nil
 }
-

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -121,5 +123,145 @@ func TestCreateObjectiveValidation(t *testing.T) {
 	}
 	if body["error"] == "" {
 		t.Fatal("expected error message in response")
+	}
+}
+
+func TestBlueprintEndpoints(t *testing.T) {
+	cfg := config.Default()
+	cfg.Daemon.Listen = "127.0.0.1:19802"
+	cfg.Daemon.DataDir = t.TempDir()
+
+	d, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- d.Start()
+	}()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = d.Shutdown(ctx)
+		<-errCh
+	}()
+
+	baseURL := "http://" + cfg.Daemon.Listen
+	waitForHTTP(t, baseURL+"/health")
+
+	resp, err := http.Get(baseURL + "/blueprints")
+	if err != nil {
+		t.Fatalf("GET /blueprints: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from /blueprints, got %d", resp.StatusCode)
+	}
+
+	var blueprints []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&blueprints); err != nil {
+		t.Fatalf("Decode /blueprints: %v", err)
+	}
+	if len(blueprints) != 3 {
+		t.Fatalf("expected 3 blueprints, got %d", len(blueprints))
+	}
+
+	resp, err = http.Get(baseURL + "/blueprints/Feature%20Implementation")
+	if err != nil {
+		t.Fatalf("GET /blueprints/{name}: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from /blueprints/{name}, got %d", resp.StatusCode)
+	}
+
+	var blueprint map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&blueprint); err != nil {
+		t.Fatalf("Decode /blueprints/{name}: %v", err)
+	}
+	if blueprint["name"] != "Feature Implementation" {
+		t.Fatalf("unexpected blueprint name: %v", blueprint["name"])
+	}
+
+	resp, err = http.Get(baseURL + "/executions")
+	if err != nil {
+		t.Fatalf("GET /executions: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from /executions, got %d", resp.StatusCode)
+	}
+
+	var executions []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&executions); err != nil {
+		t.Fatalf("Decode /executions: %v", err)
+	}
+	if len(executions) != 0 {
+		t.Fatalf("expected no executions, got %d", len(executions))
+	}
+}
+
+func TestProjectBlueprintOverridesUserBlueprint(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	project := filepath.Join(root, "project")
+
+	if err := os.MkdirAll(filepath.Join(home, ".config", "deck", "blueprints"), 0o755); err != nil {
+		t.Fatalf("MkdirAll home blueprints: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, ".deck", "blueprints"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project blueprints: %v", err)
+	}
+
+	userBlueprint := `name: Hotfix
+description: User override
+trigger: manual
+steps:
+  - id: user
+    type: agent
+    role: builder
+`
+	projectBlueprint := `name: Hotfix
+description: Project override
+trigger: manual
+steps:
+  - id: project
+    type: agent
+    role: builder
+`
+
+	if err := os.WriteFile(filepath.Join(home, ".config", "deck", "blueprints", "hotfix.yaml"), []byte(userBlueprint), 0o644); err != nil {
+		t.Fatalf("WriteFile user blueprint: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".deck", "blueprints", "hotfix.yaml"), []byte(projectBlueprint), 0o644); err != nil {
+		t.Fatalf("WriteFile project blueprint: %v", err)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	defer os.Chdir(cwd)
+	if err := os.Chdir(project); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	cfg := config.Default()
+	cfg.Daemon.DataDir = filepath.Join(root, "data")
+
+	d, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer d.db.Close()
+
+	bp, ok := d.blueprintRegistry.Get("Hotfix")
+	if !ok {
+		t.Fatal("Hotfix blueprint not found")
+	}
+	if bp.Description != "Project override" {
+		t.Fatalf("expected project override, got %q", bp.Description)
 	}
 }
