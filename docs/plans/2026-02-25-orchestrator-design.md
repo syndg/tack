@@ -112,7 +112,7 @@ deck           — TUI client (Bubble Tea). Connects to local or remote daemon.
 ┌──────────────────────────────────────────────────────────────────┐
 │                         CLIENTS                                  │
 │  ┌────────────┐  ┌────────────┐  ┌───────────────────────────┐  │
-│  │  TUI       │  │  CLI       │  │  OpenClaw Agent           │  │
+│  │  TUI       │  │  CLI       │  │  Discord / Slack Bot      │  │
 │  │  (laptop)  │  │  (scripts) │  │  (Telegram/WhatsApp/etc)  │  │
 │  └─────┬──────┘  └─────┬──────┘  └────────────┬──────────────┘  │
 └────────┼───────────────┼──────────────────────┼─────────────────┘
@@ -183,7 +183,7 @@ An **objective** is the unit of work you give Deck. It's a natural language desc
 "Add rate limiting to all public API endpoints"
 ```
 
-Objectives enter the system via TUI, CLI, or OpenClaw message. Each objective gets a unique ID and flows through the lifecycle: `planning → approved → executing → reviewing → completed`.
+Objectives enter the system via TUI, CLI, or messaging channel (Discord, Slack). Each objective gets a unique ID and flows through the lifecycle: `planning → approved → executing → reviewing → completed`.
 
 ### 2. Plans
 
@@ -438,7 +438,7 @@ deck.done           — Signal task completion with summary
 - `@stream:{id}` — All agents in a stream
 - `@builders` — All builder agents
 - `@leads` — All lead agents
-- `@human` — Escalation to you (triggers TUI/OpenClaw notification)
+- `@human` — Escalation to you (triggers TUI/Discord/Slack notification)
 
 ### 6. Blueprints (Configurable Deterministic + Agentic Workflows)
 
@@ -551,7 +551,7 @@ steps:
 **Step types:**
 - `agent` — LLM-driven. Spawns an agent with the specified role.
 - `deterministic` — Code. Runs a predefined action (quality gates, merge, dispatch).
-- `human` — Blocks until human approval via TUI/CLI/OpenClaw.
+- `human` — Blocks until human approval via TUI/CLI/Discord/Slack.
 - `blueprint_ref` — Nests another blueprint (for per-stream execution within an objective).
 
 **Why configurable:** Every team's workflow is different. Some want mandatory code review agents. Others trust CI and skip review. Some need security scanning steps. Others need database migration validation. The blueprint engine is the harness — users configure it for their project.
@@ -756,7 +756,7 @@ Three-tier health system:
 - Recommends: retry, reassign, reduce scope, escalate
 
 **Tier 2 — You:**
-- Notification via TUI or OpenClaw
+- Notification via TUI, Discord, or Slack
 - You can: steer the agent, restart it, reassign the task, or take over manually
 
 ### 11. Event Bus
@@ -779,7 +779,7 @@ type Event struct {
 - Watchdog — monitors agent health events
 - Merge queue — listens for merge_ready signals
 - Dispatcher — listens for plan approvals to spawn agents
-- OpenClaw bridge — forwards escalations and status updates
+- Channel manager — forwards escalations and status updates to Discord/Slack
 
 **Persistence:** All events stored in `events.db` for replay, debugging, and audit trail.
 
@@ -831,57 +831,324 @@ The TUI provides a structured editor for plans (not raw YAML editing). CLI users
 
 ---
 
-## OpenClaw Integration
+## Communication Channels
 
-Deck registers as a standard OpenClaw agent. OpenClaw handles all messaging platform concerns.
+Deck is multi-user. Team members interact with Deck through messaging platforms — creating objectives, approving plans, steering agents, reviewing progress. The channel plugin interface is inspired by [OpenClaw's channel architecture](https://github.com/nicepkg/openclaw) (`src/channels/plugins/types.plugin.ts`), but Deck owns its channels directly — no external gateway dependency.
 
-### Binding
+**Discord is the primary channel.** Slack follows. Future channels implement the same plugin interface. OpenClaw integration is possible but not a priority — their gateway is tightly coupled to their agent execution pipeline (no relay mode), so using it as a message proxy requires their agent as a middleman. Deck talks to platform APIs directly.
+
+### Channel Plugin Interface
+
+Every channel — built-in or future — implements the same contract. This is directly inspired by OpenClaw's `ChannelPlugin` adapter pattern: composable adapters for config, gateway lifecycle, outbound delivery, security, and routing.
+
+```go
+// internal/channels/channel.go
+
+// Channel is the interface every messaging platform implements.
+type Channel interface {
+    ID() string
+    Capabilities() Capabilities
+
+    // Lifecycle
+    Start(ctx context.Context, handler InboundHandler) error
+    Stop(ctx context.Context) error
+    Status() ChannelStatus
+
+    // Outbound
+    Send(ctx context.Context, target Target, msg Message) error
+    React(ctx context.Context, ref MessageRef, reaction string) error
+    UpdateMessage(ctx context.Context, ref MessageRef, msg Message) error
+
+    // Threading
+    StartThread(ctx context.Context, ref MessageRef, msg Message) (MessageRef, error)
+    ReplyInThread(ctx context.Context, threadRef MessageRef, msg Message) error
+}
+
+type Capabilities struct {
+    ChatTypes   []ChatType     // direct, channel, thread
+    Reactions   bool
+    Threads     bool
+    Buttons     bool           // interactive approve/reject
+    Attachments bool
+    Editing     bool
+}
+
+// InboundHandler is called by the channel when a message arrives.
+type InboundHandler func(ctx context.Context, event InboundEvent)
+
+type InboundEvent struct {
+    Channel     string
+    UserID      string          // platform user ID
+    UserName    string
+    ChatType    ChatType        // direct, channel, thread
+    Text        string
+    Attachments []Attachment
+    ThreadRef   *MessageRef     // nil if not in a thread
+    Raw         any             // platform-specific event for advanced use
+}
+```
+
+### Message & Routing Types
+
+```go
+type Message struct {
+    Text        string
+    Attachments []Attachment
+    Actions     []Action        // approve/reject buttons, reaction prompts
+    ThreadRef   *MessageRef     // thread to post in (nil = new message)
+}
+
+type Target struct {
+    UserID    string            // DM target (empty = use ChannelID)
+    ChannelID string            // channel/room target
+}
+
+type MessageRef struct {
+    ChannelID string
+    MessageID string
+    ThreadID  string
+}
+
+type Action struct {
+    ID    string                // "approve", "reject", "pause"
+    Label string
+    Style ActionStyle           // primary, danger, secondary
+}
+```
+
+### User Routing & Permissions
+
+Team members are mapped to Deck users. Each user has roles that determine what they can do through channels.
 
 ```yaml
-# In OpenClaw's config
-agents:
-  list:
-    - id: deck
-      name: "Deck"
-      workspace: "~/.deck/openclaw-workspace"
-      identity:
-        emoji: "🎛️"
+# .deck/config.yaml
+users:
+  - id: "andy"
+    discord_id: "123456789012345678"
+    slack_id: "U04ABCDEF"
+    role: admin                # admin | member | viewer
+  - id: "sarah"
+    discord_id: "987654321098765432"
+    role: member
 
-  bindings:
-    - agentId: deck
-      match:
-        channel: telegram
-        peer:
-          kind: direct
-          id: "your_telegram_id"
+roles:
+  admin:                       # full control
+    - objectives.create
+    - plans.approve
+    - plans.reject
+    - agents.steer
+    - agents.stop
+    - status.read
+  member:                      # can create and view, needs admin to approve
+    - objectives.create
+    - status.read
+    - agents.steer
+  viewer:                      # read-only
+    - status.read
 ```
 
-### How It Works
+```go
+// internal/channels/router.go
 
-1. You message Deck via Telegram: "Plan a refactor of the auth module to JWT"
-2. OpenClaw routes to the Deck agent
-3. Deck agent translates the message into a daemon HTTP call: `POST /objectives` with body `"Refactor auth to JWT"`
-4. Daemon spawns planner, works autonomously (batch mode)
-5. When plan is ready: Deck agent messages you back via Telegram with the plan summary
-6. You reply: "Looks good, approve" or "Change stream 2 to not depend on stream 1"
-7. Deck agent calls `POST /plans/{id}/approve` or `PATCH /plans/{id}`
-8. Execution begins. Status updates flow back through OpenClaw.
-9. On escalation: Deck agent sends you the issue via Telegram, you respond inline.
+// Router resolves inbound events to Deck users and checks permissions.
+type Router struct {
+    users  []UserMapping
+    roles  map[string][]Permission
+}
 
-### What Deck Exposes to OpenClaw
+type UserMapping struct {
+    DeckUserID string
+    ChannelIDs map[string]string  // channel name → platform user ID
+    Role       string
+}
 
-A thin adapter agent that translates natural language into daemon HTTP calls:
+// Resolve maps a platform user ID to a Deck user.
+func (r *Router) Resolve(channel string, platformUserID string) (*UserMapping, error)
+
+// Authorize checks if a user has permission for an action.
+func (r *Router) Authorize(user *UserMapping, action Permission) bool
+```
+
+### Command Parsing
+
+Inbound messages are parsed into Deck commands. Same mapping regardless of which channel the message came from.
+
+```go
+// internal/channels/commands.go
+
+type Command struct {
+    Action     string              // "plan", "approve", "status", "steer", "stop", "show"
+    Resource   string              // "objective", "plan", "agent", "stream"
+    ResourceID string              // plan ID, objective ID, agent name
+    Args       map[string]string   // additional arguments
+    Raw        string              // original message text
+    User       *UserMapping
+}
+
+// Parse examples:
+// "plan refactor auth to JWT"         → {Action: "plan", Args: {description: "refactor auth to JWT"}}
+// "approve plan 3"                    → {Action: "approve", Resource: "plan", ResourceID: "3"}
+// "status"                            → {Action: "status"}
+// "show plan 3"                       → {Action: "show", Resource: "plan", ResourceID: "3"}
+// "stop objective 2"                  → {Action: "stop", Resource: "objective", ResourceID: "2"}
+// "pause stream_2"                    → {Action: "pause", Resource: "stream", ResourceID: "2"}
+// "steer builder-1: use middleware"   → {Action: "steer", Resource: "agent", ResourceID: "builder-1",
+//                                        Args: {message: "use middleware"}}
+```
+
+Commands map to REST API calls:
 
 ```
-"plan X"           → POST   /objectives          {description: X}
+"plan X"           → POST   /objectives          {description: X, user: resolvedUser}
 "status"           → GET    /status
-"approve plan 3"   → POST   /plans/3/approve
+"approve plan 3"   → POST   /plans/3/approve      {user: resolvedUser}
 "show plan 3"      → GET    /plans/3
 "stop objective 2" → POST   /objectives/2/stop
+"pause stream_2"   → POST   /objectives/{id}/streams/2/pause
 "steer builder-1: use existing middleware" → POST /mail {to: "builder-1", ...}
 ```
 
-This agent is lightweight — it's a router, not an orchestrator. The daemon does all the real work.
+### Channel Manager
+
+Manages lifecycle of all channels with restart backoff (modeled after OpenClaw's `createChannelManager` in `src/gateway/server-channels.ts`).
+
+```go
+// internal/channels/manager.go
+
+type Manager struct {
+    channels map[string]Channel
+    router   *Router
+    eventBus *events.Bus
+    restorer *backoff.Policy    // exponential: 5s → 5min, factor 2, jitter 0.1
+}
+
+func (m *Manager) StartAll(ctx context.Context) error
+func (m *Manager) Start(ctx context.Context, channelID string) error
+func (m *Manager) Stop(ctx context.Context, channelID string) error
+func (m *Manager) Snapshot() ManagerSnapshot
+
+type ManagerSnapshot struct {
+    Channels map[string]ChannelStatus
+}
+
+type ChannelStatus struct {
+    Running     bool
+    Enabled     bool
+    LastStartAt time.Time
+    LastError   string
+    Restarts    int
+}
+```
+
+The manager subscribes to the daemon's event bus and routes events to channels as notifications. Inbound events from channels are parsed, authorized, and dispatched to the REST API.
+
+### Notification Routing
+
+Not every event goes to every user. Notifications are routed based on relevance:
+
+```go
+// internal/channels/notify.go
+
+type NotifyRule struct {
+    Events  []EventType         // plan.ready, agent.escalated, merge.completed, etc.
+    Target  NotifyTarget        // channel broadcast, DM to objective owner, DM to admins
+    Filter  NotifyFilter        // only for specific objectives, streams, etc.
+}
+```
+
+Default rules:
+- **Escalations** (Tier 2 watchdog) → DM to the objective owner + all admins
+- **Plan approval requests** → DM to admins, posted in team channel with approve/reject buttons
+- **Completion notifications** → team channel thread for that objective
+- **Agent progress** → thread replies (not DMs, to avoid noise)
+- **Errors/failures** → DM to objective owner
+
+### Built-in Channels: Discord & Slack
+
+#### Configuration
+
+```yaml
+# .deck/config.yaml
+channels:
+  discord:
+    enabled: true
+    bot_token: "${DISCORD_BOT_TOKEN}"
+    guild_id: "123456789"            # Discord server
+    channels:
+      notifications: "deck-notifications"   # default broadcast channel
+      objectives: "deck-objectives"         # threaded per objective
+    dm_escalations: true
+  slack:
+    enabled: true
+    bot_token: "${SLACK_BOT_TOKEN}"
+    app_token: "${SLACK_APP_TOKEN}"   # for socket mode
+    mode: "socket"                    # "socket" or "http"
+    channels:
+      notifications: "#deck-notifications"
+      objectives: "#deck-objectives"
+    dm_escalations: true
+```
+
+#### File Structure
+
+```
+internal/channels/
+├── channel.go          # Channel interface + types
+├── manager.go          # Lifecycle manager with restart backoff
+├── router.go           # User resolution + permission checks
+├── commands.go         # Inbound message → Command parser
+├── notify.go           # Event → notification routing rules
+├── discord/
+│   ├── bot.go          # Channel implementation (discordgo)
+│   ├── buttons.go      # Interactive components (approve/reject)
+│   └── threads.go      # Thread management per objective
+└── slack/
+    ├── bot.go          # Channel implementation (slack-go, socket + HTTP modes)
+    ├── blocks.go       # Block Kit messages (approve/reject buttons)
+    └── threads.go      # Thread management per objective
+```
+
+#### Example Flows
+
+**Team member creates objective from Discord:**
+
+1. Sarah messages `#deck-objectives`: "Plan a refactor of the auth module to JWT"
+2. Discord bot receives → router resolves Sarah (member role) → authorized for `objectives.create`
+3. Command parsed → `POST /objectives {description: "...", user: "sarah"}`
+4. Daemon spawns planner. Bot creates a thread under Sarah's message for this objective.
+5. Plan ready → bot posts plan summary in thread + DMs admins: "Plan ready for review: refactor auth to JWT [Approve] [Reject]"
+6. Andy (admin) clicks [Approve] in DM → `POST /plans/{id}/approve {user: "andy"}`
+7. Execution begins. Status updates posted as thread replies.
+8. On escalation: bot DMs Sarah (objective owner) + Andy (admin).
+9. Completion: bot posts summary + diff stats in thread.
+
+**Steering an agent mid-execution from Slack:**
+
+1. Andy in `#deck-objectives` thread: "steer builder-1: use the existing rate limiter in pkg/middleware, don't create a new one"
+2. Slack bot receives → router resolves Andy (admin) → authorized for `agents.steer`
+3. Command parsed → `POST /mail {to: "builder-1", from: "andy", body: "use the existing rate limiter..."}`
+4. Builder-1 receives mail at next hook injection point.
+
+### OpenClaw Integration (Not a Priority)
+
+OpenClaw's gateway is **tightly coupled to its agent execution pipeline**. Every inbound message must pass through their AI agent — there's no relay mode, no webhook forwarding, no way to use it as a dumb message pipe. Using OpenClaw as a Deck channel means their agent acts as a middleman: OpenClaw receives your message → runs its own agent → that agent calls Deck's REST API as a tool. This burns tokens and adds latency for what should be a direct API call.
+
+If a team already runs OpenClaw and wants to reach Deck from Telegram/WhatsApp/Signal, it's possible — write a Deck skill for OpenClaw's agent that maps messages to Deck REST calls. But this is a community contribution, not a Deck priority. Deck owns its channels directly.
+
+### Reference: OpenClaw Channel Architecture
+
+Deck's channel plugin interface is inspired by OpenClaw's architecture. Key reference files in the [OpenClaw codebase](https://github.com/nicepkg/openclaw) for implementation patterns:
+
+| Pattern | OpenClaw File | Deck Equivalent |
+|---------|--------------|-----------------|
+| Channel plugin interface | `src/channels/plugins/types.plugin.ts` | `internal/channels/channel.go` |
+| Gateway lifecycle manager | `src/gateway/server-channels.ts` | `internal/channels/manager.go` |
+| Inbound routing | `src/routing/resolve-route.ts` | `internal/channels/router.go` |
+| Discord implementation | `extensions/discord/src/channel.ts` | `internal/channels/discord/bot.go` |
+| Slack monitor + context | `src/slack/monitor/provider.ts`, `context.ts` | `internal/channels/slack/bot.go` |
+| Outbound delivery | `src/channels/plugins/types.adapters.ts` (lines 108-125) | `Channel.Send()` method per impl |
+| Channel dock (metadata) | `src/channels/dock.ts` | `Channel.Capabilities()` |
+| Restart backoff policy | `src/gateway/server-channels.ts` (lines 13-19) | `internal/channels/manager.go` backoff config |
 
 ---
 
@@ -1273,8 +1540,22 @@ deck/
 │   │   ├── log.go               # Live event log view
 │   │   ├── keymap.go            # Keybinding definitions
 │   │   └── mode.go              # Modal state (normal/insert)
-│   ├── openclaw/
-│   │   └── adapter.go           # OpenClaw agent adapter
+│   ├── channels/
+│   │   ├── channel.go           # Channel interface + types
+│   │   ├── manager.go           # Lifecycle manager with restart backoff
+│   │   ├── router.go            # User resolution + permission checks
+│   │   ├── commands.go          # Inbound message → Command parser
+│   │   ├── notify.go            # Event → notification routing rules
+│   │   ├── discord/
+│   │   │   ├── bot.go           # Discord Channel impl (discordgo)
+│   │   │   ├── buttons.go       # Interactive components
+│   │   │   └── threads.go       # Thread mgmt per objective
+│   │   ├── slack/
+│   │   │   ├── bot.go           # Slack Channel impl (slack-go)
+│   │   │   ├── blocks.go        # Block Kit messages
+│   │   │   └── threads.go       # Thread mgmt per objective
+│   │   └── openclaw/             # future: community-contributed adapter
+│   │       └── adapter.go
 │   ├── db/
 │   │   ├── migrations/          # SQLite migrations
 │   │   └── queries/             # SQL queries
@@ -1368,10 +1649,32 @@ rules:
   dir: "~/.config/deck/rules"      # global rules (apply to all projects)
   # Project rules in .deck/rules/ are additive
 
-openclaw:
-  enabled: false
-  # When enabled, Deck registers as an OpenClaw agent
-  # OpenClaw handles messaging, Deck handles orchestration
+users:
+  - id: "andy"
+    discord_id: ""
+    slack_id: ""
+    role: admin
+
+channels:
+  discord:
+    enabled: false
+    bot_token: "${DISCORD_BOT_TOKEN}"
+    guild_id: ""
+    channels:
+      notifications: "deck-notifications"
+      objectives: "deck-objectives"
+    dm_escalations: true
+  slack:
+    enabled: false
+    bot_token: "${SLACK_BOT_TOKEN}"
+    app_token: "${SLACK_APP_TOKEN}"
+    mode: "socket"                   # "socket" or "http"
+    channels:
+      notifications: "#deck-notifications"
+      objectives: "#deck-objectives"
+    dm_escalations: true
+  # OpenClaw integration is possible but not a priority — see design doc.
+  # Their gateway is tightly coupled to their agent pipeline (no relay mode).
 ```
 
 ### Project Config (`.deck/config.yaml`)
@@ -1477,7 +1780,7 @@ Everything in `.deck/` is version-controlled. Rules and blueprints are shared ac
 - Stuck detection (repeater, spinner, timeout)
 - Watchdog (tier 0-1)
 - Batch planning mode
-- OpenClaw adapter
+- Built-in channels (Discord bot, Slack bot)
 
 ### Phase 8: Polish & Ecosystem
 - Learned rules (auto-capture from human corrections)
@@ -1485,6 +1788,7 @@ Everything in `.deck/` is version-controlled. Rules and blueprints are shared ac
 - Additional sandbox providers (Docker, E2B)
 - Daytona snapshot management
 - Cost tracking and reporting
+- Additional channels (Telegram, etc.) via channel plugin interface
 
 ---
 
@@ -1492,7 +1796,7 @@ Everything in `.deck/` is version-controlled. Rules and blueprints are shared ac
 
 - **Not an agent framework.** Deck doesn't implement agents. Agent runtimes (Pi, Claude Code, Codex) do the thinking. Deck orchestrates them.
 - **Not a sandbox provider.** Daytona, Docker, E2B provide sandboxes. Deck manages their lifecycle through a provider interface.
-- **Not a messaging platform.** OpenClaw handles messaging. Deck is reachable through it.
+- **Not a messaging platform.** Deck ships with Discord and Slack bots for team communication, but the bots are thin command/notification interfaces — not chat agents.
 - **Not an IDE.** Deck doesn't edit code. Agents edit code. You review their work.
 - **Not a CI system.** Deck runs quality gates locally in sandboxes. CI is your existing pipeline.
 - **Not locked to any model or provider.** Bring your own agent runtime, sandbox provider, and model. The harness stays the same.
