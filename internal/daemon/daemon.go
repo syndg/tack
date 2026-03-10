@@ -76,7 +76,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 	eventBus := events.NewPersistentBus(eventStore, logger)
 
 	lifecycleMgr := lifecycle.New(objectiveStore, planStore, streamStore, agentStore, eventBus, logger)
-	planningService := planner.New(planStore, streamStore, objectiveStore, agentStore, lifecycleMgr, eventBus, logger)
+	planningService := planner.New(planStore, streamStore, objectiveStore, agentStore, lifecycleMgr, eventBus, logger, cfg.QualityGates)
 
 	// Initialize blueprint registry and load defaults
 	bpRegistry := blueprint.NewRegistry()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 const migrationSQL = `
@@ -12,6 +13,7 @@ CREATE TABLE IF NOT EXISTS objectives (
     description TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'planning',
     blueprint TEXT NOT NULL DEFAULT '',
+    planning_mode TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -100,6 +102,42 @@ CREATE INDEX IF NOT EXISTS idx_executions_objective ON executions(objective_id);
 func RunMigrations(db *sql.DB) error {
 	if _, err := db.ExecContext(context.Background(), migrationSQL); err != nil {
 		return fmt.Errorf("running migrations: %w", err)
+	}
+	if err := ensureColumnExists(db, "objectives", "planning_mode", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("ensuring objectives.planning_mode: %w", err)
+	}
+	return nil
+}
+
+func ensureColumnExists(db *sql.DB, table, column, definition string) error {
+	rows, err := db.QueryContext(context.Background(), fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("reading table info: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			typ        string
+			notNull    int
+			defaultV   sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultV, &primaryKey); err != nil {
+			return fmt.Errorf("scanning table info: %w", err)
+		}
+		if strings.EqualFold(name, column) {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating table info: %w", err)
+	}
+
+	if _, err := db.ExecContext(context.Background(), fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {
+		return fmt.Errorf("adding column: %w", err)
 	}
 	return nil
 }

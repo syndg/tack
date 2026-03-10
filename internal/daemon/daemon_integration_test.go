@@ -202,6 +202,92 @@ func TestBlueprintEndpoints(t *testing.T) {
 	}
 }
 
+func TestCreateObjectiveWithOptionsPersistsBlueprintAndPlanningMode(t *testing.T) {
+	cfg := config.Default()
+	cfg.Daemon.Listen = "127.0.0.1:19803"
+	cfg.Daemon.DataDir = t.TempDir()
+
+	d, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- d.Start()
+	}()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = d.Shutdown(ctx)
+		<-errCh
+	}()
+
+	baseURL := "http://" + cfg.Daemon.Listen
+	waitForHTTP(t, baseURL+"/health")
+
+	c := client.New(baseURL)
+	obj, err := c.CreateObjectiveWithOptions(context.Background(), "batch objective", client.CreateObjectiveOptions{
+		Blueprint: "hotfix",
+		Auto:      true,
+	})
+	if err != nil {
+		t.Fatalf("CreateObjectiveWithOptions: %v", err)
+	}
+	if obj.Blueprint != "hotfix" {
+		t.Fatalf("blueprint = %q, want hotfix", obj.Blueprint)
+	}
+	if obj.PlanningMode != "batch" {
+		t.Fatalf("planning_mode = %q, want batch", obj.PlanningMode)
+	}
+
+	got, err := c.GetObjective(context.Background(), obj.ID)
+	if err != nil {
+		t.Fatalf("GetObjective: %v", err)
+	}
+	if got.PlanningMode != "batch" {
+		t.Fatalf("persisted planning_mode = %q, want batch", got.PlanningMode)
+	}
+}
+
+func TestSimpleObjectiveUsesDefaultQualityGates(t *testing.T) {
+	cfg := config.Default()
+	cfg.Daemon.Listen = "127.0.0.1:19804"
+	cfg.Daemon.DataDir = t.TempDir()
+	cfg.QualityGates = []string{"go test ./...", "go vet ./..."}
+
+	d, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- d.Start()
+	}()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = d.Shutdown(ctx)
+		<-errCh
+	}()
+
+	baseURL := "http://" + cfg.Daemon.Listen
+	waitForHTTP(t, baseURL+"/health")
+
+	c := client.New(baseURL)
+	resp, err := c.CreateObjectiveSimple(context.Background(), "fix typo", "")
+	if err != nil {
+		t.Fatalf("CreateObjectiveSimple: %v", err)
+	}
+	if len(resp.Plan.QualityGates) != 2 {
+		t.Fatalf("quality gates len = %d, want 2", len(resp.Plan.QualityGates))
+	}
+	if resp.Plan.QualityGates[0] != "go test ./..." || resp.Plan.QualityGates[1] != "go vet ./..." {
+		t.Fatalf("quality gates = %v, want configured defaults", resp.Plan.QualityGates)
+	}
+}
+
 func TestProjectBlueprintOverridesUserBlueprint(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")

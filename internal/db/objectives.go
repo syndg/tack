@@ -34,9 +34,9 @@ func (s *ObjectiveStore) Create(ctx context.Context, obj *domain.Objective) erro
 	obj.UpdatedAt = now
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO objectives (id, description, status, blueprint, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		obj.ID, obj.Description, string(obj.Status), obj.Blueprint,
+		`INSERT INTO objectives (id, description, status, blueprint, planning_mode, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		obj.ID, obj.Description, string(obj.Status), obj.Blueprint, obj.PlanningMode,
 		now.Unix(), now.Unix(),
 	)
 	if err != nil {
@@ -48,7 +48,7 @@ func (s *ObjectiveStore) Create(ctx context.Context, obj *domain.Objective) erro
 // Get retrieves an objective by ID. Returns a wrapped sql.ErrNoRows if not found.
 func (s *ObjectiveStore) Get(ctx context.Context, id string) (*domain.Objective, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, description, status, blueprint, created_at, updated_at
+		`SELECT id, description, status, blueprint, planning_mode, created_at, updated_at
 		 FROM objectives WHERE id = ?`, id,
 	)
 
@@ -56,7 +56,7 @@ func (s *ObjectiveStore) Get(ctx context.Context, id string) (*domain.Objective,
 	var status string
 	var createdAt, updatedAt int64
 
-	err := row.Scan(&obj.ID, &obj.Description, &status, &obj.Blueprint, &createdAt, &updatedAt)
+	err := row.Scan(&obj.ID, &obj.Description, &status, &obj.Blueprint, &obj.PlanningMode, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting objective %s: %w", id, err)
 	}
@@ -70,7 +70,7 @@ func (s *ObjectiveStore) Get(ctx context.Context, id string) (*domain.Objective,
 // List returns all objectives ordered by creation time descending.
 func (s *ObjectiveStore) List(ctx context.Context) ([]domain.Objective, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, description, status, blueprint, created_at, updated_at
+		`SELECT id, description, status, blueprint, planning_mode, created_at, updated_at
 		 FROM objectives ORDER BY created_at DESC`,
 	)
 	if err != nil {
@@ -84,7 +84,7 @@ func (s *ObjectiveStore) List(ctx context.Context) ([]domain.Objective, error) {
 		var status string
 		var createdAt, updatedAt int64
 
-		if err := rows.Scan(&obj.ID, &obj.Description, &status, &obj.Blueprint, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&obj.ID, &obj.Description, &status, &obj.Blueprint, &obj.PlanningMode, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scanning objective: %w", err)
 		}
 

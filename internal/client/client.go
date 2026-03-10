@@ -35,11 +35,28 @@ func New(baseURL string) *Client {
 	}
 }
 
+// CreateObjectiveOptions configures objective creation for normal planning mode.
+type CreateObjectiveOptions struct {
+	Blueprint string `json:"blueprint,omitempty"`
+	Auto      bool   `json:"auto,omitempty"`
+}
+
 // CreateObjective sends a POST /objectives request to create a new objective.
 func (c *Client) CreateObjective(ctx context.Context, description string) (*domain.Objective, error) {
+	return c.CreateObjectiveWithOptions(ctx, description, CreateObjectiveOptions{})
+}
+
+// CreateObjectiveWithOptions creates an objective with optional blueprint and auto-planning settings.
+func (c *Client) CreateObjectiveWithOptions(ctx context.Context, description string, opts CreateObjectiveOptions) (*domain.Objective, error) {
 	body := struct {
 		Description string `json:"description"`
-	}{Description: description}
+		Blueprint   string `json:"blueprint,omitempty"`
+		Auto        bool   `json:"auto,omitempty"`
+	}{
+		Description: description,
+		Blueprint:   opts.Blueprint,
+		Auto:        opts.Auto,
+	}
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {

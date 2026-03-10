@@ -89,9 +89,15 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	planningMode := ""
+	if req.Auto {
+		planningMode = "batch"
+	}
+
 	obj := &domain.Objective{
-		Description: req.Description,
-		Blueprint:   req.Blueprint,
+		Description:  req.Description,
+		Blueprint:    req.Blueprint,
+		PlanningMode: planningMode,
 	}
 	if err := d.objectives.Create(r.Context(), obj); err != nil {
 		d.logger.Error("creating objective", "error", err)

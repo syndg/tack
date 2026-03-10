@@ -3,6 +3,7 @@ package planner
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,7 +73,7 @@ func extractYAMLBlock(s string) (string, bool) {
 // - At least one stream
 // - All streams have a title
 // - All streams have a non-empty file_scope
-// - Dependency references point to existing stream titles
+// - Dependency references point to existing stream titles or 1-based indices
 // - No circular dependencies
 // Returns all validation errors joined.
 func ValidatePlan(plan *RawPlan) error {
@@ -82,12 +83,9 @@ func ValidatePlan(plan *RawPlan) error {
 		return errors.New("plan must have at least one stream")
 	}
 
-	titles := make(map[string]bool, len(plan.Streams))
 	for i, s := range plan.Streams {
 		if s.Title == "" {
 			errs = append(errs, fmt.Sprintf("stream %d missing title", i))
-		} else {
-			titles[s.Title] = true
 		}
 		if len(s.FileScope) == 0 {
 			name := s.Title
@@ -102,10 +100,9 @@ func ValidatePlan(plan *RawPlan) error {
 		return errors.New(strings.Join(errs, "; "))
 	}
 
-	// Validate dependency references.
 	for _, s := range plan.Streams {
 		for _, dep := range s.Dependencies {
-			if !titles[dep] {
+			if _, ok := resolveDependencyTitle(dep, plan.Streams); !ok {
 				errs = append(errs, fmt.Sprintf("stream %q dependency %q not found", s.Title, dep))
 			}
 		}
@@ -115,7 +112,6 @@ func ValidatePlan(plan *RawPlan) error {
 		return errors.New(strings.Join(errs, "; "))
 	}
 
-	// Check for cycles.
 	if err := DetectCycles(plan.Streams); err != nil {
 		return err
 	}
@@ -124,7 +120,7 @@ func ValidatePlan(plan *RawPlan) error {
 }
 
 // ToDomain converts a RawPlan to domain Plan + Streams.
-// Generates IDs, resolves dependency titles to stream IDs,
+// Generates IDs, resolves dependency titles or indices to stream IDs,
 // sets initial statuses.
 func ToDomain(raw *RawPlan, objectiveID string) (*domain.Plan, []domain.Stream) {
 	now := time.Now()
@@ -154,9 +150,11 @@ func ToDomain(raw *RawPlan, objectiveID string) (*domain.Plan, []domain.Stream) 
 	streams := make([]domain.Stream, len(raw.Streams))
 	for i, rs := range raw.Streams {
 		deps := make([]string, 0, len(rs.Dependencies))
-		for _, depTitle := range rs.Dependencies {
-			if depID, ok := titleToID[depTitle]; ok {
-				deps = append(deps, depID)
+		for _, depRef := range rs.Dependencies {
+			if depTitle, ok := resolveDependencyTitle(depRef, raw.Streams); ok {
+				if depID, ok := titleToID[depTitle]; ok {
+					deps = append(deps, depID)
+				}
 			}
 		}
 
@@ -182,10 +180,17 @@ func ToDomain(raw *RawPlan, objectiveID string) (*domain.Plan, []domain.Stream) 
 
 // DetectCycles checks the dependency graph for cycles using DFS.
 func DetectCycles(streams []RawStream) error {
-	// Build adjacency list: title → dependencies.
 	adj := make(map[string][]string, len(streams))
 	for _, s := range streams {
-		adj[s.Title] = s.Dependencies
+		deps := make([]string, 0, len(s.Dependencies))
+		for _, depRef := range s.Dependencies {
+			depTitle, ok := resolveDependencyTitle(depRef, streams)
+			if !ok {
+				return fmt.Errorf("stream %q dependency %q not found", s.Title, depRef)
+			}
+			deps = append(deps, depTitle)
+		}
+		adj[s.Title] = deps
 	}
 
 	const (
@@ -219,4 +224,19 @@ func DetectCycles(streams []RawStream) error {
 		}
 	}
 	return nil
+}
+
+func resolveDependencyTitle(ref string, streams []RawStream) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	for _, stream := range streams {
+		if stream.Title == ref {
+			return stream.Title, true
+		}
+	}
+
+	idx, err := strconv.Atoi(ref)
+	if err != nil || idx < 1 || idx > len(streams) {
+		return "", false
+	}
+	return streams[idx-1].Title, true
 }

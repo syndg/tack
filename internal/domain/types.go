@@ -16,12 +16,13 @@ const (
 )
 
 type Objective struct {
-	ID          string          `json:"id"`
-	Description string          `json:"description"`
-	Status      ObjectiveStatus `json:"status"`
-	Blueprint   string          `json:"blueprint"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID           string          `json:"id"`
+	Description  string          `json:"description"`
+	Status       ObjectiveStatus `json:"status"`
+	Blueprint    string          `json:"blueprint"`
+	PlanningMode string          `json:"planning_mode,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
 }
 
 // Plan and streams

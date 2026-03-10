@@ -16,13 +16,14 @@ import (
 
 // Service manages the planning lifecycle for objectives.
 type Service struct {
-	plans      *db.PlanStore
-	streams    *db.StreamStore
-	objectives *db.ObjectiveStore
-	agentStore *db.AgentStore
-	lifecycle  *lifecycle.Manager
-	eventBus   *events.PersistentBus
-	logger     *slog.Logger
+	plans               *db.PlanStore
+	streams             *db.StreamStore
+	objectives          *db.ObjectiveStore
+	agentStore          *db.AgentStore
+	lifecycle           *lifecycle.Manager
+	eventBus            *events.PersistentBus
+	logger              *slog.Logger
+	defaultQualityGates []string
 }
 
 // New creates a new planning Service.
@@ -34,15 +35,17 @@ func New(
 	lifecycle *lifecycle.Manager,
 	eventBus *events.PersistentBus,
 	logger *slog.Logger,
+	defaultQualityGates []string,
 ) *Service {
 	return &Service{
-		plans:      plans,
-		streams:    streams,
-		objectives: objectives,
-		agentStore: agentStore,
-		lifecycle:  lifecycle,
-		eventBus:   eventBus,
-		logger:     logger,
+		plans:               plans,
+		streams:             streams,
+		objectives:          objectives,
+		agentStore:          agentStore,
+		lifecycle:           lifecycle,
+		eventBus:            eventBus,
+		logger:              logger,
+		defaultQualityGates: append([]string(nil), defaultQualityGates...),
 	}
 }
 
@@ -112,11 +115,16 @@ func (s *Service) CreateSimplePlan(ctx context.Context, objectiveID string) (*do
 
 	now := time.Now()
 
+	qualityGates := append([]string(nil), s.defaultQualityGates...)
+	if qualityGates == nil {
+		qualityGates = []string{}
+	}
+
 	plan := &domain.Plan{
 		ID:           uuid.New().String(),
 		ObjectiveID:  objectiveID,
 		Status:       domain.PlanStatusPendingApproval,
-		QualityGates: []string{},
+		QualityGates: qualityGates,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}

@@ -33,7 +33,7 @@ func setupService(t *testing.T) (*Service, *db.ObjectiveStore, *db.PlanStore, *d
 	logger := slog.Default()
 
 	lcm := lifecycle.New(objStore, planStore, streamStore, agentStore, bus, logger)
-	svc := New(planStore, streamStore, objStore, agentStore, lcm, bus, logger)
+	svc := New(planStore, streamStore, objStore, agentStore, lcm, bus, logger, []string{"go test ./...", "go vet ./..."})
 	return svc, objStore, planStore, streamStore
 }
 
@@ -107,6 +107,9 @@ func TestCreateSimplePlan_SingleStream(t *testing.T) {
 	}
 	if plan.Status != domain.PlanStatusPendingApproval {
 		t.Errorf("status = %q, want pending_approval", plan.Status)
+	}
+	if len(plan.QualityGates) != 2 || plan.QualityGates[0] != "go test ./..." || plan.QualityGates[1] != "go vet ./..." {
+		t.Errorf("quality gates = %v, want default gates", plan.QualityGates)
 	}
 
 	streams, err := streamStore.ListByPlan(ctx, plan.ID)

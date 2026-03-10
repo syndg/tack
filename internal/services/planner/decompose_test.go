@@ -90,6 +90,18 @@ func TestValidatePlan_DanglingDependency(t *testing.T) {
 	}
 }
 
+func TestValidatePlan_DependencyByIndex(t *testing.T) {
+	plan := &RawPlan{
+		Streams: []RawStream{
+			{Title: "auth", FileScope: []string{"src/auth/**"}, Dependencies: []string{}},
+			{Title: "tests", FileScope: []string{"tests/**"}, Dependencies: []string{"1"}},
+		},
+	}
+	if err := ValidatePlan(plan); err != nil {
+		t.Fatalf("ValidatePlan: %v", err)
+	}
+}
+
 func TestDetectCycles_CircularDependency(t *testing.T) {
 	streams := []RawStream{
 		{Title: "a", Dependencies: []string{"b"}},
@@ -111,6 +123,17 @@ func TestDetectCycles_ThreeWayCycle(t *testing.T) {
 	}
 }
 
+func TestDetectCycles_WithIndexDependencies(t *testing.T) {
+	streams := []RawStream{
+		{Title: "a", Dependencies: []string{"3"}},
+		{Title: "b", Dependencies: []string{"1"}},
+		{Title: "c", Dependencies: []string{"2"}},
+	}
+	if err := DetectCycles(streams); err == nil {
+		t.Error("expected error for indexed cycle")
+	}
+}
+
 func TestDetectCycles_NoCycles(t *testing.T) {
 	streams := []RawStream{
 		{Title: "a", Dependencies: []string{}},
@@ -126,7 +149,7 @@ func TestToDomain_GeneratesIDs(t *testing.T) {
 	raw := &RawPlan{
 		Streams: []RawStream{
 			{Title: "s1", FileScope: []string{"src/**"}, Dependencies: []string{}},
-			{Title: "s2", FileScope: []string{"lib/**"}, Dependencies: []string{"s1"}},
+			{Title: "s2", FileScope: []string{"lib/**"}, Dependencies: []string{"1"}},
 		},
 		QualityGates: []string{"go test"},
 	}
