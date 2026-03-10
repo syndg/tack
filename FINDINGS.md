@@ -40,6 +40,18 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 
 ---
 
+## Task 4.1: Create plan decomposition types and parser
+
+- Created `internal/services/planner/decompose.go` with `RawPlan`, `RawStream`, `ParsePlan`, `ValidatePlan`, `ToDomain`, and `DetectCycles`.
+- `ParsePlan` scans for a ` ```yaml ... ``` ` fenced block via `strings.Index`; falls back to unmarshalling the entire output. Returns an error only if both paths fail.
+- `ValidatePlan` runs in two passes: first checks titles/file_scope presence (short-circuits if missing titles, since dependency validation needs the title set), then checks dependency references, then calls `DetectCycles`.
+- `DetectCycles` uses standard 3-color DFS (unvisited/visiting/visited) on the title→dependencies adjacency list.
+- `ToDomain` generates plan and stream UUIDs in a first pass, then resolves dependency titles to stream IDs in a second pass. Plan status starts as `draft`; stream status starts as `"pending"`.
+- `QualityGates` and `FileScope` are normalized to `[]string{}` (not `nil`) to avoid JSON `null` when stored.
+- Package builds cleanly with `go build ./internal/services/planner/...`.
+
+---
+
 ## Task 3.2: Create agent overlay builder
 
 - Created `internal/services/agents/overlay.go` with `OverlayInput`, `BuildOverlay`, and `BuildPlannerOverlay`.
@@ -48,5 +60,17 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 - File Scope section is omitted entirely when `FileScope` is empty; Communication lead line is omitted when `LeadAgent` is empty.
 - `BuildPlannerOverlay` embeds `planYAMLSchema` constant matching the `RawPlan` YAML structure from phase 4 task 4.1 (`streams[]` + `quality_gates[]`).
 - Project Guidance section is omitted when `guidance` is empty string.
+- Full project builds cleanly: `go build ./...`.
+
+---
+
+## Task 4.2: Create planning service
+
+- Created `internal/services/planner/planner.go` with `Service` struct and 5 methods: `New`, `CreatePlan`, `CreateSimplePlan`, `GetPlanWithStreams`, `GetPlanByObjective`, `UpdateStream`.
+- `CreatePlan` follows the 6-step PRD flow: ParsePlan → ValidatePlan → ToDomain → plans.Create → streams.Create (loop) → publishes `EventPlanCreated` → lifecycle.MarkPlanReady (sets pending_approval + publishes EventObjectiveUpdated) → returns refreshed plan from DB.
+- `CreateSimplePlan` sets `plan.Status = PlanStatusPendingApproval` before calling `plans.Create` (which respects non-empty status), so no subsequent UpdateStatus call needed. Single stream: title = objective description, file_scope = `["**/*"]`.
+- Added `StreamStore.Update()` to `internal/db/streams.go` — required by `UpdateStream` to update title/description/file_scope/dependencies/status. The streams table has no `updated_at` column so none is set.
+- The PRD imports `agents` package in the service spec but none of the task 4.2 methods use it; omitted to keep the file compiling (unused imports are a compile error in Go).
+- `agentStore` field is wired in per spec but unused in task 4.2 methods; kept for future tasks (5.1 simple mode, 8.1 daemon wiring).
 - Full project builds cleanly: `go build ./...`.
 

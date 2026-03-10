@@ -146,6 +146,36 @@ func (s *StreamStore) UpdateStatus(ctx context.Context, id string, status string
 	return nil
 }
 
+// Update saves the mutable fields of a stream (title, description, file_scope,
+// dependencies, status). Used for plan editing before approval.
+func (s *StreamStore) Update(ctx context.Context, stream *domain.Stream) error {
+	fileScope, err := json.Marshal(stream.FileScope)
+	if err != nil {
+		return fmt.Errorf("marshalling file_scope: %w", err)
+	}
+	dependencies, err := json.Marshal(stream.Dependencies)
+	if err != nil {
+		return fmt.Errorf("marshalling dependencies: %w", err)
+	}
+
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE streams SET title = ?, description = ?, file_scope = ?, dependencies = ?, status = ? WHERE id = ?`,
+		stream.Title, stream.Description, string(fileScope), string(dependencies), stream.Status, stream.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating stream: %w", err)
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("stream not found: %s", stream.ID)
+	}
+	return nil
+}
+
 // ListReady returns streams whose dependencies are all completed.
 // A stream is ready if its status is "pending" and all stream IDs in its
 // dependencies list have status "completed".

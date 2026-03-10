@@ -337,7 +337,7 @@ Build the context package that each agent receives: role definition, task spec, 
 
 The planning service manages planner agent sessions — spawning them, collecting their output, parsing structured plans, and storing the results.
 
-- [ ] **4.1** Create plan decomposition types and parser
+- [x] **4.1** Create plan decomposition types and parser
   Create `internal/services/planner/decompose.go` with:
 
   ```go
@@ -396,7 +396,7 @@ The planning service manages planner agent sessions — spawning them, collectin
 
   File: `internal/services/planner/decompose.go`
 
-- [ ] **4.2** Create planning service
+- [x] **4.2** Create planning service
   Create `internal/services/planner/planner.go` with:
 
   ```go
