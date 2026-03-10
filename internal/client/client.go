@@ -89,6 +89,116 @@ func (c *Client) ListObjectives(ctx context.Context) ([]domain.Objective, error)
 	return objectives, nil
 }
 
+// CreateObjectiveSimpleResponse holds the response when creating an objective in simple mode.
+// The server auto-creates and approves a single-stream plan alongside the objective.
+type CreateObjectiveSimpleResponse struct {
+	Objective domain.Objective `json:"objective"`
+	Plan      domain.Plan      `json:"plan"`
+}
+
+// CreateObjectiveSimple creates an objective in simple mode (single-agent, no decomposition).
+// It POSTs /objectives with simple=true and an optional blueprint override.
+// The server responds with both the objective and the auto-approved plan.
+func (c *Client) CreateObjectiveSimple(ctx context.Context, description, blueprint string) (*CreateObjectiveSimpleResponse, error) {
+	body := struct {
+		Description string `json:"description"`
+		Blueprint   string `json:"blueprint,omitempty"`
+		Simple      bool   `json:"simple"`
+	}{
+		Description: description,
+		Blueprint:   blueprint,
+		Simple:      true,
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling request body: %w", err)
+	}
+
+	resp, err := c.do(ctx, http.MethodPost, "/objectives", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("creating simple objective: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result CreateObjectiveSimpleResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding simple objective response: %w", err)
+	}
+	return &result, nil
+}
+
+// PlanResponse represents a plan with its streams.
+type PlanResponse struct {
+	Plan    domain.Plan     `json:"plan"`
+	Streams []domain.Stream `json:"streams"`
+}
+
+// ListPlans returns all plans.
+func (c *Client) ListPlans(ctx context.Context) ([]domain.Plan, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/plans", nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing plans: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var plans []domain.Plan
+	if err := json.NewDecoder(resp.Body).Decode(&plans); err != nil {
+		return nil, fmt.Errorf("decoding plans response: %w", err)
+	}
+	return plans, nil
+}
+
+// GetPlan returns a plan with its streams.
+func (c *Client) GetPlan(ctx context.Context, id string) (*PlanResponse, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/plans/"+id, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting plan: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var pr PlanResponse
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		return nil, fmt.Errorf("decoding plan response: %w", err)
+	}
+	return &pr, nil
+}
+
+// GetObjectivePlan returns the plan for an objective.
+func (c *Client) GetObjectivePlan(ctx context.Context, objectiveID string) (*PlanResponse, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/objectives/"+objectiveID+"/plan", nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting objective plan: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var pr PlanResponse
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		return nil, fmt.Errorf("decoding plan response: %w", err)
+	}
+	return &pr, nil
+}
+
+// ApprovePlan approves a plan for execution.
+func (c *Client) ApprovePlan(ctx context.Context, planID string) error {
+	resp, err := c.do(ctx, http.MethodPost, "/plans/"+planID+"/approve", nil)
+	if err != nil {
+		return fmt.Errorf("approving plan: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// RejectPlan rejects a plan.
+func (c *Client) RejectPlan(ctx context.Context, planID string) error {
+	resp, err := c.do(ctx, http.MethodPost, "/plans/"+planID+"/reject", nil)
+	if err != nil {
+		return fmt.Errorf("rejecting plan: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // GetStatus sends a GET /status request.
 func (c *Client) GetStatus(ctx context.Context) (*StatusResponse, error) {
 	resp, err := c.do(ctx, http.MethodGet, "/status", nil)

@@ -98,3 +98,57 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 - `isPlanNotFound` helper checks `strings.Contains(err.Error(), "not found")` since `PlanStore`/`StreamStore` return descriptive errors rather than `sql.ErrNoRows`.
 - `handleGetPlan` and `handleGetObjectivePlan` both return `{"plan": {...}, "streams": [...]}` via the `planWithStreams` struct per the PRD response format.
 - Full project builds cleanly: `go build ./...`.
+
+---
+
+## Task 7.1: Add plan client methods
+
+- Added `PlanResponse` struct and 5 methods to `internal/client/client.go`: `ListPlans`, `GetPlan`, `GetObjectivePlan`, `ApprovePlan`, `RejectPlan`.
+- `ListPlans` — `GET /plans`, decodes `[]domain.Plan`.
+- `GetPlan` / `GetObjectivePlan` — `GET /plans/{id}` and `GET /objectives/{id}/plan`, both decode into `PlanResponse{Plan, Streams}`.
+- `ApprovePlan` / `RejectPlan` — `POST /plans/{id}/approve` and `POST /plans/{id}/reject`; no response body expected, close immediately.
+- All methods follow existing `do()` helper pattern: wrap errors with context, defer `resp.Body.Close()`.
+- Full project builds cleanly: `go build ./...`.
+
+---
+
+## Task 7.4: Create deck approve and deck reject commands
+
+- Created `cmd/deck/approve.go` with `approveCmd` and `rejectCmd` both registered via `init()`.
+- `approveCmd` — calls `c.ApprovePlan`, prints `"Plan {id} approved. Execution will begin."`.
+- `rejectCmd` — calls `c.RejectPlan`, prints `"Plan {id} rejected. Objective returned to planning."`.
+- Both commands use `cobra.ExactArgs(1)` and delegate entirely to the already-implemented client methods from task 7.1.
+- Tasks 7.2 (`deck plans`) and 7.3 (`deck show`) were pending at time of writing; task 7.2 is now implemented.
+- `go build ./cmd/deck/...` passes cleanly.
+
+---
+
+## Task 7.2: Create deck plans command
+
+- Created `cmd/deck/plans.go` with `plansCmd` cobra command registered via `init()`.
+- Uses `text/tabwriter` for aligned 4-column table: ID | OBJECTIVE | STATUS | CREATED.
+- IDs truncated to 8 chars via `truncateID` helper; keeps table compact without losing glanceability.
+- `timeAgo` helper formats elapsed time in human-readable units (s/m/h/d).
+- No explicit `domain` import needed — `p.Status` cast to `string` inline; `range` over `[]domain.Plan` infers type.
+- `truncateID` and `timeAgo` are package-level helpers, available for future commands (show, approve, reject already exist in the package).
+- Full project builds cleanly: `go build ./...`.
+
+---
+
+## Task 7.5: Enhance deck plan with flags
+
+- Updated `cmd/deck/plan.go`: added `planSimple`, `planBlueprint`, `planAuto` package-level vars; registered all three flags in `init()`.
+- `--simple` path calls new `client.CreateObjectiveSimple(ctx, description, blueprint)` — added to `internal/client/client.go` since simple mode needs to decode a combined `{objective, plan}` response that the existing `CreateObjective` can't handle.
+- `CreateObjectiveSimpleResponse` struct added to `client.go` holding `Objective` and `Plan`; `CreateObjectiveSimple` POSTs `{"description": ..., "simple": true, "blueprint": ...}` and decodes into it.
+- Non-simple path keeps the existing `CreateObjective` call (server tasks 8.1/8.2 will add blueprint/auto handling later); `--blueprint` in non-simple mode will be wired server-side in task 8.2.
+- `--auto` in non-simple mode prints "Planner will run in batch mode." vs "Planner will start an interactive session." — informational only until task 8.2 handles the `auto` field server-side.
+- Full project builds cleanly: `go build ./...`.
+
+## Task 7.3: Create deck show command
+
+- Created `cmd/deck/show.go` with `showCmd` registered via `init()` → `rootCmd.AddCommand(showCmd)`.
+- Calls `c.GetPlan(cmd.Context(), args[0])` (single API call); "Objective:" line shows `plan.ObjectiveID` (truncated) since `PlanResponse` does not contain the objective description.
+- Reuses `truncateID` helper from `plans.go` (same package) for Plan/Objective ID display and fallback dep display.
+- Dependency display builds `idToIdx map[string]int` from the streams slice; maps each dep UUID to `"stream N"` label; unknown dep IDs fall back to truncated UUID.
+- Empty QualityGates → "Quality Gates: none"; empty streams → "Streams: none"; blank line after each stream entry for readability.
+- `go build ./cmd/deck/...` compiles cleanly.

@@ -585,7 +585,7 @@ Expose plan management through the daemon's REST API.
 
 Extend the CLI client to support plan management.
 
-- [ ] **7.1** Add plan client methods
+- [x] **7.1** Add plan client methods
   Add to `internal/client/client.go`:
 
   ```go
@@ -613,7 +613,7 @@ Extend the CLI client to support plan management.
 
   File: `internal/client/client.go`
 
-- [ ] **7.2** Create `deck plans` command
+- [x] **7.2** Create `deck plans` command
   Create `cmd/deck/plans.go` with:
 
   ```go
@@ -638,7 +638,7 @@ Extend the CLI client to support plan management.
   Register with `rootCmd.AddCommand(plansCmd)` in init().
   File: `cmd/deck/plans.go`
 
-- [ ] **7.3** Create `deck show` command
+- [x] **7.3** Create `deck show` command
   Create `cmd/deck/show.go` with:
 
   ```go
@@ -678,7 +678,7 @@ Extend the CLI client to support plan management.
   Register with `rootCmd.AddCommand(showCmd)` in init().
   File: `cmd/deck/show.go`
 
-- [ ] **7.4** Create `deck approve` and `deck reject` commands
+- [x] **7.4** Create `deck approve` and `deck reject` commands
   Create `cmd/deck/approve.go` with:
 
   ```go
@@ -708,7 +708,7 @@ Extend the CLI client to support plan management.
   Register both with `rootCmd.AddCommand()` in init().
   File: `cmd/deck/approve.go`
 
-- [ ] **7.5** Enhance `deck plan` with flags
+- [x] **7.5** Enhance `deck plan` with flags
   Update `cmd/deck/plan.go` to support:
 
   ```go
