@@ -14,7 +14,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 The `plans` and `streams` tables already exist in `internal/db/migrations.go` (Phase 1, task 3.2). This phase creates the stores that operate on them.
 
-- [x] **1.1** Create plan store
+- [ ] **1.1** Create plan store
   Create `internal/db/plans.go` with:
 
   ```go
@@ -63,7 +63,7 @@ The `plans` and `streams` tables already exist in `internal/db/migrations.go` (P
 
   File: `internal/db/plans.go`
 
-- [x] **1.2** Create stream store
+- [ ] **1.2** Create stream store
   Create `internal/db/streams.go` with:
 
   ```go
