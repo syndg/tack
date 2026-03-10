@@ -18,6 +18,7 @@ import (
 	"github.com/syndg/deck/internal/harness/tools"
 	"github.com/syndg/deck/internal/services/events"
 	"github.com/syndg/deck/internal/services/lifecycle"
+	"github.com/syndg/deck/internal/services/planner"
 )
 
 // Daemon is the main HTTP server that orchestrates all Deck services.
@@ -33,6 +34,7 @@ type Daemon struct {
 	streams    *db.StreamStore
 
 	lifecycleManager *lifecycle.Manager
+	planningService  *planner.Service
 
 	blueprintRegistry *blueprint.Registry
 	blueprintEngine   *blueprint.Engine
@@ -69,7 +71,12 @@ func New(cfg *config.Config) (*Daemon, error) {
 	mailStore := db.NewMailStore(conn)
 	eventStore := db.NewEventStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
 	eventBus := events.NewPersistentBus(eventStore, logger)
+
+	lifecycleMgr := lifecycle.New(objectiveStore, planStore, streamStore, agentStore, eventBus, logger)
+	planningService := planner.New(planStore, streamStore, objectiveStore, agentStore, lifecycleMgr, eventBus, logger)
 
 	// Initialize blueprint registry and load defaults
 	bpRegistry := blueprint.NewRegistry()
@@ -136,6 +143,11 @@ func New(cfg *config.Config) (*Daemon, error) {
 		agents:     agentStore,
 		mail:       mailStore,
 		executions: executionStore,
+		plans:      planStore,
+		streams:    streamStore,
+
+		lifecycleManager: lifecycleMgr,
+		planningService:  planningService,
 
 		blueprintRegistry: bpRegistry,
 		blueprintEngine:   bpEngine,

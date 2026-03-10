@@ -758,7 +758,7 @@ Extend the CLI client to support plan management.
 
 ## Phase 8: Integration & Wiring
 
-- [ ] **8.1** Wire planning layer into daemon
+- [x] **8.1** Wire planning layer into daemon
   Update `internal/daemon/daemon.go` to:
   1. Add fields: `plans *db.PlanStore`, `streams *db.StreamStore`, `planningService *planner.Service`, `lifecycleManager *lifecycle.Manager`
   2. In `New()`: create `PlanStore` and `StreamStore` from DB connection
@@ -775,7 +775,7 @@ Extend the CLI client to support plan management.
 
   File: `internal/daemon/daemon.go`
 
-- [ ] **8.2** Add objective creation endpoint enhancements
+- [x] **8.2** Add objective creation endpoint enhancements
   Update `handleCreateObjective` in `internal/daemon/routes.go` to accept optional fields:
 
   ```go
@@ -799,7 +799,7 @@ Extend the CLI client to support plan management.
 
   File: `internal/daemon/routes.go`
 
-- [ ] **8.3** Add unit tests
+- [x] **8.3** Add unit tests
   Create test files:
 
   `internal/db/plans_test.go`:

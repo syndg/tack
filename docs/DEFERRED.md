@@ -44,3 +44,14 @@ Items intentionally deferred from their original phase. Each entry tracks where 
 ## From Phase 2 (Harness Core)
 
 _(none yet)_
+
+---
+
+## From Phase 3 (Planning)
+
+### Persistent storage for `auto` (batch planning mode) flag
+- **Original scope:** Task 8.2 — `Auto bool` in `CreateObjectiveRequest` should set a planning_mode flag on the objective
+- **What exists:** Handler accepts `auto=true`, creates the objective normally, but does not persist the batch mode flag
+- **What's missing:** A `planning_mode` TEXT column on `objectives` (or a `metadata` JSON blob column) to record that a planner agent should be auto-spawned
+- **Deferred to:** Phase 4 (Execution) — when the planner agent spawning loop is implemented, add the migration and read the flag to decide whether to spawn immediately
+- **Reason:** No Phase 3 code reads or acts on a planning_mode value; adding the column now would be dead schema.

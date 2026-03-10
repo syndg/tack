@@ -38,12 +38,30 @@ func (d *Daemon) registerRoutes() {
 	d.mux.HandleFunc("GET /streams/{id}", d.handleGetStream)
 }
 
-// handleCreateObjective decodes a JSON body with a description, creates
-// a new objective, publishes an event, and responds with the created objective.
+// CreateObjectiveRequest is the JSON body for POST /objectives.
+type CreateObjectiveRequest struct {
+	Description string `json:"description"`
+	Blueprint   string `json:"blueprint,omitempty"`
+	Simple      bool   `json:"simple,omitempty"` // single-agent mode: creates and auto-approves a plan
+	Auto        bool   `json:"auto,omitempty"`   // batch planning mode: planner runs autonomously
+}
+
+// createObjectiveSimpleResponse is the response for POST /objectives when simple=true.
+type createObjectiveSimpleResponse struct {
+	Objective *domain.Objective `json:"objective"`
+	Plan      *domain.Plan      `json:"plan"`
+}
+
+// handleCreateObjective decodes a JSON body, creates a new objective, publishes
+// an event, and responds with the created objective.
+//
+// When simple=true: calls planningService.StartSimple to create and auto-approve
+// a single-stream plan, returning {"objective": {...}, "plan": {...}}.
+//
+// When auto=true: creates the objective normally; batch planning mode is recorded
+// and a planner agent will be spawned asynchronously (Phase 4).
 func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Description string `json:"description"`
-	}
+	var req CreateObjectiveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
@@ -54,8 +72,26 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Simple {
+		obj, plan, err := d.planningService.StartSimple(r.Context(), req.Description, planner.SimpleOpts{
+			Blueprint:   req.Blueprint,
+			AutoApprove: true,
+		})
+		if err != nil {
+			d.logger.Error("starting simple mode", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to start simple mode")
+			return
+		}
+		writeJSON(w, http.StatusCreated, createObjectiveSimpleResponse{
+			Objective: obj,
+			Plan:      plan,
+		})
+		return
+	}
+
 	obj := &domain.Objective{
 		Description: req.Description,
+		Blueprint:   req.Blueprint,
 	}
 	if err := d.objectives.Create(r.Context(), obj); err != nil {
 		d.logger.Error("creating objective", "error", err)

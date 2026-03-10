@@ -144,6 +144,38 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 - `--auto` in non-simple mode prints "Planner will run in batch mode." vs "Planner will start an interactive session." — informational only until task 8.2 handles the `auto` field server-side.
 - Full project builds cleanly: `go build ./...`.
 
+## Task 8.1: Wire planning layer into daemon
+
+- Added `planningService *planner.Service` field to `Daemon` struct; `plans`, `streams`, `lifecycleManager` fields were already present from task 6.1 but were nil (never wired in `New()`).
+- Added `"github.com/syndg/deck/internal/services/planner"` import to `daemon.go`; `lifecycle` was already imported.
+- In `New()`: created `planStore` and `streamStore` via `db.NewPlanStore(conn)` and `db.NewStreamStore(conn)`.
+- In `New()`: created `lifecycleMgr` via `lifecycle.New(objectiveStore, planStore, streamStore, agentStore, eventBus, logger)`.
+- In `New()`: created `planningService` via `planner.New(planStore, streamStore, objectiveStore, agentStore, lifecycleMgr, eventBus, logger)`.
+- All five fields (`plans`, `streams`, `lifecycleManager`, `planningService`) populated in the struct literal; route handlers access them via `d.*` (no explicit passing needed since handlers are methods on `*Daemon`).
+- Did NOT import `internal/services/agents` — the PRD listed it in imports but task 8.1 has no usage for it; unused imports are a compile error in Go.
+- Full project builds cleanly: `go build ./...`.
+
+## Task 8.2: Add objective creation endpoint enhancements
+
+- Replaced the inline anonymous struct in `handleCreateObjective` with a named `CreateObjectiveRequest` type with `Description`, `Blueprint`, `Simple`, and `Auto` fields per the PRD spec.
+- Added `createObjectiveSimpleResponse` struct (unexported) matching the `CreateObjectiveSimpleResponse` shape already expected by the client (`{"objective": {...}, "plan": {...}}`).
+- `Simple=true` path delegates entirely to `d.planningService.StartSimple(ctx, description, SimpleOpts{Blueprint, AutoApprove: true})` — the service handles objective creation internally, so the handler does not call `d.objectives.Create` in this branch.
+- `Auto=true` and normal paths share the same code path: create objective with `Blueprint` override, publish `EventObjectiveCreated`, return objective. The `auto` flag has no persistent effect yet (deferred — see `docs/DEFERRED.md`).
+- `Blueprint` field now propagated in the normal (non-simple) path via `obj.Blueprint = req.Blueprint`; previously the handler never set a blueprint on the created objective.
+- `planner` package was already imported in `routes.go` (from task 6.1) and `planningService` was already wired on `Daemon` (from task 8.1) — no new imports needed.
+- Full project builds cleanly: `go build ./...`.
+
+## Task 8.3: Add unit tests
+
+- Created 6 test files (36 tests total), all passing: `internal/db/plans_test.go`, `internal/db/streams_test.go`, `internal/services/lifecycle/manager_test.go`, `internal/services/planner/decompose_test.go`, `internal/services/planner/planner_test.go`, `internal/services/agents/overlay_test.go`.
+- Added `internal/db/testhelpers_test.go` with `openTestDB` and `createTestObjective` helpers shared across `plans_test.go` and `streams_test.go` (same `package db`).
+- DB tests follow integration-style pattern (real SQLite via `Open(t.TempDir())` + `Migrate()`); no separate in-memory mode needed since the existing tests use the same approach.
+- `ListReady` test uses the full 3-stream scenario from the PRD spec: s3 depends on s1+s2; mark s1 done → s3 not ready; mark s2 done → s3 ready.
+- Avoided testing insertion ordering for `List` and `ListByPlan` since timestamps are unix seconds — two records created in the same second get identical `created_at`, making strict order assertions non-deterministic. Tests verify count and field correctness instead.
+- Lifecycle `manager_test.go` constructs a full `PersistentBus` with a real `EventStore` since `Manager` publishes events on every transition.
+- `planner_test.go` tests `StartSimple` both with and without `AutoApprove`; the without-auto path verifies the objective stays in `planning` and the plan is `pending_approval`.
+- `decompose_test.go` covers both `ParsePlan` paths (code-block extraction and raw YAML fallback) with no DB needed.
+
 ## Task 7.3: Create deck show command
 
 - Created `cmd/deck/show.go` with `showCmd` registered via `init()` → `rootCmd.AddCommand(showCmd)`.
