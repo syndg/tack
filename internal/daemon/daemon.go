@@ -17,6 +17,7 @@ import (
 	"github.com/syndg/deck/internal/harness/rules"
 	"github.com/syndg/deck/internal/harness/tools"
 	"github.com/syndg/deck/internal/services/events"
+	"github.com/syndg/deck/internal/services/lifecycle"
 )
 
 // Daemon is the main HTTP server that orchestrates all Deck services.
@@ -28,6 +29,10 @@ type Daemon struct {
 	agents     *db.AgentStore
 	mail       *db.MailStore
 	executions *db.ExecutionStore
+	plans      *db.PlanStore
+	streams    *db.StreamStore
+
+	lifecycleManager *lifecycle.Manager
 
 	blueprintRegistry *blueprint.Registry
 	blueprintEngine   *blueprint.Engine

@@ -86,3 +86,15 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 - No `agentStore` usage in this task (as expected); field remains available for future phases.
 - Full project builds cleanly: `go build ./...`.
 
+---
+
+## Task 6.1: Add plan and stream HTTP routes
+
+- Added 8 route handlers to `internal/daemon/routes.go`: `handleCreatePlan`, `handleListPlans`, `handleGetPlan`, `handleApprovePlan`, `handleRejectPlan`, `handleGetObjectivePlan`, `handleListStreams`, `handleGetStream`.
+- Registered all 8 routes in `registerRoutes()`, including `GET /objectives/{id}/plan` which coexists safely with `GET /objectives/{id}` because Go 1.22 ServeMux treats `{id}` as a single path segment (no slash crossing).
+- Added `plans *db.PlanStore`, `streams *db.StreamStore`, `lifecycleManager *lifecycle.Manager` fields to `Daemon` struct in `daemon.go` (nil until task 8.1 wires them in `New()`).
+- Added `"github.com/syndg/deck/internal/services/lifecycle"` import to `daemon.go` and `"github.com/syndg/deck/internal/services/planner"` import to `routes.go`.
+- `handleCreatePlan` calls `planner.ParsePlan` → `planner.ValidatePlan` → `planner.ToDomain` directly (bypassing planningService, which is task 8.1), then persists plan + streams, publishes `EventPlanCreated`, calls `lifecycleManager.MarkPlanReady`, returns the refreshed plan.
+- `isPlanNotFound` helper checks `strings.Contains(err.Error(), "not found")` since `PlanStore`/`StreamStore` return descriptive errors rather than `sql.ErrNoRows`.
+- `handleGetPlan` and `handleGetObjectivePlan` both return `{"plan": {...}, "streams": [...]}` via the `planWithStreams` struct per the PRD response format.
+- Full project builds cleanly: `go build ./...`.

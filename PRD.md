@@ -523,7 +523,7 @@ Simple mode collapses the planning pipeline to a single agent in a single sandbo
 
 Expose plan management through the daemon's REST API.
 
-- [ ] **6.1** Add plan and stream HTTP routes
+- [x] **6.1** Add plan and stream HTTP routes
   Add to `internal/daemon/routes.go`:
 
   ```go
