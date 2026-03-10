@@ -194,7 +194,7 @@ Centralize objective state transitions and enforce valid lifecycle progression.
 
 Build the context package that each agent receives: role definition, task spec, file scope, matched rules, quality gates, and communication config.
 
-- [ ] **3.1** Create role definitions
+- [x] **3.1** Create role definitions
   Create `internal/services/agents/roles.go` with:
 
   ```go
@@ -223,7 +223,7 @@ Build the context package that each agent receives: role definition, task spec, 
 
   File: `internal/services/agents/roles.go`
 
-- [ ] **3.2** Create agent overlay builder
+- [x] **3.2** Create agent overlay builder
   Create `internal/services/agents/overlay.go` with:
 
   ```go

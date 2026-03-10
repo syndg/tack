@@ -18,6 +18,16 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 
 ---
 
+## Task 3.1: Create role definitions
+
+- Created `internal/services/agents/roles.go` with `RoleDefinition` struct and `DefaultRoles()` function.
+- 6 roles defined: `planner` (depth 0, persistent), `lead` (depth 1, persistent), `builder` (depth 2, ephemeral), `reviewer` (depth 2, ephemeral), `merger` (depth 1, ephemeral), `scout` (depth 2, ephemeral).
+- `CanSpawn` is `[]string{}` (not `nil`) for leaf roles — ensures JSON marshaling produces `[]` not `null` if ever serialized.
+- Package is new (`internal/services/agents/`) with no prior files; directory was created implicitly by the file write.
+- Builds cleanly with `go build ./internal/services/agents/...`.
+
+---
+
 ## Task 1.1: Create plan store
 
 - Created `internal/db/plans.go` with `PlanStore` struct and 6 methods: `Create`, `Get`, `GetByObjective`, `List`, `UpdateStatus`, `Update`.
@@ -27,4 +37,16 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 - `GetByObjective` uses `ORDER BY created_at DESC LIMIT 1` to return the most recent plan when multiple exist (not specified but logical).
 - `UpdateStatus` and `Update` return the same `"plan not found: <id>"` string when `RowsAffected == 0`.
 - Package builds cleanly with `go build ./internal/db/...`.
+
+---
+
+## Task 3.2: Create agent overlay builder
+
+- Created `internal/services/agents/overlay.go` with `OverlayInput`, `BuildOverlay`, and `BuildPlannerOverlay`.
+- `BuildOverlay` uses `strings.Builder` + `fmt.Fprintf` to produce 7-section markdown: identity, task, file scope (conditional), rules, quality gates, communication, constraints.
+- High-priority rules are prefixed with `"IMPORTANT CONSTRAINT:"` as specified; normal-priority rules render body as-is.
+- File Scope section is omitted entirely when `FileScope` is empty; Communication lead line is omitted when `LeadAgent` is empty.
+- `BuildPlannerOverlay` embeds `planYAMLSchema` constant matching the `RawPlan` YAML structure from phase 4 task 4.1 (`streams[]` + `quality_gates[]`).
+- Project Guidance section is omitted when `guidance` is empty string.
+- Full project builds cleanly: `go build ./...`.
 
