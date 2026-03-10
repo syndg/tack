@@ -479,7 +479,7 @@ The planning service manages planner agent sessions — spawning them, collectin
 
 Simple mode collapses the planning pipeline to a single agent in a single sandbox — no decomposition, no streams hierarchy, no inter-agent communication.
 
-- [ ] **5.1** Create simple mode handler
+- [x] **5.1** Create simple mode handler
   Create `internal/services/planner/simple.go` with:
 
   ```go

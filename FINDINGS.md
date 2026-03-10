@@ -74,3 +74,15 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 - `agentStore` field is wired in per spec but unused in task 4.2 methods; kept for future tasks (5.1 simple mode, 8.1 daemon wiring).
 - Full project builds cleanly: `go build ./...`.
 
+---
+
+## Task 5.1: Create simple mode handler
+
+- Created `internal/services/planner/simple.go` with `SimpleOpts` struct and `StartSimple` method on `*Service`.
+- `StartSimple` flow: create objective (status `planning`, blueprint defaults to `"hotfix"`) → publish `EventObjectiveCreated` → `CreateSimplePlan` → apply quality gates override if provided → if `AutoApprove`, call `lifecycle.ApprovePlan` (transitions objective to `approved`, plan to `approved`) → refresh both from DB and return.
+- Quality gates override applies `plans.Update` after plan creation; if `QualityGates` is empty the plan retains the `[]string{}` default from `CreateSimplePlan`.
+- Auto-approve path refreshes both plan and objective from DB so returned values reflect accurate post-approval status rather than stale pre-approval snapshots.
+- `EventObjectiveCreated` is published with a `"mode": "simple"` field in the payload to distinguish from standard objectives.
+- No `agentStore` usage in this task (as expected); field remains available for future phases.
+- Full project builds cleanly: `go build ./...`.
+
