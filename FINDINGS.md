@@ -6,6 +6,18 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 
 ---
 
+## Task 2.1: Create objective lifecycle manager
+
+- Created `internal/services/lifecycle/manager.go` with `Manager` struct and all 6 methods: `New`, `Transition`, `IsValidTransition` (package-level), `ApprovePlan`, `RejectPlan`, `MarkPlanReady`, `CheckObjectiveCompletion`.
+- `validTransitions` map encodes the 5-entry state machine: planning→{approved,failed}, approved→{executing,failed}, executing→{reviewing,failed}, reviewing→{completed,failed}, failed→{planning}.
+- `Transition` fetches current status, validates via `IsValidTransition`, updates DB, then publishes `EventObjectiveUpdated` with JSON payload `{"from": "...", "to": "..."}`.
+- `ApprovePlan` and `RejectPlan` both fetch the plan first to get `ObjectiveID`; `ApprovePlan` calls `Transition` (which publishes the event), `RejectPlan` only updates plan status with no objective status change per spec.
+- `MarkPlanReady` publishes `EventObjectiveUpdated` with payload `{"plan_id": "...", "plan_status": "pending_approval"}` — no suitable `EventPlanReady` type exists in domain, so reused the objective event with contextual payload.
+- `CheckObjectiveCompletion` always transitions to `reviewing` (not `completed`); direct-to-completed path for autonomous mode deferred to a later phase since `Objective` has no autonomy level field yet.
+- Full project compiles cleanly with `go build ./...`.
+
+---
+
 ## Task 1.1: Create plan store
 
 - Created `internal/db/plans.go` with `PlanStore` struct and 6 methods: `Create`, `Get`, `GetByObjective`, `List`, `UpdateStatus`, `Update`.

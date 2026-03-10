@@ -117,7 +117,7 @@ The `plans` and `streams` tables already exist in `internal/db/migrations.go` (P
 
 Centralize objective state transitions and enforce valid lifecycle progression.
 
-- [ ] **2.1** Create objective lifecycle manager
+- [x] **2.1** Create objective lifecycle manager
   Create `internal/services/lifecycle/manager.go` with:
 
   ```go
