@@ -57,6 +57,17 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 - Mutex is held around `activeStreams` map reads/writes in all methods; `MarkCompleted` drops and re-acquires the lock around the DB call to avoid holding the lock during I/O.
 - Package builds cleanly with `go build ./internal/services/dispatch/... ./internal/domain/...`.
 
+## Task 5.1: Implement deterministic and human step handlers
+
+- Created `internal/services/dispatch/handlers.go` with `Handlers` struct, `NewHandlers`, `HandleDeterministic`, `HandleHuman`, and five private action methods.
+- Added `agents *db.AgentStore`, `sandboxProvider sandbox.SandboxProvider`, and `eventBus *events.PersistentBus` to the struct beyond the PRD's listed fields — all three are required for `run_quality_gates` (sandbox lookup) and `dispatch_streams`/`signal_merge_ready` (event publishing).
+- `dispatch_streams`: Gets plan by objective, fetches ready streams from scheduler, marks each executing, publishes `EventStreamReady` per stream for the coordinator to spawn agents.
+- `run_quality_gates`: Iterates agent sessions for the objective to find a lead agent with an active sandbox, then runs gates sequentially via `gateRunner.Run`. Returns failed if no sandbox found or any gate fails.
+- `signal_merge_ready`: Iterates completed streams for the plan, updates each to `"merge_ready"`, and publishes `EventMergeQueued`. Only "completed" streams are transitioned (not "executing") — streams must complete before merge can be queued.
+- `mark_complete`: Uses `lifecycle.Transition` to `ObjectiveStatusReviewing` (not directly to `Completed`) — valid transition per lifecycle's `executing → reviewing` path.
+- `HandleHuman` returns `StepStatusBlocked`; the engine currently short-circuits human steps before calling handlers, so this handler is a forward-compatible stub. Discrepancy noted: engine sets `"waiting_human"` status before calling handler, PRD says handler should return `"waiting_human"`.
+- `merge_queue` is a log-only stub; Phase 5 (merge queue) will implement real behavior.
+
 ## Task 2.2: Implement Claude Code agent runtime
 
 - Created `internal/runtime/claudecode/runtime.go` with `Runtime` and `ClaudeCodeProcess` structs implementing `runtime.AgentRuntime` and `runtime.AgentProcess` interfaces.

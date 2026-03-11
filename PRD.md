@@ -501,7 +501,7 @@ Dependency-aware scheduler that determines which streams are ready for execution
 
 Register handlers for each blueprint step type. These handlers implement the actual work performed at each step in the blueprint state machine.
 
-- [ ] **5.1** Implement deterministic and human step handlers
+- [x] **5.1** Implement deterministic and human step handlers
   Create `internal/services/dispatch/handlers.go` with:
 
   ```go
