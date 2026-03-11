@@ -112,6 +112,7 @@ const (
 	EventMergeFailed      EventType = "merge.failed"
 	EventEscalation       EventType = "escalation"
 	EventStreamReady      EventType = "stream.ready"
+	EventExecutionStarted EventType = "execution.started"
 )
 
 type Event struct {

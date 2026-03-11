@@ -68,6 +68,17 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 - `HandleHuman` returns `StepStatusBlocked`; the engine currently short-circuits human steps before calling handlers, so this handler is a forward-compatible stub. Discrepancy noted: engine sets `"waiting_human"` status before calling handler, PRD says handler should return `"waiting_human"`.
 - `merge_queue` is a log-only stub; Phase 5 (merge queue) will implement real behavior.
 
+## Task 6.1: Create execution coordinator
+
+- Created `internal/services/dispatch/coordinator.go` with `Coordinator` struct, `NewCoordinator`, `Start`, `Stop`, `StartExecution`, `HandleAgentStep`, `HandleBlueprintRefStep`, and `spawnAndMonitor` helper.
+- Added `EventExecutionStarted EventType = "execution.started"` to `internal/domain/types.go`.
+- Added `MarkCompleted` and `MarkFailed` methods to `spawner.go` (also added `time` import) — needed so coordinator can update session status and publish completion events without a direct `agentStore` reference; natural extension of the existing `Kill` method.
+- **Handler registration**: `NewCoordinator` registers `HandleAgentStep` for `StepTypeAgent` and `HandleBlueprintRefStep` for `StepTypeBlueprintRef` on the engine. The `Handlers` struct (task 5.1) continues to own `deterministic` and `human` types.
+- **HandleAgentStep** (planner, scout, etc.): spawns synchronously, blocks on `process.Wait()`, updates session via `spawner.MarkCompleted/MarkFailed`. Does not use `spawnAndMonitor` since it must block the engine's Advance loop.
+- **HandleBlueprintRefStep**: uses `spawnAndMonitor` (non-blocking goroutine) for initial/cascade leads; filters events by `event.Stream` against a `streamSet`; calls `scheduler.MarkCompleted` (cascades `EventStreamReady`) and `scheduler.MarkFailed` on agent events.
+- **Double-spawn mitigation**: both `handleStreamReady` and `HandleBlueprintRefStep`'s `EventStreamReady` path check `stream.Status == "pending"` and call `scheduler.MarkExecuting` before spawning. A theoretical race window exists between the DB read and the UPDATE — accepted as Phase 4 limitation; fix deferred to Phase 5+ with a DB-level CAS.
+- **`runExecution`**: persists execution state after each `engine.Advance()`; exits on `completed`, `failed`, or `waiting_human` (human resume deferred to task 7.x API routes).
+
 ## Task 2.2: Implement Claude Code agent runtime
 
 - Created `internal/runtime/claudecode/runtime.go` with `Runtime` and `ClaudeCodeProcess` structs implementing `runtime.AgentRuntime` and `runtime.AgentProcess` interfaces.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/syndg/deck/internal/db"
@@ -231,6 +232,46 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 		Process: process,
 		Sandbox: sb,
 	}, nil
+}
+
+// MarkCompleted updates an agent session to "completed" and publishes EventAgentCompleted.
+func (s *Spawner) MarkCompleted(ctx context.Context, session *domain.AgentSession, summary string) {
+	if err := s.agentStore.UpdateStatus(ctx, session.ID, "completed"); err != nil {
+		s.logger.Error("failed to update agent session to completed", "session_id", session.ID, "error", err)
+	}
+	payload, _ := json.Marshal(map[string]string{
+		"session_id": session.ID,
+		"summary":    summary,
+	})
+	s.eventBus.Publish(domain.Event{
+		Type:      domain.EventAgentCompleted,
+		Objective: session.ObjectiveID,
+		Stream:    session.StreamID,
+		Agent:     session.ID,
+		Payload:   string(payload),
+		CreatedAt: time.Now(),
+	})
+	s.logger.Info("agent completed", "session_id", session.ID)
+}
+
+// MarkFailed updates an agent session to "failed" and publishes EventAgentFailed.
+func (s *Spawner) MarkFailed(ctx context.Context, session *domain.AgentSession, reason string) {
+	if err := s.agentStore.UpdateStatus(ctx, session.ID, "failed"); err != nil {
+		s.logger.Error("failed to update agent session to failed", "session_id", session.ID, "error", err)
+	}
+	payload, _ := json.Marshal(map[string]string{
+		"session_id": session.ID,
+		"reason":     reason,
+	})
+	s.eventBus.Publish(domain.Event{
+		Type:      domain.EventAgentFailed,
+		Objective: session.ObjectiveID,
+		Stream:    session.StreamID,
+		Agent:     session.ID,
+		Payload:   string(payload),
+		CreatedAt: time.Now(),
+	})
+	s.logger.Info("agent failed", "session_id", session.ID, "reason", reason)
 }
 
 // Kill terminates an agent process and updates its session status.

@@ -605,7 +605,7 @@ Register handlers for each blueprint step type. These handlers implement the act
 
 The coordinator is the central orchestration loop. It subscribes to events, drives blueprint execution, manages agent lifecycle, and coordinates stream completion cascades.
 
-- [ ] **6.1** Create execution coordinator
+- [x] **6.1** Create execution coordinator
   Create `internal/services/dispatch/coordinator.go` with:
 
   ```go
