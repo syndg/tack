@@ -29,6 +29,7 @@ type Coordinator struct {
 	eventBus   *events.PersistentBus
 	logger     *slog.Logger
 
+	ctx         context.Context // set in Start(); used as parent for execution goroutines
 	mu          sync.Mutex
 	activeExecs map[string]context.CancelFunc // objectiveID → cancel
 	agentMap    map[string]*SpawnResult        // sessionID → spawn result
@@ -77,6 +78,7 @@ func NewCoordinator(
 //
 // Runs event processing in a background goroutine.
 func (c *Coordinator) Start(ctx context.Context) error {
+	c.ctx = ctx
 	sub, unsub := c.eventBus.Subscribe(128)
 
 	go func() {
@@ -114,6 +116,29 @@ func (c *Coordinator) Stop() {
 	}
 	c.activeExecs = make(map[string]context.CancelFunc)
 	c.logger.Info("coordinator stopped")
+}
+
+// ResumeExecution re-launches the execution loop for an execution that was waiting
+// for human approval. The execution must already have been approved via engine.ApproveHuman.
+func (c *Coordinator) ResumeExecution(exec *blueprint.Execution) {
+	baseCtx := c.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	execCtx, cancel := context.WithCancel(baseCtx)
+
+	c.mu.Lock()
+	if existing, ok := c.activeExecs[exec.ObjectiveID]; ok {
+		existing()
+	}
+	c.activeExecs[exec.ObjectiveID] = cancel
+	c.mu.Unlock()
+
+	c.logger.Info("resuming execution after human approval",
+		"execution_id", exec.ID,
+		"objective_id", exec.ObjectiveID,
+	)
+	go c.runExecution(execCtx, exec)
 }
 
 // handleObjectiveUpdated processes EventObjectiveUpdated events.
@@ -254,7 +279,13 @@ func (c *Coordinator) StartExecution(ctx context.Context, objectiveID string) er
 	})
 
 	// 6. Run the execution loop in a goroutine.
-	execCtx, cancel := context.WithCancel(ctx)
+	// Use the coordinator's long-lived context (not the caller's ctx) so that
+	// executions survive HTTP request context cancellation.
+	baseCtx := c.ctx
+	if baseCtx == nil {
+		baseCtx = ctx
+	}
+	execCtx, cancel := context.WithCancel(baseCtx)
 	c.mu.Lock()
 	c.activeExecs[objectiveID] = cancel
 	c.mu.Unlock()

@@ -730,7 +730,7 @@ The coordinator is the central orchestration loop. It subscribes to events, driv
 
 Extend the daemon API and CLI to support execution management, agent monitoring, and mail interaction.
 
-- [ ] **7.1** Add execution management HTTP routes
+- [x] **7.1** Add execution management HTTP routes
   Add to `internal/daemon/routes.go`:
 
   ```go
@@ -774,7 +774,7 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
 
   File: `internal/daemon/routes.go`
 
-- [ ] **7.2** Add execution and mail client methods
+- [x] **7.2** Add execution and mail client methods
   Add to `internal/client/client.go`:
 
   ```go
@@ -808,7 +808,7 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
 
   File: `internal/client/client.go`
 
-- [ ] **7.3** Create `deck exec` command
+- [x] **7.3** Create `deck exec` command
   Create `cmd/deck/exec.go` with:
 
   ```go
@@ -832,7 +832,7 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
 
   File: `cmd/deck/exec.go`
 
-- [ ] **7.4** Create `deck agents` command
+- [x] **7.4** Create `deck agents` command
   Create `cmd/deck/agents.go` with:
 
   ```go
@@ -881,7 +881,7 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
 
   File: `cmd/deck/agents.go`
 
-- [ ] **7.5** Create `deck mail` command
+- [x] **7.5** Create `deck mail` command
   Create `cmd/deck/mail.go` with:
 
   ```go

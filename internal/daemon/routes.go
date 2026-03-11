@@ -42,6 +42,12 @@ func (d *Daemon) registerRoutes() {
 	d.mux.HandleFunc("GET /mail/{agentName}/unread", d.handleGetUnreadMail)
 	d.mux.HandleFunc("POST /mail/{id}/read", d.handleMarkMailRead)
 	d.mux.HandleFunc("POST /mail/{agentName}/read-all", d.handleMarkAllMailRead)
+
+	d.mux.HandleFunc("POST /executions/{id}/approve", d.handleApproveExecution)
+	d.mux.HandleFunc("GET /agents", d.handleListAgents)
+	d.mux.HandleFunc("GET /agents/{id}", d.handleGetAgent)
+	d.mux.HandleFunc("POST /agents/{id}/kill", d.handleKillAgent)
+	d.mux.HandleFunc("POST /objectives/{id}/execute", d.handleExecuteObjective)
 }
 
 // CreateObjectiveRequest is the JSON body for POST /objectives.
@@ -580,6 +586,137 @@ func (d *Daemon) handleMarkAllMailRead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleApproveExecution approves a human gate step in a blueprint execution.
+// Calls engine.ApproveHuman to mark the step completed, persists the state, and
+// triggers the coordinator to resume the execution loop.
+func (d *Daemon) handleApproveExecution(w http.ResponseWriter, r *http.Request) {
+	if d.coordinator == nil {
+		writeError(w, http.StatusServiceUnavailable, "coordinator not available")
+		return
+	}
+
+	id := r.PathValue("id")
+
+	exec, err := d.executions.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "execution not found")
+			return
+		}
+		d.logger.Error("getting execution for approve", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get execution")
+		return
+	}
+
+	exec, err = d.blueprintEngine.ApproveHuman(r.Context(), exec)
+	if err != nil {
+		d.logger.Error("approving human step", "execution_id", id, "error", err)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := d.executions.Update(r.Context(), exec); err != nil {
+		d.logger.Error("updating execution after approval", "execution_id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to persist execution")
+		return
+	}
+
+	d.coordinator.ResumeExecution(exec)
+	writeJSON(w, http.StatusOK, exec)
+}
+
+// handleListAgents returns all agent sessions as a JSON array.
+func (d *Daemon) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	sessions, err := d.agents.List(r.Context())
+	if err != nil {
+		d.logger.Error("listing agent sessions", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list agents")
+		return
+	}
+
+	if sessions == nil {
+		sessions = []domain.AgentSession{}
+	}
+
+	writeJSON(w, http.StatusOK, sessions)
+}
+
+// handleGetAgent returns a single agent session by ID.
+func (d *Daemon) handleGetAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	session, err := d.agents.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "agent session not found")
+			return
+		}
+		d.logger.Error("getting agent session", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get agent session")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, session)
+}
+
+// handleKillAgent terminates an active agent session via the spawner.
+func (d *Daemon) handleKillAgent(w http.ResponseWriter, r *http.Request) {
+	if d.spawner == nil {
+		writeError(w, http.StatusServiceUnavailable, "spawner not available")
+		return
+	}
+
+	id := r.PathValue("id")
+
+	if err := d.spawner.Kill(r.Context(), id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "agent session not found")
+			return
+		}
+		d.logger.Error("killing agent session", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to kill agent")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleExecuteObjective manually triggers blueprint execution for an approved objective.
+// Verifies the objective exists and is in "approved" status before delegating to
+// coordinator.StartExecution.
+func (d *Daemon) handleExecuteObjective(w http.ResponseWriter, r *http.Request) {
+	if d.coordinator == nil {
+		writeError(w, http.StatusServiceUnavailable, "coordinator not available")
+		return
+	}
+
+	id := r.PathValue("id")
+
+	obj, err := d.objectives.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "objective not found")
+			return
+		}
+		d.logger.Error("getting objective for execute", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get objective")
+		return
+	}
+
+	if obj.Status != domain.ObjectiveStatusApproved {
+		writeError(w, http.StatusConflict, "objective is not in approved status")
+		return
+	}
+
+	if err := d.coordinator.StartExecution(r.Context(), id); err != nil {
+		d.logger.Error("starting execution", "objective_id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to start execution")
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "executing", "objective_id": id})
 }
 
 // writeJSON marshals data to JSON and writes it to the response with the given status code.

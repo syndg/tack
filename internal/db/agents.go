@@ -108,6 +108,43 @@ func (s *AgentStore) ListByObjective(ctx context.Context, objectiveID string) ([
 	return sessions, nil
 }
 
+// List returns all agent sessions ordered by created_at desc.
+func (s *AgentStore) List(ctx context.Context) ([]domain.AgentSession, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, objective_id, stream_id, role, sandbox_id, status, created_at, updated_at
+		 FROM agent_sessions ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing agent sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []domain.AgentSession
+	for rows.Next() {
+		var session domain.AgentSession
+		var role string
+		var createdAt, updatedAt int64
+
+		if err := rows.Scan(
+			&session.ID, &session.ObjectiveID, &session.StreamID,
+			&role, &session.SandboxID, &session.Status,
+			&createdAt, &updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning agent session: %w", err)
+		}
+
+		session.Role = domain.AgentRole(role)
+		session.CreatedAt = time.Unix(createdAt, 0)
+		session.UpdatedAt = time.Unix(updatedAt, 0)
+		sessions = append(sessions, session)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating agent sessions: %w", err)
+	}
+	return sessions, nil
+}
+
 // UpdateSandboxAndStatus sets the sandbox_id and status of an agent session atomically.
 func (s *AgentStore) UpdateSandboxAndStatus(ctx context.Context, id, sandboxID, status string) error {
 	result, err := s.db.ExecContext(ctx,

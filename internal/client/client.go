@@ -216,6 +216,96 @@ func (c *Client) RejectPlan(ctx context.Context, planID string) error {
 	return nil
 }
 
+// ExecuteObjective triggers execution for an approved objective.
+func (c *Client) ExecuteObjective(ctx context.Context, objectiveID string) error {
+	resp, err := c.do(ctx, http.MethodPost, "/objectives/"+objectiveID+"/execute", nil)
+	if err != nil {
+		return fmt.Errorf("executing objective: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// ListAgents returns all agent sessions.
+func (c *Client) ListAgents(ctx context.Context) ([]domain.AgentSession, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/agents", nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing agents: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var agents []domain.AgentSession
+	if err := json.NewDecoder(resp.Body).Decode(&agents); err != nil {
+		return nil, fmt.Errorf("decoding agents response: %w", err)
+	}
+	return agents, nil
+}
+
+// GetAgent returns an agent session by ID.
+func (c *Client) GetAgent(ctx context.Context, id string) (*domain.AgentSession, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/agents/"+id, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting agent: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var agent domain.AgentSession
+	if err := json.NewDecoder(resp.Body).Decode(&agent); err != nil {
+		return nil, fmt.Errorf("decoding agent response: %w", err)
+	}
+	return &agent, nil
+}
+
+// KillAgent terminates an active agent.
+func (c *Client) KillAgent(ctx context.Context, id string) error {
+	resp, err := c.do(ctx, http.MethodPost, "/agents/"+id+"/kill", nil)
+	if err != nil {
+		return fmt.Errorf("killing agent: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// ApproveExecution approves a human gate in a blueprint execution.
+func (c *Client) ApproveExecution(ctx context.Context, executionID string) error {
+	resp, err := c.do(ctx, http.MethodPost, "/executions/"+executionID+"/approve", nil)
+	if err != nil {
+		return fmt.Errorf("approving execution: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// ListMail returns unread messages for an agent.
+func (c *Client) ListMail(ctx context.Context, agentName string) ([]domain.MailMessage, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/mail/"+agentName+"/unread", nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing mail: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var messages []domain.MailMessage
+	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
+		return nil, fmt.Errorf("decoding mail response: %w", err)
+	}
+	return messages, nil
+}
+
+// SendMail sends a message to an agent or broadcast group.
+func (c *Client) SendMail(ctx context.Context, msg *domain.MailMessage) error {
+	jsonBody, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshaling mail message: %w", err)
+	}
+
+	resp, err := c.do(ctx, http.MethodPost, "/mail", bytes.NewReader(jsonBody))
+	if err != nil {
+		return fmt.Errorf("sending mail: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // GetStatus sends a GET /status request.
 func (c *Client) GetStatus(ctx context.Context) (*StatusResponse, error) {
 	resp, err := c.do(ctx, http.MethodGet, "/status", nil)
