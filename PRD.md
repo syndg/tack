@@ -1,852 +1,1077 @@
-# Deck Phase 3: Planning — PRD & Implementation Plan
+# Deck Phase 4: Execution — PRD & Implementation Plan
 
-Build the planning layer that bridges objectives to execution. This phase produces plan and stream data stores, a planning service that manages planner agent sessions, agent overlay generation, objective lifecycle management, plan approval flow, simple mode (single-agent escape hatch), and the CLI/API surface for interacting with plans.
+Build the execution engine that transforms approved plans into running agent teams. This phase implements the mail broker, local sandbox provider, Claude Code agent runtime, agent spawner, stream scheduler, blueprint step handlers, execution coordinator, and the API/CLI surface for managing execution.
 
 Phase 1 artifacts: `docs/phase1/PRD.md`, `docs/phase1/FINDINGS.md`
 Phase 2 artifacts: `docs/phase2/PRD.md`, `docs/phase2/FINDINGS.md`
+Phase 3 artifacts: `docs/phase3/PRD.md`, `docs/phase3/FINDINGS.md`
 
 Atomic tasks for phased implementation. Each task targets 1-3 files max.
 Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 ---
 
-## Phase 1: Plan & Stream Data Layer
+## Phase 1: Mail Broker Service
 
-The `plans` and `streams` tables already exist in `internal/db/migrations.go` (Phase 1, task 3.2). This phase creates the stores that operate on them.
+The `mail` table and `MailStore` already exist from Phase 1 (`internal/db/mail.go`). This phase adds the service layer that handles broadcast resolution, event publication, and the HTTP API that agents call to send and receive mail.
 
-- [x] **1.1** Create plan store
-  Create `internal/db/plans.go` with:
-
-  ```go
-  package db
-
-  import (
-      "context"
-      "database/sql"
-      "encoding/json"
-      "fmt"
-      "time"
-      "github.com/google/uuid"
-      "github.com/syndg/deck/internal/domain"
-  )
-
-  // PlanStore persists plan records.
-  type PlanStore struct { db *sql.DB }
-
-  func NewPlanStore(db *sql.DB) *PlanStore
-
-  // Create inserts a new plan. Generates UUID if ID is empty.
-  // Stores QualityGates as JSON text. Timestamps as Unix seconds.
-  func (s *PlanStore) Create(ctx context.Context, plan *domain.Plan) error
-
-  // Get retrieves a plan by ID.
-  func (s *PlanStore) Get(ctx context.Context, id string) (*domain.Plan, error)
-
-  // GetByObjective retrieves the plan for a given objective.
-  func (s *PlanStore) GetByObjective(ctx context.Context, objectiveID string) (*domain.Plan, error)
-
-  // List returns all plans, ordered by created_at desc.
-  func (s *PlanStore) List(ctx context.Context) ([]domain.Plan, error)
-
-  // UpdateStatus updates a plan's status and updated_at timestamp.
-  func (s *PlanStore) UpdateStatus(ctx context.Context, id string, status domain.PlanStatus) error
-
-  // Update saves the full plan state (status, quality_gates, updated_at).
-  func (s *PlanStore) Update(ctx context.Context, plan *domain.Plan) error
-  ```
-
-  Follow the same patterns established in Phase 1:
-  - Generate UUID via `uuid.New().String()` if ID empty
-  - Store timestamps as Unix seconds (`time.Now().Unix()`)
-  - `QualityGates` stored as JSON text via `json.Marshal`/`json.Unmarshal`
-  - Return `fmt.Errorf("plan not found: %s", id)` wrapping `sql.ErrNoRows`
-
-  File: `internal/db/plans.go`
-
-- [x] **1.2** Create stream store
-  Create `internal/db/streams.go` with:
+- [x] **1.1** Create mail broker service
+  Create `internal/services/mail/broker.go` with:
 
   ```go
-  package db
-
-  import (
-      "context"
-      "database/sql"
-      "encoding/json"
-      "fmt"
-      "time"
-      "github.com/google/uuid"
-      "github.com/syndg/deck/internal/domain"
-  )
-
-  // StreamStore persists stream records.
-  type StreamStore struct { db *sql.DB }
-
-  func NewStreamStore(db *sql.DB) *StreamStore
-
-  // Create inserts a new stream. Generates UUID if ID is empty.
-  // Stores FileScope and Dependencies as JSON text.
-  func (s *StreamStore) Create(ctx context.Context, stream *domain.Stream) error
-
-  // Get retrieves a stream by ID.
-  func (s *StreamStore) Get(ctx context.Context, id string) (*domain.Stream, error)
-
-  // ListByPlan returns all streams for a plan, ordered by created_at asc.
-  func (s *StreamStore) ListByPlan(ctx context.Context, planID string) ([]domain.Stream, error)
-
-  // UpdateStatus updates a stream's status.
-  func (s *StreamStore) UpdateStatus(ctx context.Context, id string, status string) error
-
-  // ListReady returns streams whose dependencies are all completed.
-  // Resolves dependency graph: a stream is ready if status is "pending"
-  // and all stream IDs in its dependencies list have status "completed".
-  func (s *StreamStore) ListReady(ctx context.Context, planID string) ([]domain.Stream, error)
-  ```
-
-  `FileScope` and `Dependencies` are `[]string` stored as JSON text columns.
-  `ListReady` implementation:
-  1. Fetch all streams for the plan
-  2. Build a map of stream ID → status
-  3. Return streams where status is "pending" and all dependency IDs map to "completed"
-
-  File: `internal/db/streams.go`
-
----
-
-## Phase 2: Objective Lifecycle Manager
-
-Centralize objective state transitions and enforce valid lifecycle progression.
-
-- [x] **2.1** Create objective lifecycle manager
-  Create `internal/services/lifecycle/manager.go` with:
-
-  ```go
-  package lifecycle
+  package mail
 
   import (
       "context"
       "fmt"
       "log/slog"
+      "strings"
       "github.com/syndg/deck/internal/db"
       "github.com/syndg/deck/internal/domain"
       events "github.com/syndg/deck/internal/services/events"
   )
 
-  // Manager enforces objective state transitions and coordinates
-  // plan/stream status propagation.
-  type Manager struct {
-      objectives *db.ObjectiveStore
-      plans      *db.PlanStore
-      streams    *db.StreamStore
-      agents     *db.AgentStore
-      eventBus   *events.PersistentBus
-      logger     *slog.Logger
+  // Broker manages inter-agent mail delivery and broadcast resolution.
+  type Broker struct {
+      mail     *db.MailStore
+      agents   *db.AgentStore
+      eventBus *events.PersistentBus
+      logger   *slog.Logger
   }
 
   func New(
-      objectives *db.ObjectiveStore,
-      plans *db.PlanStore,
-      streams *db.StreamStore,
+      mail *db.MailStore,
       agents *db.AgentStore,
       eventBus *events.PersistentBus,
       logger *slog.Logger,
-  ) *Manager
+  ) *Broker
 
-  // Transition moves an objective to a new status if the transition is valid.
-  // Valid transitions:
-  //   planning  → approved, failed
-  //   approved  → executing, failed
-  //   executing → reviewing, failed
-  //   reviewing → completed, failed
-  //   failed    → planning (retry)
-  // Publishes an EventObjectiveUpdated on success.
-  func (m *Manager) Transition(ctx context.Context, objectiveID string, to domain.ObjectiveStatus) error
+  // Send delivers a message from one agent to another.
+  // If `msg.To` is a broadcast address (starts with "@"), delegates to SendBroadcast.
+  // Publishes EventMailSent after persisting.
+  func (b *Broker) Send(ctx context.Context, msg *domain.MailMessage) error
 
-  // IsValidTransition checks if a status transition is allowed.
-  func IsValidTransition(from, to domain.ObjectiveStatus) bool
+  // SendBroadcast resolves a broadcast address and delivers to all matching agents.
+  // Broadcast addresses:
+  //   @all           — all active agents for the objective
+  //   @stream:{id}   — all agents assigned to the given stream
+  //   @builders      — all agents with role "worker" (builder sub-role)
+  //   @leads         — all agents with role "lead"
+  //   @human         — special: publish EventEscalation, do not deliver to agents
+  func (b *Broker) SendBroadcast(ctx context.Context, from, broadcastAddr, msgType, payload, objectiveID, streamID string) error
 
-  // ApprovePlan approves a plan and transitions the objective to "approved".
-  // Sets plan status to "approved", objective status to "approved".
-  func (m *Manager) ApprovePlan(ctx context.Context, planID string) error
+  // GetUnread retrieves unread messages for an agent, ordered by creation time.
+  // Delegates to MailStore.GetUnread().
+  func (b *Broker) GetUnread(ctx context.Context, agentName string) ([]domain.MailMessage, error)
 
-  // RejectPlan rejects a plan and returns the objective to "planning".
-  // Sets plan status to "failed", keeps objective in "planning" for re-plan.
-  func (m *Manager) RejectPlan(ctx context.Context, planID string) error
+  // MarkRead marks a single message as read.
+  func (b *Broker) MarkRead(ctx context.Context, messageID int64) error
 
-  // MarkPlanReady sets a plan to "pending_approval" and publishes an event.
-  // Called by the planning service when a planner agent finishes.
-  func (m *Manager) MarkPlanReady(ctx context.Context, planID string) error
+  // MarkAllRead marks all unread messages for an agent as read.
+  func (b *Broker) MarkAllRead(ctx context.Context, agentName string) error
 
-  // CheckObjectiveCompletion checks if all streams in the objective's plan
-  // are completed, and if so, transitions the objective to "reviewing" or
-  // "completed" based on autonomy level.
-  func (m *Manager) CheckObjectiveCompletion(ctx context.Context, objectiveID string) error
+  // IsBroadcast returns true if the address is a broadcast group (@all, @leads, etc).
+  func IsBroadcast(addr string) bool
   ```
 
-  State transition map as a `map[ObjectiveStatus][]ObjectiveStatus` for validation.
-  Each transition publishes `EventObjectiveUpdated` with the old and new status in the payload.
+  Broadcast resolution for `SendBroadcast`:
+  1. Query agents via `agents.ListByObjective(ctx, objectiveID)`
+  2. Filter by broadcast address:
+     - `@all`: no filter — deliver to all
+     - `@stream:{streamID}`: match `agent.StreamID == streamID`
+     - `@builders`: match `agent.Role == "worker"`
+     - `@leads`: match `agent.Role == "lead"`
+     - `@human`: publish `EventEscalation` event with payload, return immediately
+  3. Fan-out: create individual `MailMessage` per recipient, call `mail.Send()` for each
+  4. Publish `EventMailSent` with count of recipients
 
-  File: `internal/services/lifecycle/manager.go`
-
----
-
-## Phase 3: Agent Overlay Generation
-
-Build the context package that each agent receives: role definition, task spec, file scope, matched rules, quality gates, and communication config.
-
-- [x] **3.1** Create role definitions
-  Create `internal/services/agents/roles.go` with:
-
+  Add new event type constants to `internal/domain/types.go`:
   ```go
-  package agents
-
-  // RoleDefinition describes an agent role's capabilities and constraints.
-  type RoleDefinition struct {
-      Name        string   // "planner", "lead", "builder", "reviewer", "merger"
-      Description string   // human-readable role description
-      MaxDepth    int      // hierarchy depth (0=planner, 1=lead, 2=worker)
-      CanSpawn    []string // roles this role can spawn (planner→lead, lead→worker)
-      Persistent  bool     // true for planner/lead, false for workers
-  }
-
-  // DefaultRoles returns the built-in role definitions.
-  func DefaultRoles() map[string]*RoleDefinition
+  EventMailSent    EventType = "mail.sent"
+  EventEscalation  EventType = "escalation"
   ```
 
-  Default roles:
-  - `planner`: depth 0, can spawn `["lead"]`, persistent, "Explores codebase and decomposes objectives into parallel work streams"
-  - `lead`: depth 1, can spawn `["builder", "reviewer", "merger"]`, persistent, "Manages a work stream, writes specs, coordinates workers"
-  - `builder`: depth 2, can spawn `[]`, ephemeral, "Implements code changes according to spec"
-  - `reviewer`: depth 2, can spawn `[]`, ephemeral, "Reviews implementation for correctness and quality"
-  - `merger`: depth 1, can spawn `[]`, ephemeral, "Resolves merge conflicts using semantic understanding"
-  - `scout`: depth 2, can spawn `[]`, ephemeral, "Explores codebase to gather context for a task"
+  Files: `internal/services/mail/broker.go`, `internal/domain/types.go`
 
-  File: `internal/services/agents/roles.go`
-
-- [x] **3.2** Create agent overlay builder
-  Create `internal/services/agents/overlay.go` with:
-
-  ```go
-  package agents
-
-  import (
-      "fmt"
-      "strings"
-      "github.com/syndg/deck/internal/domain"
-      "github.com/syndg/deck/internal/harness/rules"
-      "github.com/syndg/deck/internal/harness/tools"
-  )
-
-  // OverlayInput holds all inputs for constructing an agent's system overlay.
-  type OverlayInput struct {
-      AgentName    string              // e.g., "builder-auth-1"
-      Role         *RoleDefinition
-      Objective    *domain.Objective
-      Stream       *domain.Stream      // nil for planner
-      TaskSpec     string              // from lead or plan description
-      FileScope    []string            // files this agent may modify
-      MatchedRules []rules.MatchedRule // rules matched against file scope
-      CuratedTools tools.CurationResult
-      QualityGates []string            // gate commands to run before completion
-      LeadAgent    string              // name of this agent's lead (empty for planners)
-      Guidance     string              // project-level guidance from .deck/config.yaml
-  }
-
-  // BuildOverlay generates the markdown system prompt overlay for an agent.
-  // Sections:
-  //   1. Agent identity and role
-  //   2. Task description
-  //   3. File scope (if any)
-  //   4. Matched rules (high-priority prefixed with "IMPORTANT CONSTRAINT:")
-  //   5. Quality gates
-  //   6. Communication config
-  //   7. Constraints
-  func BuildOverlay(input OverlayInput) string
-
-  // BuildPlannerOverlay generates a simplified overlay for planner agents.
-  // Planners get: role, objective description, guidance, and instructions
-  // for producing a structured plan with streams, scopes, and dependencies.
-  func BuildPlannerOverlay(objective *domain.Objective, guidance string) string
-  ```
-
-  `BuildOverlay` produces markdown following the design doc's overlay format:
-  ```markdown
-  # Deck Agent: {agentName}
-
-  ## Role
-  You are a {role.Name} agent. {role.Description}
-
-  ## Task
-  Objective: {objective.Description}
-  Stream: {stream.Title}
-  {taskSpec}
-
-  ## File Scope
-  You may ONLY modify these files:
-  - {fileScope entries}
-
-  ## Rules
-  {matched rules, high-priority first with IMPORTANT CONSTRAINT prefix}
-
-  ## Quality Gates
-  Before signaling completion, you MUST pass:
-  - {gate commands}
-
-  ## Communication
-  - Your lead is: {leadAgent}
-  - Use deck.status() to report progress
-  - Use deck.escalate() if you're blocked
-  - Use deck.done() when finished
-
-  ## Constraints
-  - Do NOT modify files outside your scope
-  - Do NOT push to git (Deck handles merging)
-  - Do NOT install new dependencies without escalating
-  - Commit frequently with descriptive messages
-  ```
-
-  `BuildPlannerOverlay` instructs the planner to produce a structured plan:
-  ```markdown
-  # Deck Agent: planner
-
-  ## Role
-  You are a Planner agent. Explore the codebase and decompose the objective into parallel work streams.
-
-  ## Objective
-  {objective.Description}
-
-  ## Project Guidance
-  {guidance}
-
-  ## Instructions
-  Produce a structured plan with:
-  1. Streams — parallel units of work
-  2. File scopes — which files each stream owns (use globs)
-  3. Dependencies — which streams must complete before others start
-  4. Quality gates — commands to validate each stream
-
-  Output your plan as YAML in the following format:
-  {plan YAML schema}
-  ```
-
-  Files: `internal/services/agents/overlay.go`
-
----
-
-## Phase 4: Planning Service
-
-The planning service manages planner agent sessions — spawning them, collecting their output, parsing structured plans, and storing the results.
-
-- [x] **4.1** Create plan decomposition types and parser
-  Create `internal/services/planner/decompose.go` with:
-
-  ```go
-  package planner
-
-  import (
-      "fmt"
-      "gopkg.in/yaml.v3"
-      "github.com/syndg/deck/internal/domain"
-  )
-
-  // RawPlan is the YAML structure a planner agent outputs.
-  // Parsed from the agent's output, validated, and converted to domain types.
-  type RawPlan struct {
-      Streams      []RawStream `yaml:"streams"`
-      QualityGates []string    `yaml:"quality_gates"`
-  }
-
-  type RawStream struct {
-      Title        string   `yaml:"title"`
-      Description  string   `yaml:"description"`
-      FileScope    []string `yaml:"file_scope"`
-      Dependencies []string `yaml:"dependencies"` // stream titles or indices
-  }
-
-  // ParsePlan extracts a RawPlan from agent output text.
-  // Looks for a YAML block delimited by ```yaml ... ``` markers.
-  // Falls back to trying the entire output as YAML.
-  func ParsePlan(agentOutput string) (*RawPlan, error)
-
-  // ValidatePlan checks a raw plan for structural correctness:
-  // - At least one stream
-  // - All streams have a title
-  // - All streams have a non-empty file_scope
-  // - Dependency references point to existing stream titles
-  // - No circular dependencies
-  // Returns all validation errors joined.
-  func ValidatePlan(plan *RawPlan) error
-
-  // ToDomain converts a RawPlan to domain Plan + Streams.
-  // Generates IDs, resolves dependency titles to stream IDs,
-  // sets initial statuses.
-  func ToDomain(raw *RawPlan, objectiveID string) (*domain.Plan, []domain.Stream)
-
-  // DetectCycles checks the dependency graph for cycles using DFS.
-  func DetectCycles(streams []RawStream) error
-  ```
-
-  `ParsePlan` strategy:
-  1. Find ```yaml ... ``` block in output via string scanning
-  2. Unmarshal the YAML content into `RawPlan`
-  3. If no code block found, try unmarshalling the entire output
-  4. Return error if both fail
-
-  `DetectCycles` uses standard DFS cycle detection on the title→dependencies adjacency list.
-
-  File: `internal/services/planner/decompose.go`
-
-- [x] **4.2** Create planning service
-  Create `internal/services/planner/planner.go` with:
-
-  ```go
-  package planner
-
-  import (
-      "context"
-      "fmt"
-      "log/slog"
-      "github.com/syndg/deck/internal/db"
-      "github.com/syndg/deck/internal/domain"
-      "github.com/syndg/deck/internal/services/agents"
-      "github.com/syndg/deck/internal/services/lifecycle"
-      events "github.com/syndg/deck/internal/services/events"
-  )
-
-  // Service manages the planning lifecycle for objectives.
-  type Service struct {
-      plans      *db.PlanStore
-      streams    *db.StreamStore
-      objectives *db.ObjectiveStore
-      agentStore *db.AgentStore
-      lifecycle  *lifecycle.Manager
-      eventBus   *events.PersistentBus
-      logger     *slog.Logger
-  }
-
-  func New(
-      plans *db.PlanStore,
-      streams *db.StreamStore,
-      objectives *db.ObjectiveStore,
-      agentStore *db.AgentStore,
-      lifecycle *lifecycle.Manager,
-      eventBus *events.PersistentBus,
-      logger *slog.Logger,
-  ) *Service
-
-  // CreatePlan creates a draft plan for an objective and stores it.
-  // Called after a planner agent produces a valid plan.
-  // 1. Parses and validates the raw plan output
-  // 2. Converts to domain types (Plan + Streams)
-  // 3. Persists plan and streams
-  // 4. Sets plan status to "pending_approval"
-  // 5. Publishes EventPlanCreated
-  func (s *Service) CreatePlan(ctx context.Context, objectiveID string, agentOutput string) (*domain.Plan, error)
-
-  // CreateSimplePlan creates a single-stream plan for simple mode.
-  // No planner agent needed — the objective description becomes the task.
-  // Single stream with full file scope ("**/*"), no dependencies.
-  func (s *Service) CreateSimplePlan(ctx context.Context, objectiveID string) (*domain.Plan, error)
-
-  // GetPlanWithStreams retrieves a plan and its streams.
-  func (s *Service) GetPlanWithStreams(ctx context.Context, planID string) (*domain.Plan, []domain.Stream, error)
-
-  // GetPlanByObjective retrieves the plan for an objective along with streams.
-  func (s *Service) GetPlanByObjective(ctx context.Context, objectiveID string) (*domain.Plan, []domain.Stream, error)
-
-  // UpdateStream updates a stream's fields (for plan editing before approval).
-  func (s *Service) UpdateStream(ctx context.Context, stream *domain.Stream) error
-  ```
-
-  `CreatePlan` flow:
-  1. Call `ParsePlan(agentOutput)` to extract structured plan
-  2. Call `ValidatePlan(rawPlan)` to validate
-  3. Call `ToDomain(rawPlan, objectiveID)` to convert
-  4. Store plan via `plans.Create()`
-  5. Store each stream via `streams.Create()`
-  6. Call `lifecycle.MarkPlanReady()` to set status and publish event
-
-  `CreateSimplePlan` creates a minimal plan:
-  - One stream: title = objective description, file_scope = `["**/*"]`, no dependencies
-  - Plan status set directly to "pending_approval"
-  - Quality gates from config defaults
-
-  File: `internal/services/planner/planner.go`
-
----
-
-## Phase 5: Simple Mode
-
-Simple mode collapses the planning pipeline to a single agent in a single sandbox — no decomposition, no streams hierarchy, no inter-agent communication.
-
-- [x] **5.1** Create simple mode handler
-  Create `internal/services/planner/simple.go` with:
-
-  ```go
-  package planner
-
-  import (
-      "context"
-      "fmt"
-      "log/slog"
-      "github.com/syndg/deck/internal/domain"
-  )
-
-  // SimpleOpts configures simple mode execution.
-  type SimpleOpts struct {
-      Blueprint    string // blueprint name override (default: "hotfix")
-      AutoApprove  bool   // skip approval step
-      QualityGates []string // override quality gates (empty = use config defaults)
-  }
-
-  // StartSimple creates an objective, generates a single-stream plan,
-  // and optionally auto-approves it.
-  // Returns the created objective and plan.
-  //
-  // Flow:
-  //   1. Create objective with description
-  //   2. Create single-stream plan via CreateSimplePlan
-  //   3. If AutoApprove, approve the plan immediately
-  //   4. Publish events
-  func (s *Service) StartSimple(ctx context.Context, description string, opts SimpleOpts) (*domain.Objective, *domain.Plan, error)
-  ```
-
-  Simple mode uses the `hotfix` blueprint by default (single-agent: fix → lint → merge → complete).
-  When `AutoApprove` is true, the plan is approved inline — no human gate.
-  This is the `deck plan "fix typo" --simple` path from the design doc.
-
-  File: `internal/services/planner/simple.go`
-
----
-
-## Phase 6: Plan API Endpoints
-
-Expose plan management through the daemon's REST API.
-
-- [x] **6.1** Add plan and stream HTTP routes
+- [x] **1.2** Add mail HTTP routes
   Add to `internal/daemon/routes.go`:
 
   ```go
-  // POST /plans — create a plan from agent output (internal use by planning service)
-  func (d *Daemon) handleCreatePlan(w http.ResponseWriter, r *http.Request)
+  // POST /mail — send a message (used by agent extensions)
+  // Body: {"from": "...", "to": "...", "type": "...", "payload": "...", "objective": "...", "stream": "..."}
+  // If "to" starts with "@", treated as broadcast.
+  func (d *Daemon) handleSendMail(w http.ResponseWriter, r *http.Request)
 
-  // GET /plans — list all plans
-  func (d *Daemon) handleListPlans(w http.ResponseWriter, r *http.Request)
+  // GET /mail/{agentName}/unread — get unread messages for an agent
+  // Returns JSON array of MailMessage.
+  func (d *Daemon) handleGetUnreadMail(w http.ResponseWriter, r *http.Request)
 
-  // GET /plans/{id} — get a plan with its streams
-  func (d *Daemon) handleGetPlan(w http.ResponseWriter, r *http.Request)
+  // POST /mail/{id}/read — mark a single message as read
+  func (d *Daemon) handleMarkMailRead(w http.ResponseWriter, r *http.Request)
 
-  // POST /plans/{id}/approve — approve a plan for execution
-  func (d *Daemon) handleApprovePlan(w http.ResponseWriter, r *http.Request)
-
-  // POST /plans/{id}/reject — reject a plan, return objective to planning
-  func (d *Daemon) handleRejectPlan(w http.ResponseWriter, r *http.Request)
-
-  // GET /objectives/{id}/plan — get the plan for an objective
-  func (d *Daemon) handleGetObjectivePlan(w http.ResponseWriter, r *http.Request)
-
-  // GET /plans/{id}/streams — list streams for a plan
-  func (d *Daemon) handleListStreams(w http.ResponseWriter, r *http.Request)
-
-  // GET /streams/{id} — get a single stream
-  func (d *Daemon) handleGetStream(w http.ResponseWriter, r *http.Request)
+  // POST /mail/{agentName}/read-all — mark all messages as read for an agent
+  func (d *Daemon) handleMarkAllMailRead(w http.ResponseWriter, r *http.Request)
   ```
 
-  Register these routes in `registerRoutes()`:
+  Register routes in `registerRoutes()`:
   ```go
-  d.mux.HandleFunc("POST /plans", d.handleCreatePlan)
-  d.mux.HandleFunc("GET /plans", d.handleListPlans)
-  d.mux.HandleFunc("GET /plans/{id}", d.handleGetPlan)
-  d.mux.HandleFunc("POST /plans/{id}/approve", d.handleApprovePlan)
-  d.mux.HandleFunc("POST /plans/{id}/reject", d.handleRejectPlan)
-  d.mux.HandleFunc("GET /objectives/{id}/plan", d.handleGetObjectivePlan)
-  d.mux.HandleFunc("GET /plans/{id}/streams", d.handleListStreams)
-  d.mux.HandleFunc("GET /streams/{id}", d.handleGetStream)
+  d.mux.HandleFunc("POST /mail", d.handleSendMail)
+  d.mux.HandleFunc("GET /mail/{agentName}/unread", d.handleGetUnreadMail)
+  d.mux.HandleFunc("POST /mail/{id}/read", d.handleMarkMailRead)
+  d.mux.HandleFunc("POST /mail/{agentName}/read-all", d.handleMarkAllMailRead)
   ```
 
-  Response format for `GET /plans/{id}`:
-  ```json
-  {
-    "plan": { "id": "...", "objective_id": "...", "status": "...", ... },
-    "streams": [
-      { "id": "...", "title": "...", "file_scope": [...], "dependencies": [...], ... }
-    ]
-  }
-  ```
+  `handleSendMail` decodes the JSON body into a `MailMessage`, detects broadcast addresses
+  (via `mail.IsBroadcast(msg.To)`), and delegates to `broker.Send()` or `broker.SendBroadcast()`.
 
-  `handleApprovePlan` calls `lifecycle.ApprovePlan()`.
-  `handleRejectPlan` calls `lifecycle.RejectPlan()`.
+  `handleGetUnreadMail` uses `r.PathValue("agentName")` and returns JSON array.
+
+  `handleMarkMailRead` parses the message ID from `r.PathValue("id")` as int64.
+
+  Add `mailBroker *mail.Broker` field to `Daemon` struct (nil until task 8.1 wires it).
 
   File: `internal/daemon/routes.go`
 
 ---
 
-## Phase 7: CLI Commands
+## Phase 2: Provider Implementations
 
-Extend the CLI client to support plan management.
+Implement the first concrete sandbox provider and agent runtime. The local sandbox provider uses git worktrees for isolation. The Claude Code runtime spawns `claude -p` in headless mode.
 
-- [x] **7.1** Add plan client methods
+- [ ] **2.1** Implement local sandbox provider
+  Create `internal/sandbox/local/provider.go` with:
+
+  ```go
+  package local
+
+  import (
+      "context"
+      "fmt"
+      "log/slog"
+      "os"
+      "os/exec"
+      "path/filepath"
+      "sync"
+      "github.com/google/uuid"
+      "github.com/syndg/deck/internal/sandbox"
+  )
+
+  // Provider creates sandboxes as local git worktrees.
+  // Each sandbox is an isolated worktree with its own branch.
+  type Provider struct {
+      repoRoot    string          // path to the main git repository
+      worktreeDir string          // base directory for worktrees
+      mu          sync.Mutex
+      sandboxes   map[string]*LocalSandbox
+      logger      *slog.Logger
+  }
+
+  func New(repoRoot string, worktreeDir string, logger *slog.Logger) *Provider
+
+  // Create provisions a new git worktree sandbox.
+  // 1. Generate sandbox ID (uuid)
+  // 2. Create branch: deck/{labels["deck.objective"][:8]}/{labels["deck.role"]}-{id[:8]}
+  // 3. Run: git worktree add {worktreeDir}/{id} -b {branch}
+  // 4. Apply env vars from opts.EnvVars
+  // 5. Track sandbox in internal map
+  func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox.Sandbox, error)
+
+  // Get retrieves a sandbox by ID from the internal map.
+  func (p *Provider) Get(ctx context.Context, id string) (sandbox.Sandbox, error)
+
+  // List returns sandboxes matching the given label filters.
+  // A sandbox matches if all provided labels match (AND logic).
+  func (p *Provider) List(ctx context.Context, labels map[string]string) ([]sandbox.Sandbox, error)
+
+  // Delete removes the worktree and its branch.
+  // Runs: git worktree remove {path} --force
+  // Runs: git branch -D {branch}
+  func (p *Provider) Delete(ctx context.Context, id string) error
+  ```
+
+  `LocalSandbox` implements `sandbox.Sandbox`:
+  ```go
+  type LocalSandbox struct {
+      id      string
+      path    string                // worktree absolute path
+      branch  string                // git branch name
+      labels  map[string]string
+      status  sandbox.SandboxStatus
+      envVars map[string]string
+      mu      sync.Mutex
+  }
+
+  func (s *LocalSandbox) ID() string
+  func (s *LocalSandbox) Status() sandbox.SandboxStatus
+
+  // Exec runs a command in the worktree directory via exec.CommandContext.
+  // Applies sandbox env vars. Uses opts.WorkDir relative to worktree if provided.
+  // Returns ExecResult with stdout, stderr, and exit code.
+  func (s *LocalSandbox) Exec(ctx context.Context, cmd string, opts sandbox.ExecOpts) (sandbox.ExecResult, error)
+
+  // Upload writes content to a file within the worktree.
+  func (s *LocalSandbox) Upload(ctx context.Context, content []byte, path string) error
+
+  // Download reads a file from the worktree.
+  func (s *LocalSandbox) Download(ctx context.Context, path string) ([]byte, error)
+
+  // Stop sets status to "stopped". No-op for local worktrees (they persist until Delete).
+  func (s *LocalSandbox) Stop(ctx context.Context) error
+
+  // Start sets status to "running". Only valid if currently "stopped".
+  func (s *LocalSandbox) Start(ctx context.Context) error
+  ```
+
+  `Exec` implementation:
+  1. Parse command string with `sh -c` for shell execution
+  2. Set `cmd.Dir` to worktree path (or `opts.WorkDir` if provided)
+  3. Merge sandbox env vars + opts.Env into `cmd.Env`
+  4. Capture stdout and stderr via `bytes.Buffer`
+  5. Run with context for cancellation support
+  6. Return `ExecResult{ExitCode, Stdout, Stderr}`
+
+  File: `internal/sandbox/local/provider.go`
+
+- [ ] **2.2** Implement Claude Code agent runtime
+  Create `internal/runtime/claudecode/runtime.go` with:
+
+  ```go
+  package claudecode
+
+  import (
+      "context"
+      "fmt"
+      "log/slog"
+      "strings"
+      "sync"
+      "github.com/syndg/deck/internal/runtime"
+      "github.com/syndg/deck/internal/sandbox"
+  )
+
+  // Runtime spawns Claude Code agents in sandboxes via `claude -p`.
+  type Runtime struct {
+      model  string // default model (e.g., "sonnet")
+      logger *slog.Logger
+  }
+
+  func New(model string, logger *slog.Logger) *Runtime
+
+  func (r *Runtime) Name() string         // returns "claude-code"
+  func (r *Runtime) SupportsRPC() bool     // returns false
+  func (r *Runtime) SupportsHooks() bool   // returns true
+
+  // Spawn starts a Claude Code process in the sandbox.
+  // 1. Build prompt: overlay + "\n\nBegin your task now."
+  // 2. Build tool list from opts.Tools
+  // 3. Build command: claude -p "{prompt}" --model {model} --allowedTools {tools}
+  // 4. Set env vars: DECK_DAEMON_URL, DECK_AGENT_TOKEN, plus opts.EnvVars
+  // 5. Execute via sandbox.Exec() in a goroutine
+  // 6. Return ClaudeCodeProcess that monitors execution
+  func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.AgentOpts) (runtime.AgentProcess, error)
+  ```
+
+  `ClaudeCodeProcess` implements `runtime.AgentProcess`:
+  ```go
+  type ClaudeCodeProcess struct {
+      sandbox  sandbox.Sandbox
+      cancel   context.CancelFunc
+      doneCh   chan struct{}
+      result   runtime.AgentResult
+      outputCh chan runtime.AgentEvent
+      mu       sync.Mutex
+      killed   bool
+  }
+
+  // Send is a no-op for Claude Code (no mid-execution RPC support).
+  // Returns nil without error.
+  func (p *ClaudeCodeProcess) Send(ctx context.Context, msg runtime.AgentMessage) error
+
+  // Output returns the channel that receives agent events.
+  // Events are emitted when the process produces output or completes.
+  func (p *ClaudeCodeProcess) Output() <-chan runtime.AgentEvent
+
+  // Wait blocks until the Claude Code process completes and returns the result.
+  func (p *ClaudeCodeProcess) Wait() (runtime.AgentResult, error)
+
+  // Kill terminates the process by cancelling the context.
+  func (p *ClaudeCodeProcess) Kill() error
+  ```
+
+  `Spawn` implementation:
+  1. Create cancellable context from parent
+  2. Build the full prompt: `opts.Overlay + "\n\n" + "Begin your task now."`
+  3. Build tool allowlist: join `opts.Tools` with commas
+  4. Construct command: `claude -p "..." --model {model} --allowedTools "..."`
+  5. Set up env vars map with `DECK_DAEMON_URL` and `DECK_AGENT_TOKEN` from `opts.EnvVars`
+  6. Start goroutine that calls `sandbox.Exec()` with the command
+  7. On completion: parse exit code, set result (Success = exitCode == 0), send event, close channels
+  8. Return `ClaudeCodeProcess` immediately
+
+  File: `internal/runtime/claudecode/runtime.go`
+
+---
+
+## Phase 3: Agent Spawner
+
+The agent spawner coordinates the full lifecycle of creating an agent: recording the session, assembling the overlay (with rules + tools injection), provisioning the sandbox, and starting the agent process.
+
+- [ ] **3.1** Create agent spawner service
+  Create `internal/services/dispatch/spawner.go` with:
+
+  ```go
+  package dispatch
+
+  import (
+      "context"
+      "fmt"
+      "log/slog"
+      "github.com/syndg/deck/internal/db"
+      "github.com/syndg/deck/internal/domain"
+      "github.com/syndg/deck/internal/runtime"
+      "github.com/syndg/deck/internal/sandbox"
+      "github.com/syndg/deck/internal/services/agents"
+      "github.com/syndg/deck/internal/harness/rules"
+      "github.com/syndg/deck/internal/harness/tools"
+      events "github.com/syndg/deck/internal/services/events"
+  )
+
+  // SpawnRequest describes what agent to create.
+  type SpawnRequest struct {
+      Objective   *domain.Objective
+      Stream      *domain.Stream   // nil for planner agents
+      Role        string           // "planner", "lead", "builder", "reviewer", "scout"
+      TaskSpec    string           // task description or spec content
+      ParentAgent string           // name of parent agent (empty for top-level)
+      Guidance    string           // project-level guidance from config
+  }
+
+  // SpawnResult contains the created agent session, process, and sandbox.
+  type SpawnResult struct {
+      Session *domain.AgentSession
+      Process runtime.AgentProcess
+      Sandbox sandbox.Sandbox
+  }
+
+  // Spawner creates and manages agent processes.
+  type Spawner struct {
+      agentStore  *db.AgentStore
+      rt          runtime.AgentRuntime
+      sp          sandbox.SandboxProvider
+      rulesEngine *rules.Engine
+      toolCurator *tools.Curator
+      eventBus    *events.PersistentBus
+      logger      *slog.Logger
+  }
+
+  func NewSpawner(
+      agentStore *db.AgentStore,
+      rt runtime.AgentRuntime,
+      sp sandbox.SandboxProvider,
+      rulesEngine *rules.Engine,
+      toolCurator *tools.Curator,
+      eventBus *events.PersistentBus,
+      logger *slog.Logger,
+  ) *Spawner
+
+  // Spawn creates a sandbox, assembles the overlay, and starts an agent.
+  // Flow:
+  //   1. Look up role definition via agents.DefaultRoles()
+  //   2. Create AgentSession record (status "pending")
+  //   3. Provision sandbox via provider:
+  //      - Name: "deck-{objectiveID[:8]}-{role}-{sessionID[:8]}"
+  //      - Labels: deck.objective, deck.stream, deck.role
+  //      - Ephemeral: !role.Persistent
+  //   4. Match rules against file scope (empty for planners)
+  //   5. Curate tools for the role + file scope
+  //   6. Build agent overlay:
+  //      - Planners: agents.BuildPlannerOverlay()
+  //      - Others: agents.BuildOverlay() with full OverlayInput
+  //   7. Spawn agent process via runtime
+  //   8. Update session: status "running", sandbox ID set
+  //   9. Publish EventAgentSpawned
+  // Returns SpawnResult with session, process, and sandbox.
+  func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, error)
+
+  // Kill terminates an agent process and updates its session status.
+  // Marks session as "failed" and publishes EventAgentFailed.
+  func (s *Spawner) Kill(ctx context.Context, sessionID string) error
+  ```
+
+  Environment variables passed to the agent:
+  ```
+  DECK_DAEMON_URL=http://localhost:{port}
+  DECK_AGENT_TOKEN={generated-uuid}
+  DECK_OBJECTIVE_ID={objectiveID}
+  DECK_STREAM_ID={streamID}
+  DECK_AGENT_ROLE={role}
+  ```
+
+  The spawner does NOT track running processes internally — it returns the `SpawnResult`
+  and the coordinator is responsible for monitoring process completion.
+
+  File: `internal/services/dispatch/spawner.go`
+
+---
+
+## Phase 4: Stream Scheduler
+
+Dependency-aware scheduler that determines which streams are ready for execution, manages concurrent agent limits, and tracks stream execution state transitions.
+
+- [ ] **4.1** Create stream scheduler
+  Create `internal/services/dispatch/scheduler.go` with:
+
+  ```go
+  package dispatch
+
+  import (
+      "context"
+      "fmt"
+      "log/slog"
+      "sync"
+      "github.com/syndg/deck/internal/db"
+      "github.com/syndg/deck/internal/domain"
+      events "github.com/syndg/deck/internal/services/events"
+  )
+
+  // Scheduler manages dependency-aware stream execution.
+  type Scheduler struct {
+      streams       *db.StreamStore
+      plans         *db.PlanStore
+      maxConcurrent int
+      mu            sync.Mutex
+      activeStreams  map[string]bool // streamID → executing
+      eventBus      *events.PersistentBus
+      logger        *slog.Logger
+  }
+
+  func NewScheduler(
+      streams *db.StreamStore,
+      plans *db.PlanStore,
+      maxConcurrent int,
+      eventBus *events.PersistentBus,
+      logger *slog.Logger,
+  ) *Scheduler
+
+  // GetReadyStreams returns streams that are ready to execute:
+  //   - Status is "pending"
+  //   - All dependency streams have status "completed"
+  //   - Total active streams is under maxConcurrent
+  // Uses StreamStore.ListReady() for dependency resolution, then caps by concurrency limit.
+  func (s *Scheduler) GetReadyStreams(ctx context.Context, planID string) ([]domain.Stream, error)
+
+  // MarkExecuting marks a stream as actively executing and tracks it.
+  // Updates stream status to "executing" via StreamStore.UpdateStatus().
+  func (s *Scheduler) MarkExecuting(ctx context.Context, streamID string) error
+
+  // MarkCompleted marks a stream as completed and removes from active set.
+  // 1. Update stream status to "completed"
+  // 2. Remove from activeStreams map
+  // 3. Check for newly unblocked streams in the same plan
+  // 4. Publish EventStreamReady for each newly ready stream
+  func (s *Scheduler) MarkCompleted(ctx context.Context, streamID string, planID string) error
+
+  // MarkFailed marks a stream as failed and removes from active set.
+  func (s *Scheduler) MarkFailed(ctx context.Context, streamID string) error
+
+  // ActiveCount returns the number of currently executing streams.
+  func (s *Scheduler) ActiveCount() int
+
+  // CanScheduleMore returns true if under the concurrent stream limit.
+  func (s *Scheduler) CanScheduleMore() bool
+  ```
+
+  Add new event type constant to `internal/domain/types.go`:
+  ```go
+  EventStreamReady EventType = "stream.ready"
+  ```
+
+  `MarkCompleted` cascade logic:
+  1. Call `streams.UpdateStatus(ctx, streamID, "completed")`
+  2. Remove streamID from `activeStreams`
+  3. Fetch the plan to get planID
+  4. Call `streams.ListReady(ctx, planID)` to get newly unblocked streams
+  5. For each ready stream not already in `activeStreams`, publish `EventStreamReady` with
+     `{"stream_id": streamID, "plan_id": planID}` in the event payload
+
+  Files: `internal/services/dispatch/scheduler.go`, `internal/domain/types.go`
+
+---
+
+## Phase 5: Blueprint Step Handlers
+
+Register handlers for each blueprint step type. These handlers implement the actual work performed at each step in the blueprint state machine.
+
+- [ ] **5.1** Implement deterministic and human step handlers
+  Create `internal/services/dispatch/handlers.go` with:
+
+  ```go
+  package dispatch
+
+  import (
+      "context"
+      "encoding/json"
+      "fmt"
+      "log/slog"
+      "github.com/syndg/deck/internal/db"
+      "github.com/syndg/deck/internal/domain"
+      "github.com/syndg/deck/internal/harness/blueprint"
+      "github.com/syndg/deck/internal/harness/gates"
+      "github.com/syndg/deck/internal/services/lifecycle"
+  )
+
+  // Handlers implements blueprint step handlers for deterministic and human steps.
+  type Handlers struct {
+      scheduler   *Scheduler
+      gateRunner  *gates.Runner
+      lifecycle   *lifecycle.Manager
+      plans       *db.PlanStore
+      streams     *db.StreamStore
+      objectives  *db.ObjectiveStore
+      executions  *db.ExecutionStore
+      logger      *slog.Logger
+  }
+
+  func NewHandlers(
+      scheduler *Scheduler,
+      gateRunner *gates.Runner,
+      lifecycle *lifecycle.Manager,
+      plans *db.PlanStore,
+      streams *db.StreamStore,
+      objectives *db.ObjectiveStore,
+      executions *db.ExecutionStore,
+      logger *slog.Logger,
+  ) *Handlers
+
+  // HandleDeterministic routes to the correct handler based on step.Action.
+  // This function is registered with the blueprint engine as the StepTypeDeterministic handler.
+  // Actions:
+  //   "dispatch_streams" → spawns lead agents for ready streams
+  //   "run_quality_gates" → runs quality gates in sandbox
+  //   "signal_merge_ready" → marks stream as merge-ready
+  //   "mark_complete" → transitions objective to reviewing/completed
+  //   "merge_queue" → enqueues for merge (stub for Phase 5)
+  func (h *Handlers) HandleDeterministic(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error)
+
+  // HandleHuman pauses execution until human approval.
+  // Returns StepResult with status "waiting_human".
+  // The blueprint engine sets execution status to "waiting_human" and stops advancing.
+  // Execution resumes when ApproveHuman() is called via the API.
+  func (h *Handlers) HandleHuman(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error)
+  ```
+
+  `HandleDeterministic` action implementations:
+
+  **dispatch_streams:**
+  1. Get objective from `exec.ObjectiveID`
+  2. Get plan for the objective
+  3. Get ready streams via `scheduler.GetReadyStreams()`
+  4. For each ready stream, mark as executing via `scheduler.MarkExecuting()`
+  5. Publish `EventStreamReady` for each (the coordinator listens and spawns agents)
+  6. Return `StepResult{Status: "completed"}`
+
+  **run_quality_gates:**
+  1. Get the plan's quality gates
+  2. Parse gates into `[]gates.Gate` structs
+  3. Look up the sandbox for the current stream's agent (via execution metadata or step context)
+  4. Run gates via `gateRunner.Run()` in the sandbox
+  5. Return completed if all pass, failed if any fail
+
+  **signal_merge_ready:**
+  1. Get the stream ID from execution context
+  2. Update stream status to "merge_ready"
+  3. Publish `EventMergeQueued` with stream and branch info
+  4. Return `StepResult{Status: "completed"}`
+
+  **mark_complete:**
+  1. Call `lifecycle.Transition(ctx, exec.ObjectiveID, domain.ObjectiveStatusCompleted)`
+     (or `ObjectiveStatusReviewing` based on autonomy — default to reviewing for now)
+  2. Return `StepResult{Status: "completed"}`
+
+  **merge_queue:**
+  1. Stub implementation for Phase 5 — log and return completed
+  2. Phase 5 will implement the actual merge queue processing
+
+  **HandleHuman:**
+  1. Log that execution is paused waiting for human approval
+  2. Return `StepResult{Status: "waiting_human"}`
+  3. The engine's `Advance()` method handles the rest — it detects "waiting_human"
+     and sets the execution status accordingly
+
+  File: `internal/services/dispatch/handlers.go`
+
+---
+
+## Phase 6: Execution Coordinator
+
+The coordinator is the central orchestration loop. It subscribes to events, drives blueprint execution, manages agent lifecycle, and coordinates stream completion cascades.
+
+- [ ] **6.1** Create execution coordinator
+  Create `internal/services/dispatch/coordinator.go` with:
+
+  ```go
+  package dispatch
+
+  import (
+      "context"
+      "encoding/json"
+      "fmt"
+      "log/slog"
+      "sync"
+      "github.com/syndg/deck/internal/db"
+      "github.com/syndg/deck/internal/domain"
+      "github.com/syndg/deck/internal/harness/blueprint"
+      "github.com/syndg/deck/internal/services/lifecycle"
+      events "github.com/syndg/deck/internal/services/events"
+  )
+
+  // Coordinator orchestrates objective execution from plan approval to completion.
+  // It subscribes to events and drives blueprint execution.
+  type Coordinator struct {
+      engine      *blueprint.Engine
+      scheduler   *Scheduler
+      spawner     *Spawner
+      lifecycle   *lifecycle.Manager
+      executions  *db.ExecutionStore
+      objectives  *db.ObjectiveStore
+      plans       *db.PlanStore
+      streams     *db.StreamStore
+      eventBus    *events.PersistentBus
+      logger      *slog.Logger
+
+      mu          sync.Mutex
+      activeExecs map[string]context.CancelFunc // objectiveID → cancel
+      agentMap    map[string]*SpawnResult        // sessionID → spawn result
+  }
+
+  func NewCoordinator(
+      engine *blueprint.Engine,
+      scheduler *Scheduler,
+      spawner *Spawner,
+      lifecycle *lifecycle.Manager,
+      executions *db.ExecutionStore,
+      objectives *db.ObjectiveStore,
+      plans *db.PlanStore,
+      streams *db.StreamStore,
+      eventBus *events.PersistentBus,
+      logger *slog.Logger,
+  ) *Coordinator
+
+  // Start subscribes to events and begins processing.
+  // Subscribes to:
+  //   EventObjectiveUpdated — detect objective transitions to "approved" → start execution
+  //   EventStreamReady — spawn lead agents for newly unblocked streams
+  // Runs event processing in a background goroutine.
+  func (c *Coordinator) Start(ctx context.Context) error
+
+  // Stop cancels all active executions and cleans up.
+  func (c *Coordinator) Stop()
+
+  // StartExecution begins blueprint execution for an approved objective.
+  // 1. Fetch objective, verify status is "approved"
+  // 2. Fetch plan for the objective
+  // 3. Determine blueprint name (from objective.Blueprint, default to "feature")
+  // 4. Create execution via engine.Start(blueprintName, objectiveID)
+  // 5. Transition objective to "executing" via lifecycle
+  // 6. Run the execution loop in a goroutine
+  func (c *Coordinator) StartExecution(ctx context.Context, objectiveID string) error
+
+  // HandleAgentStep implements the StepHandler for agent-type blueprint steps.
+  // Registered with the engine as the StepTypeAgent handler.
+  // 1. Determine role from step.Role
+  // 2. Build SpawnRequest (objective, stream from exec context, role, task spec)
+  // 3. Call spawner.Spawn() to create sandbox + agent
+  // 4. Track the spawn result in agentMap
+  // 5. Call process.Wait() — blocks until agent completes
+  // 6. Update agent session status (completed or failed)
+  // 7. Publish EventAgentCompleted or EventAgentFailed
+  // 8. Return StepResult based on agent result
+  func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error)
+
+  // HandleBlueprintRefStep implements the StepHandler for blueprint_ref steps.
+  // Registered with the engine as the StepTypeBlueprintRef handler.
+  // For Phase 4, this handles per-stream execution without nested blueprints:
+  // 1. Get the plan and all its streams
+  // 2. Spawn lead agents for all ready streams (via spawner)
+  // 3. Monitor agent completions via event subscription
+  // 4. As leads complete: mark stream completed via scheduler, spawn newly ready leads
+  // 5. Block until ALL streams are completed
+  // 6. Return StepResult{Status: "completed"}
+  func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error)
+  ```
+
+  Add new event type constant to `internal/domain/types.go`:
+  ```go
+  EventExecutionStarted EventType = "execution.started"
+  ```
+
+  Execution loop (`runExecution`, called by `StartExecution` in a goroutine):
+  1. Call `engine.Advance(executionID)` repeatedly
+  2. Engine calls the appropriate step handler for each step
+  3. Handlers either complete immediately (deterministic) or block (agent, blueprint_ref)
+  4. If engine returns "waiting_human", the goroutine exits (resumes on ApproveHuman)
+  5. If engine returns "completed" or "failed", clean up and exit
+
+  `HandleBlueprintRefStep` per-stream execution:
+  1. Subscribe to `EventAgentCompleted` and `EventAgentFailed` events
+  2. Call `scheduler.GetReadyStreams()` to find initially ready streams
+  3. For each ready stream: spawn lead via `spawner.Spawn()`, mark executing via scheduler
+  4. Wait for events:
+     - On `EventAgentCompleted`: identify which stream, call `scheduler.MarkCompleted()`
+     - On `EventAgentFailed`: call `scheduler.MarkFailed()`, decide to retry or fail
+     - On `EventStreamReady`: spawn lead for the newly ready stream
+  5. Loop until all streams are completed or any stream fails
+  6. Return StepResult{Status: "completed"} or StepResult{Status: "failed"}
+
+  Files: `internal/services/dispatch/coordinator.go`, `internal/domain/types.go`
+
+---
+
+## Phase 7: API & CLI
+
+Extend the daemon API and CLI to support execution management, agent monitoring, and mail interaction.
+
+- [ ] **7.1** Add execution management HTTP routes
+  Add to `internal/daemon/routes.go`:
+
+  ```go
+  // POST /executions/{id}/approve — approve a human gate step in a blueprint execution
+  // Calls engine.ApproveHuman(executionID) to resume execution.
+  func (d *Daemon) handleApproveExecution(w http.ResponseWriter, r *http.Request)
+
+  // GET /agents — list all agent sessions
+  // Returns JSON array of AgentSession.
+  func (d *Daemon) handleListAgents(w http.ResponseWriter, r *http.Request)
+
+  // GET /agents/{id} — get agent session details
+  func (d *Daemon) handleGetAgent(w http.ResponseWriter, r *http.Request)
+
+  // POST /agents/{id}/kill — terminate an active agent
+  // Calls spawner.Kill(sessionID).
+  func (d *Daemon) handleKillAgent(w http.ResponseWriter, r *http.Request)
+
+  // POST /objectives/{id}/execute — manually trigger execution for an approved objective
+  // Calls coordinator.StartExecution(objectiveID).
+  func (d *Daemon) handleExecuteObjective(w http.ResponseWriter, r *http.Request)
+  ```
+
+  Register routes in `registerRoutes()`:
+  ```go
+  d.mux.HandleFunc("POST /executions/{id}/approve", d.handleApproveExecution)
+  d.mux.HandleFunc("GET /agents", d.handleListAgents)
+  d.mux.HandleFunc("GET /agents/{id}", d.handleGetAgent)
+  d.mux.HandleFunc("POST /agents/{id}/kill", d.handleKillAgent)
+  d.mux.HandleFunc("POST /objectives/{id}/execute", d.handleExecuteObjective)
+  ```
+
+  Add `coordinator *dispatch.Coordinator` and `spawner *dispatch.Spawner` fields to `Daemon` struct
+  (nil until task 8.1 wires them).
+
+  `handleApproveExecution` calls `d.blueprintEngine.ApproveHuman(id)` then
+  triggers the coordinator to resume advancing the execution.
+
+  `handleExecuteObjective` verifies the objective exists and is in "approved" status
+  before delegating to `coordinator.StartExecution()`.
+
+  File: `internal/daemon/routes.go`
+
+- [ ] **7.2** Add execution and mail client methods
   Add to `internal/client/client.go`:
 
   ```go
-  // PlanResponse represents a plan with its streams.
-  type PlanResponse struct {
-      Plan    domain.Plan     `json:"plan"`
-      Streams []domain.Stream `json:"streams"`
-  }
+  // ExecuteObjective triggers execution for an approved objective.
+  func (c *Client) ExecuteObjective(ctx context.Context, objectiveID string) error
 
-  // ListPlans returns all plans.
-  func (c *Client) ListPlans(ctx context.Context) ([]domain.Plan, error)
+  // ListAgents returns all agent sessions.
+  func (c *Client) ListAgents(ctx context.Context) ([]domain.AgentSession, error)
 
-  // GetPlan returns a plan with its streams.
-  func (c *Client) GetPlan(ctx context.Context, id string) (*PlanResponse, error)
+  // GetAgent returns an agent session by ID.
+  func (c *Client) GetAgent(ctx context.Context, id string) (*domain.AgentSession, error)
 
-  // GetObjectivePlan returns the plan for an objective.
-  func (c *Client) GetObjectivePlan(ctx context.Context, objectiveID string) (*PlanResponse, error)
+  // KillAgent terminates an active agent.
+  func (c *Client) KillAgent(ctx context.Context, id string) error
 
-  // ApprovePlan approves a plan for execution.
-  func (c *Client) ApprovePlan(ctx context.Context, planID string) error
+  // ApproveExecution approves a human gate in a blueprint execution.
+  func (c *Client) ApproveExecution(ctx context.Context, executionID string) error
 
-  // RejectPlan rejects a plan.
-  func (c *Client) RejectPlan(ctx context.Context, planID string) error
+  // ListMail returns unread messages for an agent.
+  func (c *Client) ListMail(ctx context.Context, agentName string) ([]domain.MailMessage, error)
+
+  // SendMail sends a message to an agent or broadcast group.
+  func (c *Client) SendMail(ctx context.Context, msg *domain.MailMessage) error
   ```
+
+  All methods follow the existing `do()` helper pattern:
+  - Build request with appropriate method and path
+  - Call `c.do(req)` for POST requests with no response body
+  - Decode response JSON for GET requests
+  - Wrap errors with context
 
   File: `internal/client/client.go`
 
-- [x] **7.2** Create `deck plans` command
-  Create `cmd/deck/plans.go` with:
+- [ ] **7.3** Create `deck exec` command
+  Create `cmd/deck/exec.go` with:
 
   ```go
-  var plansCmd = &cobra.Command{
-      Use:   "plans",
-      Short: "List plans",
-      RunE: func(cmd *cobra.Command, args []string) error {
-          c := client.New(daemonURL)
-          plans, err := c.ListPlans(cmd.Context())
-          // Print table: ID (truncated) | Objective ID (truncated) | Status | Created
-      },
-  }
-  ```
-
-  Format as aligned table:
-  ```
-  ID        OBJECTIVE   STATUS              CREATED
-  abc123    def456      pending_approval    2m ago
-  ghi789    jkl012      approved            15m ago
-  ```
-
-  Register with `rootCmd.AddCommand(plansCmd)` in init().
-  File: `cmd/deck/plans.go`
-
-- [x] **7.3** Create `deck show` command
-  Create `cmd/deck/show.go` with:
-
-  ```go
-  var showCmd = &cobra.Command{
-      Use:   "show [plan-id]",
-      Short: "Show plan details with streams",
+  var execCmd = &cobra.Command{
+      Use:   "exec [objective-id]",
+      Short: "Trigger execution for an approved objective",
       Args:  cobra.ExactArgs(1),
       RunE: func(cmd *cobra.Command, args []string) error {
           c := client.New(daemonURL)
-          resp, err := c.GetPlan(cmd.Context(), args[0])
-          // Print plan summary + stream details
-      },
-  }
-  ```
-
-  Output format:
-  ```
-  Plan: abc123
-  Objective: Refactor auth to JWT
-  Status: pending_approval
-  Quality Gates: bun test, bun run lint
-
-  Streams:
-    1. JWT token generation and validation         [pending]
-       Scope: src/auth/token.*, src/auth/jwt.*
-       Dependencies: none
-
-    2. Replace session middleware with JWT           [pending]
-       Scope: src/middleware/auth.*, src/middleware/session.*
-       Dependencies: stream 1
-
-    3. Update all API route handlers                 [pending]
-       Scope: src/routes/**/*.ts
-       Dependencies: stream 2
-  ```
-
-  Register with `rootCmd.AddCommand(showCmd)` in init().
-  File: `cmd/deck/show.go`
-
-- [x] **7.4** Create `deck approve` and `deck reject` commands
-  Create `cmd/deck/approve.go` with:
-
-  ```go
-  var approveCmd = &cobra.Command{
-      Use:   "approve [plan-id]",
-      Short: "Approve a plan for execution",
-      Args:  cobra.ExactArgs(1),
-      RunE: func(cmd *cobra.Command, args []string) error {
-          c := client.New(daemonURL)
-          err := c.ApprovePlan(cmd.Context(), args[0])
-          // Print confirmation: "Plan {id} approved. Execution will begin."
-      },
-  }
-
-  var rejectCmd = &cobra.Command{
-      Use:   "reject [plan-id]",
-      Short: "Reject a plan and return to planning",
-      Args:  cobra.ExactArgs(1),
-      RunE: func(cmd *cobra.Command, args []string) error {
-          c := client.New(daemonURL)
-          err := c.RejectPlan(cmd.Context(), args[0])
-          // Print confirmation: "Plan {id} rejected. Objective returned to planning."
-      },
-  }
-  ```
-
-  Register both with `rootCmd.AddCommand()` in init().
-  File: `cmd/deck/approve.go`
-
-- [x] **7.5** Enhance `deck plan` with flags
-  Update `cmd/deck/plan.go` to support:
-
-  ```go
-  var (
-      planSimple    bool
-      planBlueprint string
-      planAuto      bool
-  )
-
-  var planCmd = &cobra.Command{
-      Use:   "plan [description]",
-      Short: "Create a new objective and plan",
-      Args:  cobra.ExactArgs(1),
-      RunE: func(cmd *cobra.Command, args []string) error {
-          c := client.New(daemonURL)
-
-          if planSimple {
-              // POST /objectives with simple=true
-              // Auto-creates single-stream plan
-              // Print: "Created objective {id} in simple mode."
-              // Print: "Plan {planID} auto-approved. Ready for execution."
-          } else {
-              // Existing behavior: POST /objectives
-              // Print: "Created objective {id}: {description}"
-              // If planAuto: print "Planner will run in batch mode."
-              // Else: print "Planner will start an interactive session."
+          err := c.ExecuteObjective(cmd.Context(), args[0])
+          if err != nil {
+              return err
           }
+          fmt.Printf("Execution started for objective %s.\n", args[0])
           return nil
       },
   }
+  ```
 
-  func init() {
-      planCmd.Flags().BoolVar(&planSimple, "simple", false, "single-agent mode (no decomposition)")
-      planCmd.Flags().StringVar(&planBlueprint, "blueprint", "", "blueprint to use (default: auto-detect)")
-      planCmd.Flags().BoolVar(&planAuto, "auto", false, "batch mode (planner runs autonomously)")
-      rootCmd.AddCommand(planCmd)
+  Register with `rootCmd.AddCommand(execCmd)` in init().
+
+  File: `cmd/deck/exec.go`
+
+- [ ] **7.4** Create `deck agents` command
+  Create `cmd/deck/agents.go` with:
+
+  ```go
+  var agentsCmd = &cobra.Command{
+      Use:   "agents",
+      Short: "List active agent sessions",
+      RunE: func(cmd *cobra.Command, args []string) error {
+          c := client.New(daemonURL)
+          sessions, err := c.ListAgents(cmd.Context())
+          // Print table: ID | ROLE | OBJECTIVE | STREAM | SANDBOX | STATUS | CREATED
+      },
+  }
+
+  var killAgentCmd = &cobra.Command{
+      Use:   "kill [agent-id]",
+      Short: "Terminate an active agent",
+      Args:  cobra.ExactArgs(1),
+      RunE: func(cmd *cobra.Command, args []string) error {
+          c := client.New(daemonURL)
+          err := c.KillAgent(cmd.Context(), args[0])
+          if err != nil {
+              return err
+          }
+          fmt.Printf("Agent %s terminated.\n", args[0])
+          return nil
+      },
   }
   ```
 
-  The `--simple` flag triggers `CreateSimplePlan` on the server side.
-  The `--auto` flag sets planning mode to batch (planner works autonomously, plan appears in approval queue).
-  The `--blueprint` flag overrides blueprint selection.
+  Format `agentsCmd` as aligned table using `text/tabwriter`:
+  ```
+  ID        ROLE      OBJECTIVE   STREAM      STATUS    CREATED
+  a1b2c3    lead      d4e5f6      g7h8i9      running   2m ago
+  j0k1l2    builder   d4e5f6      g7h8i9      pending   30s ago
+  ```
 
-  File: `cmd/deck/plan.go`
+  Register `agentsCmd` with `rootCmd` and `killAgentCmd` as subcommand via init():
+  ```go
+  func init() {
+      agentsCmd.AddCommand(killAgentCmd)
+      rootCmd.AddCommand(agentsCmd)
+  }
+  ```
+
+  Reuse `truncateID` and `timeAgo` helpers from `plans.go` (same `main` package).
+
+  File: `cmd/deck/agents.go`
+
+- [ ] **7.5** Create `deck mail` command
+  Create `cmd/deck/mail.go` with:
+
+  ```go
+  var mailCmd = &cobra.Command{
+      Use:   "mail [agent-name]",
+      Short: "View unread mail for an agent",
+      Args:  cobra.ExactArgs(1),
+      RunE: func(cmd *cobra.Command, args []string) error {
+          c := client.New(daemonURL)
+          msgs, err := c.ListMail(cmd.Context(), args[0])
+          // Print each message with details
+      },
+  }
+
+  var sendMailCmd = &cobra.Command{
+      Use:   "send [to] [type] [payload]",
+      Short: "Send mail to an agent or broadcast group",
+      Args:  cobra.ExactArgs(3),
+      RunE: func(cmd *cobra.Command, args []string) error {
+          c := client.New(daemonURL)
+          // Build MailMessage from args
+          err := c.SendMail(cmd.Context(), msg)
+          // Print: "Message sent to {to}."
+      },
+  }
+  ```
+
+  `mailCmd` output format:
+  ```
+  Unread mail for agent "lead-auth":
+
+  #1  FROM: builder-auth-1  TYPE: status  TIME: 2m ago
+      JWT token generation complete. Moving to validation layer.
+
+  #2  FROM: @human  TYPE: dispatch  TIME: 5m ago
+      Implement JWT refresh token rotation per RFC 7009.
+  ```
+
+  Register `mailCmd` with `rootCmd` and `sendMailCmd` as subcommand:
+  ```go
+  func init() {
+      mailCmd.AddCommand(sendMailCmd)
+      rootCmd.AddCommand(mailCmd)
+  }
+  ```
+
+  The `sendMailCmd` requires the `--objective` flag to associate the message with an objective:
+  ```go
+  var mailObjective string
+  sendMailCmd.Flags().StringVar(&mailObjective, "objective", "", "objective ID (required)")
+  sendMailCmd.MarkFlagRequired("objective")
+  ```
+
+  File: `cmd/deck/mail.go`
 
 ---
 
 ## Phase 8: Integration & Wiring
 
-- [x] **8.1** Wire planning layer into daemon
+- [ ] **8.1** Wire execution layer into daemon
   Update `internal/daemon/daemon.go` to:
-  1. Add fields: `plans *db.PlanStore`, `streams *db.StreamStore`, `planningService *planner.Service`, `lifecycleManager *lifecycle.Manager`
-  2. In `New()`: create `PlanStore` and `StreamStore` from DB connection
-  3. In `New()`: create `lifecycle.Manager` with all stores and event bus
-  4. In `New()`: create `planner.Service` with stores, lifecycle manager, and event bus
-  5. Pass planning service and lifecycle manager to route handlers
 
-  Import the new service packages:
+  1. Add fields to `Daemon` struct:
   ```go
-  "github.com/syndg/deck/internal/services/lifecycle"
-  "github.com/syndg/deck/internal/services/planner"
-  "github.com/syndg/deck/internal/services/agents"
+  mailBroker      *mail.Broker
+  sandboxProvider sandbox.SandboxProvider
+  agentRuntime    runtime.AgentRuntime
+  spawner         *dispatch.Spawner
+  scheduler       *dispatch.Scheduler
+  coordinator     *dispatch.Coordinator
   ```
+
+  2. Import new packages:
+  ```go
+  "github.com/syndg/deck/internal/services/mail"
+  "github.com/syndg/deck/internal/services/dispatch"
+  "github.com/syndg/deck/internal/sandbox/local"
+  "github.com/syndg/deck/internal/runtime/claudecode"
+  ```
+
+  3. In `New()`:
+  ```go
+  // Create mail broker
+  mailBroker := mail.New(mailStore, agentStore, eventBus, logger)
+
+  // Create sandbox provider (local worktrees for now)
+  worktreeDir := filepath.Join(os.TempDir(), "deck-worktrees")
+  sandboxProv := local.New(projectRoot, worktreeDir, logger)
+
+  // Create agent runtime (Claude Code)
+  agentRuntime := claudecode.New(cfg.Planning.Model, logger)
+
+  // Create spawner
+  spawner := dispatch.NewSpawner(agentStore, agentRuntime, sandboxProv, rulesEngine, toolCurator, eventBus, logger)
+
+  // Create scheduler
+  scheduler := dispatch.NewScheduler(streamStore, planStore, cfg.Agents.MaxConcurrent, eventBus, logger)
+
+  // Create step handlers
+  handlers := dispatch.NewHandlers(scheduler, gateRunner, lifecycleMgr, planStore, streamStore, objectiveStore, executionStore, logger)
+
+  // Register step handlers with blueprint engine
+  engine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
+  engine.RegisterHandler(blueprint.StepTypeHuman, handlers.HandleHuman)
+
+  // Create coordinator (also registers agent + blueprint_ref handlers)
+  coordinator := dispatch.NewCoordinator(engine, scheduler, spawner, lifecycleMgr, executionStore, objectiveStore, planStore, streamStore, eventBus, logger)
+  engine.RegisterHandler(blueprint.StepTypeAgent, coordinator.HandleAgentStep)
+  engine.RegisterHandler(blueprint.StepTypeBlueprintRef, coordinator.HandleBlueprintRefStep)
+  ```
+
+  4. In `Start()`: call `coordinator.Start(ctx)` to begin event processing.
+
+  5. In `Stop()`: call `coordinator.Stop()` to cancel active executions.
 
   File: `internal/daemon/daemon.go`
 
-- [x] **8.2** Add objective creation endpoint enhancements
-  Update `handleCreateObjective` in `internal/daemon/routes.go` to accept optional fields:
+- [ ] **8.2** Add event-driven execution trigger
+  Update `internal/daemon/daemon.go` to handle automatic execution triggering:
 
+  The coordinator's `Start()` method already subscribes to `EventObjectiveUpdated`.
+  When it receives an event where the objective transitioned to "approved", it checks
+  if auto-execution should begin.
+
+  For Phase 4, the trigger flow is:
+  1. User calls `POST /plans/{id}/approve` → lifecycle manager transitions objective to "approved"
+  2. Lifecycle manager publishes `EventObjectiveUpdated` with `{"from": "planning", "to": "approved"}`
+  3. Coordinator receives the event in its event loop
+  4. Coordinator calls `StartExecution(objectiveID)` to begin blueprint execution
+
+  Add auto-execution logic to the coordinator's event loop:
   ```go
-  type CreateObjectiveRequest struct {
-      Description string `json:"description"`
-      Blueprint   string `json:"blueprint,omitempty"`   // blueprint override
-      Simple      bool   `json:"simple,omitempty"`      // trigger simple mode
-      Auto        bool   `json:"auto,omitempty"`        // batch planning mode
-  }
+  // In coordinator.Start(), event processing goroutine:
+  case event.Type == domain.EventObjectiveUpdated:
+      var payload map[string]string
+      json.Unmarshal([]byte(event.Payload), &payload)
+      if payload["to"] == string(domain.ObjectiveStatusApproved) {
+          go c.StartExecution(ctx, event.Objective)
+      }
   ```
 
-  When `Simple` is true:
-  1. Create objective
-  2. Call `planningService.StartSimple()` to create and auto-approve a single-stream plan
-  3. Return both objective and plan in response
+  Also handle the `POST /objectives/{id}/execute` manual trigger:
+  - Verify objective status is "approved"
+  - Call `coordinator.StartExecution(ctx, objectiveID)`
+  - Return 200 OK or error
 
-  When `Auto` is true:
-  1. Create objective
-  2. Set a flag indicating batch planning mode (stored in objective metadata or a planning_mode field)
-  3. Return objective (plan will be created asynchronously by a planner agent in Phase 4)
+  File: `internal/daemon/daemon.go`
 
-  File: `internal/daemon/routes.go`
-
-- [x] **8.3** Add unit tests
+- [ ] **8.3** Add unit tests
   Create test files:
 
-  `internal/db/plans_test.go`:
-  - Test `Create` with auto-generated UUID
-  - Test `Get` retrieves correct plan
-  - Test `GetByObjective` returns the right plan
-  - Test `UpdateStatus` changes status
-  - Test `List` returns ordered results
+  `internal/services/mail/broker_test.go`:
+  - Test `Send` persists message and publishes `EventMailSent`
+  - Test `SendBroadcast` with `@all` resolves to all agents for the objective
+  - Test `SendBroadcast` with `@stream:{id}` filters agents by stream
+  - Test `SendBroadcast` with `@leads` filters agents by role
+  - Test `SendBroadcast` with `@human` publishes `EventEscalation` without agent delivery
+  - Test `GetUnread` returns only unread messages
+  - Test `MarkRead` and `MarkAllRead` update read status
+  - Test `IsBroadcast` correctly identifies broadcast addresses
 
-  `internal/db/streams_test.go`:
-  - Test `Create` with JSON serialization of FileScope/Dependencies
-  - Test `Get` round-trips correctly
-  - Test `ListByPlan` returns ordered streams
-  - Test `UpdateStatus` changes status
-  - Test `ListReady` with dependency resolution (setup: 3 streams where stream 3 depends on stream 1 and 2; mark stream 1 completed → stream 3 not ready; mark stream 2 completed → stream 3 ready)
+  `internal/services/dispatch/scheduler_test.go`:
+  - Test `GetReadyStreams` returns streams with all dependencies satisfied
+  - Test `GetReadyStreams` excludes streams with unsatisfied dependencies
+  - Test `GetReadyStreams` respects `maxConcurrent` limit
+  - Test `MarkExecuting` updates stream status and tracks in active set
+  - Test `MarkCompleted` removes from active set and publishes `EventStreamReady` for cascades
+  - Test `MarkFailed` updates status and removes from active set
+  - Test `CanScheduleMore` returns correct result based on active count
 
-  `internal/services/lifecycle/manager_test.go`:
-  - Test valid transitions succeed
-  - Test invalid transitions fail (e.g., planning → completed)
-  - Test `ApprovePlan` updates both plan and objective status
-  - Test `RejectPlan` keeps objective in planning
+  `internal/services/dispatch/spawner_test.go`:
+  - Test `Spawn` creates agent session, sandbox, and process
+  - Test `Spawn` assembles overlay with matched rules and curated tools
+  - Test `Spawn` uses `BuildPlannerOverlay` for planner role
+  - Test `Spawn` publishes `EventAgentSpawned`
+  - Test `Kill` terminates process and marks session as failed
 
-  `internal/services/planner/decompose_test.go`:
-  - Test `ParsePlan` extracts YAML from agent output with code block
-  - Test `ParsePlan` handles raw YAML output (no code block)
-  - Test `ValidatePlan` catches: no streams, missing title, missing file_scope, dangling dependencies
-  - Test `DetectCycles` catches circular dependencies
-  - Test `ToDomain` generates correct IDs and resolves dependencies
-
-  `internal/services/planner/planner_test.go`:
-  - Test `CreatePlan` end-to-end with mock stores
-  - Test `CreateSimplePlan` produces single-stream plan
-  - Test `StartSimple` with auto-approve
-
-  `internal/services/agents/overlay_test.go`:
-  - Test `BuildOverlay` produces all expected sections
-  - Test `BuildOverlay` includes high-priority rules with IMPORTANT prefix
-  - Test `BuildPlannerOverlay` includes plan YAML schema
-  - Test empty file scope produces no File Scope section
+  `internal/sandbox/local/provider_test.go`:
+  - Test `Create` creates a git worktree with correct branch name
+  - Test `Exec` runs commands in the worktree directory
+  - Test `Upload` and `Download` round-trip files correctly
+  - Test `Delete` removes worktree and branch
+  - Test `List` filters sandboxes by labels
+  - Test `Get` returns error for non-existent sandbox
 
   Files:
-  - `internal/db/plans_test.go`
-  - `internal/db/streams_test.go`
-  - `internal/services/lifecycle/manager_test.go`
-  - `internal/services/planner/decompose_test.go`
-  - `internal/services/planner/planner_test.go`
-  - `internal/services/agents/overlay_test.go`
+  - `internal/services/mail/broker_test.go`
+  - `internal/services/dispatch/scheduler_test.go`
+  - `internal/services/dispatch/spawner_test.go`
+  - `internal/sandbox/local/provider_test.go`
 
 ---
 
@@ -854,20 +1079,19 @@ Extend the CLI client to support plan management.
 
 | Step | Task | Phase |
 |------|------|-------|
-| 1 | 1.1 Create plan store | 1 |
-| 2 | 1.2 Create stream store | 1 |
-| 3 | 2.1 Create objective lifecycle manager | 2 |
-| 4 | 3.1 Create role definitions | 3 |
-| 5 | 3.2 Create agent overlay builder | 3 |
-| 6 | 4.1 Create plan decomposition types and parser | 4 |
-| 7 | 4.2 Create planning service | 4 |
-| 8 | 5.1 Create simple mode handler | 5 |
-| 9 | 6.1 Add plan and stream HTTP routes | 6 |
-| 10 | 7.1 Add plan client methods | 7 |
-| 11 | 7.2 Create `deck plans` command | 7 |
-| 12 | 7.3 Create `deck show` command | 7 |
-| 13 | 7.4 Create `deck approve` and `deck reject` commands | 7 |
-| 14 | 7.5 Enhance `deck plan` with flags | 7 |
-| 15 | 8.1 Wire planning layer into daemon | 8 |
-| 16 | 8.2 Add objective creation endpoint enhancements | 8 |
-| 17 | 8.3 Add unit tests | 8 |
+| 1 | 1.1 Create mail broker service | 1 |
+| 2 | 1.2 Add mail HTTP routes | 1 |
+| 3 | 2.1 Implement local sandbox provider | 2 |
+| 4 | 2.2 Implement Claude Code agent runtime | 2 |
+| 5 | 3.1 Create agent spawner service | 3 |
+| 6 | 4.1 Create stream scheduler | 4 |
+| 7 | 5.1 Implement deterministic and human step handlers | 5 |
+| 8 | 6.1 Create execution coordinator | 6 |
+| 9 | 7.1 Add execution management HTTP routes | 7 |
+| 10 | 7.2 Add execution and mail client methods | 7 |
+| 11 | 7.3 Create `deck exec` command | 7 |
+| 12 | 7.4 Create `deck agents` command | 7 |
+| 13 | 7.5 Create `deck mail` command | 7 |
+| 14 | 8.1 Wire execution layer into daemon | 8 |
+| 15 | 8.2 Add event-driven execution trigger | 8 |
+| 16 | 8.3 Add unit tests | 8 |

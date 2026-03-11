@@ -18,6 +18,7 @@ import (
 	"github.com/syndg/deck/internal/harness/tools"
 	"github.com/syndg/deck/internal/services/events"
 	"github.com/syndg/deck/internal/services/lifecycle"
+	mail "github.com/syndg/deck/internal/services/mail"
 	"github.com/syndg/deck/internal/services/planner"
 )
 
@@ -32,6 +33,8 @@ type Daemon struct {
 	executions *db.ExecutionStore
 	plans      *db.PlanStore
 	streams    *db.StreamStore
+
+	mailBroker *mail.Broker
 
 	lifecycleManager *lifecycle.Manager
 	planningService  *planner.Service

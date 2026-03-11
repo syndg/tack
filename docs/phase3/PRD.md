@@ -14,7 +14,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 The `plans` and `streams` tables already exist in `internal/db/migrations.go` (Phase 1, task 3.2). This phase creates the stores that operate on them.
 
-- [ ] **1.1** Create plan store
+- [x] **1.1** Create plan store
   Create `internal/db/plans.go` with:
 
   ```go
@@ -63,7 +63,7 @@ The `plans` and `streams` tables already exist in `internal/db/migrations.go` (P
 
   File: `internal/db/plans.go`
 
-- [ ] **1.2** Create stream store
+- [x] **1.2** Create stream store
   Create `internal/db/streams.go` with:
 
   ```go
@@ -117,7 +117,7 @@ The `plans` and `streams` tables already exist in `internal/db/migrations.go` (P
 
 Centralize objective state transitions and enforce valid lifecycle progression.
 
-- [ ] **2.1** Create objective lifecycle manager
+- [x] **2.1** Create objective lifecycle manager
   Create `internal/services/lifecycle/manager.go` with:
 
   ```go
@@ -194,7 +194,7 @@ Centralize objective state transitions and enforce valid lifecycle progression.
 
 Build the context package that each agent receives: role definition, task spec, file scope, matched rules, quality gates, and communication config.
 
-- [ ] **3.1** Create role definitions
+- [x] **3.1** Create role definitions
   Create `internal/services/agents/roles.go` with:
 
   ```go
@@ -223,7 +223,7 @@ Build the context package that each agent receives: role definition, task spec, 
 
   File: `internal/services/agents/roles.go`
 
-- [ ] **3.2** Create agent overlay builder
+- [x] **3.2** Create agent overlay builder
   Create `internal/services/agents/overlay.go` with:
 
   ```go
@@ -337,7 +337,7 @@ Build the context package that each agent receives: role definition, task spec, 
 
 The planning service manages planner agent sessions — spawning them, collecting their output, parsing structured plans, and storing the results.
 
-- [ ] **4.1** Create plan decomposition types and parser
+- [x] **4.1** Create plan decomposition types and parser
   Create `internal/services/planner/decompose.go` with:
 
   ```go
@@ -396,7 +396,7 @@ The planning service manages planner agent sessions — spawning them, collectin
 
   File: `internal/services/planner/decompose.go`
 
-- [ ] **4.2** Create planning service
+- [x] **4.2** Create planning service
   Create `internal/services/planner/planner.go` with:
 
   ```go
@@ -479,7 +479,7 @@ The planning service manages planner agent sessions — spawning them, collectin
 
 Simple mode collapses the planning pipeline to a single agent in a single sandbox — no decomposition, no streams hierarchy, no inter-agent communication.
 
-- [ ] **5.1** Create simple mode handler
+- [x] **5.1** Create simple mode handler
   Create `internal/services/planner/simple.go` with:
 
   ```go
@@ -523,7 +523,7 @@ Simple mode collapses the planning pipeline to a single agent in a single sandbo
 
 Expose plan management through the daemon's REST API.
 
-- [ ] **6.1** Add plan and stream HTTP routes
+- [x] **6.1** Add plan and stream HTTP routes
   Add to `internal/daemon/routes.go`:
 
   ```go
@@ -585,7 +585,7 @@ Expose plan management through the daemon's REST API.
 
 Extend the CLI client to support plan management.
 
-- [ ] **7.1** Add plan client methods
+- [x] **7.1** Add plan client methods
   Add to `internal/client/client.go`:
 
   ```go
@@ -613,7 +613,7 @@ Extend the CLI client to support plan management.
 
   File: `internal/client/client.go`
 
-- [ ] **7.2** Create `deck plans` command
+- [x] **7.2** Create `deck plans` command
   Create `cmd/deck/plans.go` with:
 
   ```go
@@ -638,7 +638,7 @@ Extend the CLI client to support plan management.
   Register with `rootCmd.AddCommand(plansCmd)` in init().
   File: `cmd/deck/plans.go`
 
-- [ ] **7.3** Create `deck show` command
+- [x] **7.3** Create `deck show` command
   Create `cmd/deck/show.go` with:
 
   ```go
@@ -678,7 +678,7 @@ Extend the CLI client to support plan management.
   Register with `rootCmd.AddCommand(showCmd)` in init().
   File: `cmd/deck/show.go`
 
-- [ ] **7.4** Create `deck approve` and `deck reject` commands
+- [x] **7.4** Create `deck approve` and `deck reject` commands
   Create `cmd/deck/approve.go` with:
 
   ```go
@@ -708,7 +708,7 @@ Extend the CLI client to support plan management.
   Register both with `rootCmd.AddCommand()` in init().
   File: `cmd/deck/approve.go`
 
-- [ ] **7.5** Enhance `deck plan` with flags
+- [x] **7.5** Enhance `deck plan` with flags
   Update `cmd/deck/plan.go` to support:
 
   ```go
@@ -758,7 +758,7 @@ Extend the CLI client to support plan management.
 
 ## Phase 8: Integration & Wiring
 
-- [ ] **8.1** Wire planning layer into daemon
+- [x] **8.1** Wire planning layer into daemon
   Update `internal/daemon/daemon.go` to:
   1. Add fields: `plans *db.PlanStore`, `streams *db.StreamStore`, `planningService *planner.Service`, `lifecycleManager *lifecycle.Manager`
   2. In `New()`: create `PlanStore` and `StreamStore` from DB connection
@@ -775,7 +775,7 @@ Extend the CLI client to support plan management.
 
   File: `internal/daemon/daemon.go`
 
-- [ ] **8.2** Add objective creation endpoint enhancements
+- [x] **8.2** Add objective creation endpoint enhancements
   Update `handleCreateObjective` in `internal/daemon/routes.go` to accept optional fields:
 
   ```go
@@ -799,7 +799,7 @@ Extend the CLI client to support plan management.
 
   File: `internal/daemon/routes.go`
 
-- [ ] **8.3** Add unit tests
+- [x] **8.3** Add unit tests
   Create test files:
 
   `internal/db/plans_test.go`:
