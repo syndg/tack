@@ -315,7 +315,7 @@ Implement the first concrete sandbox provider and agent runtime. The local sandb
 
 The agent spawner coordinates the full lifecycle of creating an agent: recording the session, assembling the overlay (with rules + tools injection), provisioning the sandbox, and starting the agent process.
 
-- [ ] **3.1** Create agent spawner service
+- [x] **3.1** Create agent spawner service
   Create `internal/services/dispatch/spawner.go` with:
 
   ```go

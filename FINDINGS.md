@@ -36,6 +36,17 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 - `Delete` removes sandbox from the in-memory map before running git commands so a failed git cleanup doesn't leave a ghost entry; both `git worktree remove --force` and `git branch -D` are run, with the first error returned if both fail.
 - Package compiles cleanly with `go build ./internal/sandbox/local/...`.
 
+## Task 3.1: Create agent spawner service
+
+- Created `internal/services/dispatch/spawner.go` with `SpawnRequest`, `SpawnResult`, `Spawner`, `NewSpawner`, `Spawn`, and `Kill`.
+- Added `UpdateSandboxAndStatus(ctx, id, sandboxID, status)` to `internal/db/agents.go` — needed to atomically set both `sandbox_id` and `status = "running"` after the process is spawned; `UpdateStatus` alone was insufficient.
+- Added `daemonURL string` field and constructor parameter (not in PRD spec) — required to populate `DECK_DAEMON_URL` env var; there was no other injection point.
+- `Kill` only does session state management (marks "failed", publishes EventAgentFailed) — cannot kill the actual process since the spawner does not track processes internally per PRD design.
+- Rule `ToolScope` → `tools.ToolScope` conversion is done inline in `Spawn`; `rules.ToolScope` and `tools.ToolScope` have identical shape (`Include`/`Exclude []string`) so no adapter type is needed.
+- `QualityGates` in `OverlayInput` is left empty — spawner has no access to plan data and the PRD's `SpawnRequest` does not include gates; expected to be added to `SpawnRequest` by the coordinator (future task).
+- Agent name format: `"{role}-{objID[:8]}-{sessID[:8]}"` for overlay; sandbox name: `"deck-{objID[:8]}-{role}-{sessID[:8]}"` per PRD spec.
+- `DECK_AGENT_TOKEN` is a freshly generated UUID per spawn; the coordinator/wiring layer will need to associate this token with the session if auth is required.
+
 ## Task 2.2: Implement Claude Code agent runtime
 
 - Created `internal/runtime/claudecode/runtime.go` with `Runtime` and `ClaudeCodeProcess` structs implementing `runtime.AgentRuntime` and `runtime.AgentProcess` interfaces.

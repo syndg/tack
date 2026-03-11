@@ -108,6 +108,26 @@ func (s *AgentStore) ListByObjective(ctx context.Context, objectiveID string) ([
 	return sessions, nil
 }
 
+// UpdateSandboxAndStatus sets the sandbox_id and status of an agent session atomically.
+func (s *AgentStore) UpdateSandboxAndStatus(ctx context.Context, id, sandboxID, status string) error {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE agent_sessions SET sandbox_id = ?, status = ?, updated_at = ? WHERE id = ?`,
+		sandboxID, status, time.Now().Unix(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("updating agent session sandbox and status: %w", err)
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("updating agent session sandbox and status: %w", sql.ErrNoRows)
+	}
+	return nil
+}
+
 // UpdateStatus changes the status of an agent session and updates its timestamp.
 func (s *AgentStore) UpdateStatus(ctx context.Context, id string, status string) error {
 	result, err := s.db.ExecContext(ctx,
