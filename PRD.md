@@ -138,7 +138,7 @@ The `mail` table and `MailStore` already exist from Phase 1 (`internal/db/mail.g
 
 Implement the first concrete sandbox provider and agent runtime. The local sandbox provider uses git worktrees for isolation. The Claude Code runtime spawns `claude -p` in headless mode.
 
-- [ ] **2.1** Implement local sandbox provider
+- [x] **2.1** Implement local sandbox provider
   Create `internal/sandbox/local/provider.go` with:
 
   ```go
@@ -232,7 +232,7 @@ Implement the first concrete sandbox provider and agent runtime. The local sandb
 
   File: `internal/sandbox/local/provider.go`
 
-- [ ] **2.2** Implement Claude Code agent runtime
+- [x] **2.2** Implement Claude Code agent runtime
   Create `internal/runtime/claudecode/runtime.go` with:
 
   ```go

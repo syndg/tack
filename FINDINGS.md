@@ -26,3 +26,23 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 - Added `"strconv"` import to `routes.go` for int64 parsing; no mail package import needed in routes.go since handlers access `d.mailBroker` by field (type resolved via daemon.go).
 - Package builds cleanly with `go build ./internal/daemon/...`.
 
+## Task 2.1: Implement local sandbox provider
+
+- Created `internal/sandbox/local/provider.go` with `Provider` and `LocalSandbox` structs, both satisfying the `sandbox.SandboxProvider` and `sandbox.Sandbox` interfaces respectively.
+- Branch naming follows `deck/{objective[:8]}/{role}-{id[:8]}` pattern; falls back to `"agent"` if `deck.role` label is absent.
+- `Exec` uses `sh -c` for shell execution; env is built by layering OS env → sandbox `envVars` → per-call `opts.Env` (later entries shadow earlier ones via shell semantics).
+- Non-zero exit codes from `Exec` are surfaced via `ExecResult.ExitCode` rather than as Go errors — only execution failures (e.g., exec not found) return an error.
+- `Stop` is a no-op for the worktree itself (worktree persists until `Delete`); it only flips status to `"stopped"`. `Start` validates current status is `"stopped"` before transitioning.
+- `Delete` removes sandbox from the in-memory map before running git commands so a failed git cleanup doesn't leave a ghost entry; both `git worktree remove --force` and `git branch -D` are run, with the first error returned if both fail.
+- Package compiles cleanly with `go build ./internal/sandbox/local/...`.
+
+## Task 2.2: Implement Claude Code agent runtime
+
+- Created `internal/runtime/claudecode/runtime.go` with `Runtime` and `ClaudeCodeProcess` structs implementing `runtime.AgentRuntime` and `runtime.AgentProcess` interfaces.
+- `sandbox.Sandbox.Exec()` takes a `string` command (not `[]string`); prompt is shell-quoted using single-quote wrapping with `'\''` escape for embedded single quotes.
+- Env var setup copies all of `opts.EnvVars` into the exec env (includes `DECK_DAEMON_URL` and `DECK_AGENT_TOKEN` if present) — no special pre-extraction needed beyond the loop.
+- Goroutine closes both `doneCh` and `outputCh` via defers on exit; `Wait()` blocks on `doneCh`, then reads the result under the mutex.
+- `Kill()` is idempotent (guarded by `killed` flag + mutex); calls `cancel()` to propagate cancellation into `sandbox.Exec`.
+- Non-zero exit codes produce a `AgentResult{Success: false}` with stderr in `Error`; stdout is emitted as an `"output"` event regardless of success.
+- Package compiles cleanly with `go build ./internal/runtime/claudecode/...`.
+
