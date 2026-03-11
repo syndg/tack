@@ -417,7 +417,7 @@ The agent spawner coordinates the full lifecycle of creating an agent: recording
 
 Dependency-aware scheduler that determines which streams are ready for execution, manages concurrent agent limits, and tracks stream execution state transitions.
 
-- [ ] **4.1** Create stream scheduler
+- [x] **4.1** Create stream scheduler
   Create `internal/services/dispatch/scheduler.go` with:
 
   ```go

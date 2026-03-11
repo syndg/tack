@@ -47,6 +47,16 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 - Agent name format: `"{role}-{objID[:8]}-{sessID[:8]}"` for overlay; sandbox name: `"deck-{objID[:8]}-{role}-{sessID[:8]}"` per PRD spec.
 - `DECK_AGENT_TOKEN` is a freshly generated UUID per spawn; the coordinator/wiring layer will need to associate this token with the session if auth is required.
 
+## Task 4.1: Create stream scheduler
+
+- Created `internal/services/dispatch/scheduler.go` with `Scheduler` struct and `NewScheduler`, `GetReadyStreams`, `MarkExecuting`, `MarkCompleted`, `MarkFailed`, `ActiveCount`, `CanScheduleMore` methods.
+- Added `EventStreamReady EventType = "stream.ready"` to `internal/domain/types.go`.
+- `GetReadyStreams` acquires the mutex to safely compute `available = maxConcurrent - len(activeStreams)`, filters out already-active streams, and caps candidates to the available slot count.
+- PRD cascade step 3 says "Fetch the plan to get planID" but `planID` is already a parameter to `MarkCompleted`; the fetch was omitted as redundant — `ListReady(ctx, planID)` is called directly.
+- `MarkCompleted` publishes `EventStreamReady` with `{"stream_id": <newlyReadyID>, "plan_id": planID}` — the `stream_id` is the newly unblocked stream, not the just-completed stream (consistent with coordinator's "spawn lead for newly ready stream" usage).
+- Mutex is held around `activeStreams` map reads/writes in all methods; `MarkCompleted` drops and re-acquires the lock around the DB call to avoid holding the lock during I/O.
+- Package builds cleanly with `go build ./internal/services/dispatch/... ./internal/domain/...`.
+
 ## Task 2.2: Implement Claude Code agent runtime
 
 - Created `internal/runtime/claudecode/runtime.go` with `Runtime` and `ClaudeCodeProcess` structs implementing `runtime.AgentRuntime` and `runtime.AgentProcess` interfaces.
