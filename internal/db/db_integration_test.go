@@ -60,11 +60,11 @@ func TestStoresIntegration(t *testing.T) {
 		t.Fatalf("unexpected agent role: %q", gotAgent.Role)
 	}
 
-	msg := &domain.MailMessage{From: "planner", To: "worker", Type: "note", Payload: "hello", Objective: obj.ID}
+	msg := &domain.MailMessage{From: "planner", To: "builder", Type: "note", Payload: "hello", Objective: obj.ID}
 	if err := mail.Send(ctx, msg); err != nil {
 		t.Fatalf("Send mail: %v", err)
 	}
-	unread, err := mail.GetUnread(ctx, "worker")
+	unread, err := mail.GetUnread(ctx, "builder")
 	if err != nil {
 		t.Fatalf("GetUnread: %v", err)
 	}
@@ -102,6 +102,39 @@ func TestUpdateMissingReturnsNoRows(t *testing.T) {
 	err = NewObjectiveStore(database.Conn()).UpdateStatus(context.Background(), "missing", domain.ObjectiveStatusFailed)
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("expected sql.ErrNoRows-compatible error, got %v", err)
+	}
+}
+
+func TestRoleMigration_NormalizesDeprecatedRoleToBuilder(t *testing.T) {
+	database, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer database.Close()
+
+	if err := database.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	ctx := context.Background()
+	if _, err := database.Conn().ExecContext(ctx,
+		`INSERT INTO agent_sessions (id, objective_id, stream_id, role, sandbox_id, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"agent-1", "obj-1", "", "worker", "", "pending", time.Now().Unix(), time.Now().Unix(),
+	); err != nil {
+		t.Fatalf("Insert deprecated role row: %v", err)
+	}
+
+	if err := database.Migrate(); err != nil {
+		t.Fatalf("Migrate again: %v", err)
+	}
+
+	got, err := NewAgentStore(database.Conn()).Get(ctx, "agent-1")
+	if err != nil {
+		t.Fatalf("Get migrated agent: %v", err)
+	}
+	if got.Role != domain.AgentRoleBuilder {
+		t.Fatalf("role = %q, want %q", got.Role, domain.AgentRoleBuilder)
 	}
 }
 

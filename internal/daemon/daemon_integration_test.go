@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -351,3 +352,310 @@ steps:
 		t.Fatalf("expected project override, got %q", bp.Description)
 	}
 }
+
+func TestSimpleHotfixExecution_CompletesWithNormalizedBlueprintAndQualityGates(t *testing.T) {
+	restoreRepo := setupGitRepo(t)
+	defer restoreRepo()
+	installFakeClaude(t, "#!/bin/sh\necho \"done role=$DECK_AGENT_ROLE\"\nexit 0\n")
+
+	baseURL, shutdown := startExecutionDaemon(t, "127.0.0.1:19805", []string{"true"})
+	defer shutdown()
+
+	c := client.New(baseURL)
+	resp, err := c.CreateObjectiveSimple(context.Background(), "fix typo", "hotfix")
+	if err != nil {
+		t.Fatalf("CreateObjectiveSimple: %v", err)
+	}
+
+	waitForCondition(t, 10*time.Second, func() bool {
+		obj, err := c.GetObjective(context.Background(), resp.Objective.ID)
+		return err == nil && obj.Status == "reviewing"
+	})
+
+	executions := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
+	if len(executions) != 1 || executions[0]["status"] != "completed" {
+		t.Fatalf("executions = %#v, want one completed execution", executions)
+	}
+
+	plan := mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+resp.Objective.ID+"/plan")
+	if plan.Plan.Status != "completed" {
+		t.Fatalf("plan status = %q, want completed", plan.Plan.Status)
+	}
+	if len(plan.Streams) != 1 || plan.Streams[0].Status != "completed" {
+		t.Fatalf("streams = %#v, want one completed stream", plan.Streams)
+	}
+
+	agents := mustGetJSON[[]map[string]any](t, baseURL+"/agents")
+	if len(agents) != 1 {
+		t.Fatalf("agents len = %d, want 1", len(agents))
+	}
+	if agents[0]["role"] != "builder" || agents[0]["status"] != "completed" {
+		t.Fatalf("agent = %#v, want completed builder", agents[0])
+	}
+}
+
+func TestFeatureExecution_ApprovedPlanStartsAtDispatchAndCompletes(t *testing.T) {
+	restoreRepo := setupGitRepo(t)
+	defer restoreRepo()
+	installFakeClaude(t, "#!/bin/sh\necho \"done role=$DECK_AGENT_ROLE\"\nexit 0\n")
+
+	baseURL, shutdown := startExecutionDaemon(t, "127.0.0.1:19806", nil)
+	defer shutdown()
+
+	c := client.New(baseURL)
+	obj, err := c.CreateObjectiveWithOptions(context.Background(), "feature work", client.CreateObjectiveOptions{Blueprint: "Feature Implementation"})
+	if err != nil {
+		t.Fatalf("CreateObjectiveWithOptions: %v", err)
+	}
+
+	postJSON(t, baseURL+"/plans", map[string]any{
+		"objective_id": obj.ID,
+		"output": `streams:
+  - title: "stream one"
+    description: "do the work"
+    file_scope:
+      - "README.md"
+    dependencies: []
+quality_gates: []
+`,
+	}, http.StatusCreated, nil)
+
+	plan := mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+obj.ID+"/plan")
+	if err := c.ApprovePlan(context.Background(), plan.Plan.ID); err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+
+	waitForCondition(t, 10*time.Second, func() bool {
+		got, err := c.GetObjective(context.Background(), obj.ID)
+		return err == nil && got.Status == "reviewing"
+	})
+
+	executions := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
+	if len(executions) != 1 || executions[0]["status"] != "completed" {
+		t.Fatalf("executions = %#v, want one completed execution", executions)
+	}
+
+	agents := mustGetJSON[[]map[string]any](t, baseURL+"/agents")
+	if len(agents) != 1 {
+		t.Fatalf("agents len = %d, want 1", len(agents))
+	}
+	if agents[0]["role"] != "lead" {
+		t.Fatalf("agent role = %v, want lead", agents[0]["role"])
+	}
+
+	plan = mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+obj.ID+"/plan")
+	if plan.Plan.Status != "completed" {
+		t.Fatalf("plan status = %q, want completed", plan.Plan.Status)
+	}
+	if len(plan.Streams) != 1 || plan.Streams[0].Status != "completed" {
+		t.Fatalf("streams = %#v, want one completed stream", plan.Streams)
+	}
+}
+
+func TestExecutionFailure_TransitionsObjectiveAndPlanFailed(t *testing.T) {
+	restoreRepo := setupGitRepo(t)
+	defer restoreRepo()
+	installFakeClaude(t, "#!/bin/sh\necho \"done role=$DECK_AGENT_ROLE\"\nexit 0\n")
+
+	baseURL, shutdown := startExecutionDaemon(t, "127.0.0.1:19807", []string{"false"})
+	defer shutdown()
+
+	c := client.New(baseURL)
+	resp, err := c.CreateObjectiveSimple(context.Background(), "fix typo", "hotfix")
+	if err != nil {
+		t.Fatalf("CreateObjectiveSimple: %v", err)
+	}
+
+	waitForCondition(t, 10*time.Second, func() bool {
+		obj, err := c.GetObjective(context.Background(), resp.Objective.ID)
+		return err == nil && obj.Status == "failed"
+	})
+
+	executions := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
+	if len(executions) != 1 || executions[0]["status"] != "failed" {
+		t.Fatalf("executions = %#v, want one failed execution", executions)
+	}
+
+	plan := mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+resp.Objective.ID+"/plan")
+	if plan.Plan.Status != "failed" {
+		t.Fatalf("plan status = %q, want failed", plan.Plan.Status)
+	}
+	if len(plan.Streams) != 1 || plan.Streams[0].Status != "failed" {
+		t.Fatalf("streams = %#v, want one failed stream", plan.Streams)
+	}
+}
+
+func TestKillAgent_StopsExecutionAndMarksFailure(t *testing.T) {
+	restoreRepo := setupGitRepo(t)
+	defer restoreRepo()
+	installFakeClaude(t, "#!/bin/sh\nsleep 5\necho \"done role=$DECK_AGENT_ROLE\"\nexit 0\n")
+
+	baseURL, shutdown := startExecutionDaemon(t, "127.0.0.1:19808", nil)
+	defer shutdown()
+
+	c := client.New(baseURL)
+	resp, err := c.CreateObjectiveSimple(context.Background(), "fix typo", "hotfix")
+	if err != nil {
+		t.Fatalf("CreateObjectiveSimple: %v", err)
+	}
+
+	var runningAgentID string
+	waitForCondition(t, 10*time.Second, func() bool {
+		agents := mustGetJSON[[]map[string]any](t, baseURL+"/agents")
+		for _, agent := range agents {
+			if agent["status"] == "running" {
+				runningAgentID, _ = agent["id"].(string)
+				return true
+			}
+		}
+		return false
+	})
+
+	if err := c.KillAgent(context.Background(), runningAgentID); err != nil {
+		t.Fatalf("KillAgent: %v", err)
+	}
+
+	waitForCondition(t, 10*time.Second, func() bool {
+		obj, err := c.GetObjective(context.Background(), resp.Objective.ID)
+		return err == nil && obj.Status == "failed"
+	})
+
+	executions := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
+	if len(executions) != 1 || executions[0]["status"] != "failed" {
+		t.Fatalf("executions = %#v, want one failed execution", executions)
+	}
+
+	agents := mustGetJSON[[]map[string]any](t, baseURL+"/agents")
+	if len(agents) != 1 || agents[0]["status"] != "failed" {
+		t.Fatalf("agents = %#v, want one failed agent", agents)
+	}
+}
+
+func setupGitRepo(t *testing.T) func() {
+	t.Helper()
+	repo := t.TempDir()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir repo: %v", err)
+	}
+
+	runCmd := func(name string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(name, args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v\n%s", name, args, err, string(out))
+		}
+	}
+
+	runCmd("git", "init", "-q")
+	runCmd("git", "config", "user.email", "test@example.com")
+	runCmd("git", "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# test repo\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile README: %v", err)
+	}
+	runCmd("git", "add", "README.md")
+	runCmd("git", "commit", "-q", "-m", "init")
+
+	return func() {
+		_ = os.Chdir(cwd)
+	}
+}
+
+func installFakeClaude(t *testing.T, script string) {
+	t.Helper()
+	binDir := t.TempDir()
+	path := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile fake claude: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func startExecutionDaemon(t *testing.T, listen string, qualityGates []string) (string, func()) {
+	t.Helper()
+	cfg := config.Default()
+	cfg.Daemon.Listen = listen
+	cfg.Daemon.DataDir = t.TempDir()
+	cfg.QualityGates = append([]string(nil), qualityGates...)
+
+	d, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- d.Start()
+	}()
+
+	baseURL := "http://" + cfg.Daemon.Listen
+	waitForHTTP(t, baseURL+"/health")
+
+	return baseURL, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = d.Shutdown(ctx)
+		<-errCh
+	}
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("condition not met before timeout")
+}
+
+func postJSON(t *testing.T, url string, body any, wantStatus int, out any) {
+	t.Helper()
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Marshal body: %v", err)
+	}
+	resp, err := http.Post(url, "application/json", bytes.NewReader(jsonBody))
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != wantStatus {
+		var payload map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&payload)
+		t.Fatalf("POST %s: status=%d want=%d body=%v", url, resp.StatusCode, wantStatus, payload)
+	}
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			t.Fatalf("Decode response: %v", err)
+		}
+	}
+}
+
+func mustGetJSON[T any](t *testing.T, url string) T {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		var zero T
+		var payload map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&payload)
+		t.Fatalf("GET %s: status=%d body=%v", url, resp.StatusCode, payload)
+		return zero
+	}
+	var out T
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Decode GET %s: %v", url, err)
+	}
+	return out
+}
+

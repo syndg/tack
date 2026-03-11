@@ -61,7 +61,7 @@ func (b *Broker) Send(ctx context.Context, msg *domain.MailMessage) error {
 //
 //	@all           — all active agents for the objective
 //	@stream:{id}   — all agents assigned to the given stream
-//	@builders      — all agents with role "worker" (builder sub-role)
+//	@builders      — all agents with role "builder"
 //	@leads         — all agents with role "lead"
 //	@human         — special: publish EventEscalation, do not deliver to agents
 func (b *Broker) SendBroadcast(ctx context.Context, from, broadcastAddr, msgType, payload, objectiveID, streamID string) error {
@@ -93,7 +93,7 @@ func (b *Broker) SendBroadcast(ctx context.Context, from, broadcastAddr, msgType
 				recipients = append(recipients, s)
 			}
 		case broadcastAddr == "@builders":
-			if s.Role == domain.AgentRoleWorker {
+			if s.Role == domain.AgentRoleBuilder {
 				recipients = append(recipients, s)
 			}
 		case broadcastAddr == "@leads":

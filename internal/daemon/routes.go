@@ -661,16 +661,16 @@ func (d *Daemon) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, session)
 }
 
-// handleKillAgent terminates an active agent session via the spawner.
+// handleKillAgent terminates an active agent session via the coordinator.
 func (d *Daemon) handleKillAgent(w http.ResponseWriter, r *http.Request) {
-	if d.spawner == nil {
-		writeError(w, http.StatusServiceUnavailable, "spawner not available")
+	if d.coordinator == nil {
+		writeError(w, http.StatusServiceUnavailable, "coordinator not available")
 		return
 	}
 
 	id := r.PathValue("id")
 
-	if err := d.spawner.Kill(r.Context(), id); err != nil {
+	if err := d.coordinator.KillAgent(r.Context(), id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "agent session not found")
 			return

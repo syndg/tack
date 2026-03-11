@@ -54,4 +54,4 @@ _(none yet)_
 - **What exists:** Objectives now persist `planning_mode="batch"` when `auto=true`
 - **What's missing:** A planner execution loop that reads `planning_mode` and actually auto-spawns/runs the planner agent
 - **Deferred to:** Phase 4 (Execution) — wire planner spawning to the persisted mode
-- **Reason:** Phase 3 now records the intent correctly, but there is still no runtime planner worker to act on it.
+- **Reason:** Phase 3 now records the intent correctly, but there is still no runtime planner execution loop to act on it.

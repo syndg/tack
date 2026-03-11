@@ -55,7 +55,7 @@ The `mail` table and `MailStore` already exist from Phase 1 (`internal/db/mail.g
   // Broadcast addresses:
   //   @all           — all active agents for the objective
   //   @stream:{id}   — all agents assigned to the given stream
-  //   @builders      — all agents with role "worker" (builder sub-role)
+  //   @builders      — all agents with role "builder"
   //   @leads         — all agents with role "lead"
   //   @human         — special: publish EventEscalation, do not deliver to agents
   func (b *Broker) SendBroadcast(ctx context.Context, from, broadcastAddr, msgType, payload, objectiveID, streamID string) error
@@ -79,7 +79,7 @@ The `mail` table and `MailStore` already exist from Phase 1 (`internal/db/mail.g
   2. Filter by broadcast address:
      - `@all`: no filter — deliver to all
      - `@stream:{streamID}`: match `agent.StreamID == streamID`
-     - `@builders`: match `agent.Role == "worker"`
+     - `@builders`: match `agent.Role == "builder"`
      - `@leads`: match `agent.Role == "lead"`
      - `@human`: publish `EventEscalation` event with payload, return immediately
   3. Fan-out: create individual `MailMessage` per recipient, call `mail.Send()` for each

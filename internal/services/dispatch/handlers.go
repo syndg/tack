@@ -106,9 +106,9 @@ func (h *Handlers) HandleHuman(ctx context.Context, exec *blueprint.Execution, s
 }
 
 // dispatchStreams implements the "dispatch_streams" deterministic action.
-// Gets the plan for the objective, fetches ready streams from the scheduler,
-// marks each as executing, and publishes EventStreamReady for the coordinator
-// to pick up and spawn lead agents.
+// It validates the plan and logs the set of currently ready streams. Actual
+// claiming/spawning is owned by the blueprint_ref handler so the execution
+// loop doesn't race with the global event loop over initial stream dispatch.
 func (h *Handlers) dispatchStreams(ctx context.Context, exec *blueprint.Execution) (blueprint.StepResult, error) {
 	plan, err := h.plans.GetByObjective(ctx, exec.ObjectiveID)
 	if err != nil {
@@ -134,27 +134,7 @@ func (h *Handlers) dispatchStreams(ctx context.Context, exec *blueprint.Executio
 	)
 
 	for _, stream := range ready {
-		if err := h.scheduler.MarkExecuting(ctx, stream.ID); err != nil {
-			return blueprint.StepResult{
-				Status: blueprint.StepStatusFailed,
-				Error:  fmt.Sprintf("marking stream %s executing: %s", stream.ID, err),
-			}, nil
-		}
-
-		payload, _ := json.Marshal(map[string]string{
-			"stream_id":    stream.ID,
-			"plan_id":      plan.ID,
-			"objective_id": exec.ObjectiveID,
-		})
-		h.eventBus.Publish(domain.Event{
-			Type:      domain.EventStreamReady,
-			Objective: exec.ObjectiveID,
-			Stream:    stream.ID,
-			Payload:   string(payload),
-			CreatedAt: time.Now(),
-		})
-
-		h.logger.Info("stream dispatched",
+		h.logger.Info("stream ready for execution",
 			"stream_id", stream.ID,
 			"stream_title", stream.Title,
 		)
@@ -192,7 +172,8 @@ func (h *Handlers) runQualityGates(ctx context.Context, exec *blueprint.Executio
 		}
 	}
 
-	// Find a lead agent sandbox for the objective to run gates in.
+	// Prefer a lead agent sandbox for the objective, but fall back to any agent
+	// sandbox. Hotfix/single-agent flows only have a builder sandbox.
 	sessions, err := h.agents.ListByObjective(ctx, exec.ObjectiveID)
 	if err != nil {
 		return blueprint.StepResult{
@@ -201,28 +182,38 @@ func (h *Handlers) runQualityGates(ctx context.Context, exec *blueprint.Executio
 		}, nil
 	}
 
-	var sb sandbox.Sandbox
-	for _, session := range sessions {
-		if session.SandboxID == "" || session.Role != domain.AgentRoleLead {
-			continue
+	findSandbox := func(preferredRole domain.AgentRole) sandbox.Sandbox {
+		for _, session := range sessions {
+			if session.SandboxID == "" {
+				continue
+			}
+			if preferredRole != "" && session.Role != preferredRole {
+				continue
+			}
+			found, err := h.sandboxProvider.Get(ctx, session.SandboxID)
+			if err != nil {
+				h.logger.Warn("could not retrieve sandbox for agent",
+					"sandbox_id", session.SandboxID,
+					"session_id", session.ID,
+					"role", session.Role,
+					"error", err,
+				)
+				continue
+			}
+			return found
 		}
-		found, err := h.sandboxProvider.Get(ctx, session.SandboxID)
-		if err != nil {
-			h.logger.Warn("could not retrieve sandbox for lead agent",
-				"sandbox_id", session.SandboxID,
-				"session_id", session.ID,
-				"error", err,
-			)
-			continue
-		}
-		sb = found
-		break
+		return nil
 	}
 
+	var sb sandbox.Sandbox
+	sb = findSandbox(domain.AgentRoleLead)
+	if sb == nil {
+		sb = findSandbox("")
+	}
 	if sb == nil {
 		return blueprint.StepResult{
 			Status: blueprint.StepStatusFailed,
-			Error:  "no active lead agent sandbox found for quality gate execution",
+			Error:  "no agent sandbox found for quality gate execution",
 		}, nil
 	}
 

@@ -79,7 +79,7 @@ func TestSendBroadcast_All(t *testing.T) {
 	ctx := context.Background()
 
 	objID := "obj-all"
-	roles := []domain.AgentRole{domain.AgentRoleLead, domain.AgentRoleWorker, domain.AgentRolePlanner}
+	roles := []domain.AgentRole{domain.AgentRoleLead, domain.AgentRoleBuilder, domain.AgentRolePlanner}
 	var sessions []*domain.AgentSession
 	for _, role := range roles {
 		sess := &domain.AgentSession{ObjectiveID: objID, Role: role}
@@ -112,8 +112,8 @@ func TestSendBroadcast_Stream(t *testing.T) {
 	targetStream := "stream-abc"
 	otherStream := "stream-xyz"
 
-	inStream := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleWorker, StreamID: targetStream}
-	outOfStream := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleWorker, StreamID: otherStream}
+	inStream := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleBuilder, StreamID: targetStream}
+	outOfStream := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleBuilder, StreamID: otherStream}
 	f.agentStore.Create(ctx, inStream)
 	f.agentStore.Create(ctx, outOfStream)
 
@@ -137,9 +137,9 @@ func TestSendBroadcast_Leads(t *testing.T) {
 
 	objID := "obj-leads"
 	lead := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleLead}
-	worker := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleWorker}
+	builder := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleBuilder}
 	f.agentStore.Create(ctx, lead)
-	f.agentStore.Create(ctx, worker)
+	f.agentStore.Create(ctx, builder)
 
 	if err := f.broker.SendBroadcast(ctx, "sender", "@leads", "note", "hi", objID, ""); err != nil {
 		t.Fatalf("SendBroadcast: %v", err)
@@ -149,9 +149,37 @@ func TestSendBroadcast_Leads(t *testing.T) {
 	if len(leadMsgs) != 1 {
 		t.Errorf("lead: expected 1 message, got %d", len(leadMsgs))
 	}
-	workerMsgs, _ := f.broker.GetUnread(ctx, worker.ID)
-	if len(workerMsgs) != 0 {
-		t.Errorf("worker: expected 0 messages (leads only), got %d", len(workerMsgs))
+	builderMsgs, _ := f.broker.GetUnread(ctx, builder.ID)
+	if len(builderMsgs) != 0 {
+		t.Errorf("builder: expected 0 messages (leads only), got %d", len(builderMsgs))
+	}
+}
+
+func TestSendBroadcast_BuildersMatchesBuilderRole(t *testing.T) {
+	f := setupBroker(t)
+	ctx := context.Background()
+
+	objID := "obj-builders"
+	builder := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleBuilder}
+	lead := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleLead}
+	if err := f.agentStore.Create(ctx, builder); err != nil {
+		t.Fatalf("Create builder: %v", err)
+	}
+	if err := f.agentStore.Create(ctx, lead); err != nil {
+		t.Fatalf("Create lead: %v", err)
+	}
+
+	if err := f.broker.SendBroadcast(ctx, "sender", "@builders", "note", "hi", objID, ""); err != nil {
+		t.Fatalf("SendBroadcast: %v", err)
+	}
+
+	builderMsgs, _ := f.broker.GetUnread(ctx, builder.ID)
+	if len(builderMsgs) != 1 {
+		t.Errorf("builder: expected 1 message, got %d", len(builderMsgs))
+	}
+	leadMsgs, _ := f.broker.GetUnread(ctx, lead.ID)
+	if len(leadMsgs) != 0 {
+		t.Errorf("lead: expected 0 messages (@builders only), got %d", len(leadMsgs))
 	}
 }
 
@@ -163,7 +191,7 @@ func TestSendBroadcast_Human_PublishesEscalationWithoutAgentDelivery(t *testing.
 	defer unsub()
 
 	objID := "obj-human"
-	agent := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleWorker}
+	agent := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleBuilder}
 	f.agentStore.Create(ctx, agent)
 
 	if err := f.broker.SendBroadcast(ctx, "sender", "@human", "question", "help?", objID, ""); err != nil {

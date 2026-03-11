@@ -163,6 +163,19 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 - All tests use real SQLite DBs via `db.Open(t.TempDir())` + `Migrate()`; no mocking of the store layer.
 - `broker_test.go`: 8 tests covering `Send`, `SendBroadcast` (all 5 address types), `GetUnread`, `MarkRead`, `MarkAllRead`, `IsBroadcast`; event assertions use a buffered `bus.Subscribe(10)` channel drained with a non-blocking select.
 - `scheduler_test.go`: 7 tests covering `GetReadyStreams` (dependency, concurrency), `MarkExecuting`, `MarkCompleted` (cascade event), `MarkFailed`, `CanScheduleMore`; cascade test creates A→B dependency chain and verifies `EventStreamReady` is published after A completes.
-- `spawner_test.go`: 5 tests using mock `AgentRuntime` and `SandboxProvider` defined in the test file; `mockRuntime.lastOpts` captures the opts for overlay assertions; fixed wrong role assertion (`"builder"` is stored verbatim, not mapped to `AgentRoleWorker`).
+- `spawner_test.go`: 5 tests using mock `AgentRuntime` and `SandboxProvider` defined in the test file; `mockRuntime.lastOpts` captures the opts for overlay assertions; fixed wrong role assertion so sessions persist the concrete `"builder"` role unchanged.
 - `provider_test.go`: 6 tests exercising real git worktree operations; `initTestRepo` uses `t.Skip` if git is unavailable, and passes `-c user.email/user.name` inline to avoid needing global git config.
 - `go build ./...` and all new test files pass cleanly.
+
+## Post-review remediation patch
+
+- Thorough validation against a real daemon + temp git repos exposed several Phase 4 integration bugs that unit tests had not covered; fixed them in one follow-up patch and expanded integration coverage.
+- **Blueprint resolution:** `blueprint.Registry` now keeps normalized aliases, so persisted slugs like `"hotfix"` and `"feature"` resolve to shipped blueprints (`Hotfix`, `Feature Implementation`) instead of failing at execution start.
+- **Approved-objective execution start:** `Coordinator.StartExecution()` now defaults to `Feature Implementation` by canonical name, marks the plan `executing`, and pre-advances approved objectives past the planner + human plan-approval steps when the selected blueprint starts with those phases. This keeps execution from re-entering planning after a plan is already approved.
+- **Initial stream dispatch deadlock:** `dispatch_streams` no longer marks streams `executing` before the `blueprint_ref` step can claim them. Claiming/spawning is now owned by the execution loop, which removes the `pending`/`executing` race that previously left feature executions stuck forever at `per_stream`.
+- **Quality gate sandbox selection:** `run_quality_gates` now prefers a lead sandbox but falls back to any available agent sandbox for the objective. This fixes hotfix/single-agent runs, which only spawn a builder sandbox.
+- **Execution lifecycle propagation:** `runExecution()` now propagates terminal execution state back into persisted lifecycle state. Successful runs mark plans completed (and single-stream plans' lone stream completed if needed). Failed runs mark plan/stream failed and transition the objective to `failed` when valid.
+- **Real agent killing:** the daemon kill route now goes through `Coordinator.KillAgent()` rather than the spawner-only status update. The coordinator tracks live processes, calls `process.Kill()`, records explicit termination, and suppresses later false-success completion when a killed process exits.
+- **Role taxonomy cleanup:** added explicit domain role constants for `builder`, `reviewer`, and `scout`; `@builders` broadcast now matches only concrete builder sessions.
+- **Expanded integration tests:** added daemon-level tests covering normalized hotfix execution with quality gates, approved feature execution without re-planning, lifecycle propagation on failed execution, real kill behavior, and builder broadcast alias resolution.
+- Validation after the remediation patch: `go test ./...` ✅ and `go test -race ./...` ✅.

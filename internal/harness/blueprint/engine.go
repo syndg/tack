@@ -54,6 +54,11 @@ func (e *Engine) RegisterHandler(stepType StepType, handler StepHandler) {
 	e.handlers[stepType] = handler
 }
 
+// GetBlueprint returns the loaded blueprint by name or alias.
+func (e *Engine) GetBlueprint(name string) (*Blueprint, bool) {
+	return e.registry.Get(name)
+}
+
 // Start creates a new Execution for the given blueprint and objective,
 // initializes all step states to "pending", sets the first step as current,
 // and returns the execution. Does NOT advance — call Advance() to begin.

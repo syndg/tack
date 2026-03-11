@@ -204,9 +204,9 @@ Build the context package that each agent receives: role definition, task spec, 
   type RoleDefinition struct {
       Name        string   // "planner", "lead", "builder", "reviewer", "merger"
       Description string   // human-readable role description
-      MaxDepth    int      // hierarchy depth (0=planner, 1=lead, 2=worker)
-      CanSpawn    []string // roles this role can spawn (planner→lead, lead→worker)
-      Persistent  bool     // true for planner/lead, false for workers
+      MaxDepth    int      // hierarchy depth (0=planner, 1=lead, 2=execution agent)
+      CanSpawn    []string // roles this role can spawn (planner→lead, lead→builder/reviewer/merger)
+      Persistent  bool     // true for planner/lead, false for delegated execution agents
   }
 
   // DefaultRoles returns the built-in role definitions.
@@ -215,7 +215,7 @@ Build the context package that each agent receives: role definition, task spec, 
 
   Default roles:
   - `planner`: depth 0, can spawn `["lead"]`, persistent, "Explores codebase and decomposes objectives into parallel work streams"
-  - `lead`: depth 1, can spawn `["builder", "reviewer", "merger"]`, persistent, "Manages a work stream, writes specs, coordinates workers"
+  - `lead`: depth 1, can spawn `["builder", "reviewer", "merger"]`, persistent, "Manages a work stream, writes specs, and coordinates builder/reviewer/scout agents"
   - `builder`: depth 2, can spawn `[]`, ephemeral, "Implements code changes according to spec"
   - `reviewer`: depth 2, can spawn `[]`, ephemeral, "Reviews implementation for correctness and quality"
   - `merger`: depth 1, can spawn `[]`, ephemeral, "Resolves merge conflicts using semantic understanding"

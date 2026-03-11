@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +34,7 @@ type Coordinator struct {
 	mu          sync.Mutex
 	activeExecs map[string]context.CancelFunc // objectiveID → cancel
 	agentMap    map[string]*SpawnResult        // sessionID → spawn result
+	terminated  map[string]bool               // sessionID → explicitly killed
 }
 
 // NewCoordinator creates a new Coordinator and registers step handlers with the engine.
@@ -61,6 +63,7 @@ func NewCoordinator(
 		logger:      logger,
 		activeExecs: make(map[string]context.CancelFunc),
 		agentMap:    make(map[string]*SpawnResult),
+		terminated:  make(map[string]bool),
 	}
 
 	// Register step handlers with the engine.
@@ -71,12 +74,8 @@ func NewCoordinator(
 }
 
 // Start subscribes to events and begins processing.
-// Subscribes to:
-//
-//	EventObjectiveUpdated — detect objective transitions to "approved" → start execution
-//	EventStreamReady — spawn lead agents for newly unblocked streams
-//
-// Runs event processing in a background goroutine.
+// Subscribes to objective lifecycle events only; stream execution is coordinated
+// from within the blueprint_ref handler to avoid double-claiming streams.
 func (c *Coordinator) Start(ctx context.Context) error {
 	c.ctx = ctx
 	sub, unsub := c.eventBus.Subscribe(128)
@@ -94,8 +93,6 @@ func (c *Coordinator) Start(ctx context.Context) error {
 				switch event.Type {
 				case domain.EventObjectiveUpdated:
 					c.handleObjectiveUpdated(ctx, event)
-				case domain.EventStreamReady:
-					c.handleStreamReady(ctx, event)
 				}
 			}
 		}
@@ -244,14 +241,15 @@ func (c *Coordinator) StartExecution(ctx context.Context, objectiveID string) er
 	}
 
 	// 2. Fetch plan for the objective.
-	if _, err := c.plans.GetByObjective(ctx, objectiveID); err != nil {
+	plan, err := c.plans.GetByObjective(ctx, objectiveID)
+	if err != nil {
 		return fmt.Errorf("getting plan for objective %s: %w", objectiveID, err)
 	}
 
-	// 3. Determine blueprint name, defaulting to "feature".
+	// 3. Determine blueprint name, defaulting to the shipped feature blueprint.
 	blueprintName := obj.Blueprint
 	if blueprintName == "" {
-		blueprintName = "feature"
+		blueprintName = "Feature Implementation"
 	}
 
 	// 4. Create execution via engine.Start.
@@ -259,13 +257,17 @@ func (c *Coordinator) StartExecution(ctx context.Context, objectiveID string) er
 	if err != nil {
 		return fmt.Errorf("starting blueprint execution for objective %s: %w", objectiveID, err)
 	}
+	c.prepareExecutionForApprovedObjective(exec)
 	if err := c.executions.Create(ctx, exec); err != nil {
 		return fmt.Errorf("persisting execution for objective %s: %w", objectiveID, err)
 	}
 
-	// 5. Transition objective to "executing".
+	// 5. Transition objective and plan to executing.
 	if err := c.lifecycle.Transition(ctx, objectiveID, domain.ObjectiveStatusExecuting); err != nil {
 		return fmt.Errorf("transitioning objective %s to executing: %w", objectiveID, err)
+	}
+	if err := c.plans.UpdateStatus(ctx, plan.ID, domain.PlanStatusExecuting); err != nil {
+		return fmt.Errorf("transitioning plan %s to executing: %w", plan.ID, err)
 	}
 
 	// Publish EventExecutionStarted.
@@ -322,10 +324,18 @@ func (c *Coordinator) runExecution(ctx context.Context, exec *blueprint.Executio
 
 		updated, err := c.engine.Advance(ctx, exec)
 		if err != nil {
+			if ctx.Err() != nil {
+				c.logger.Info("execution advance cancelled",
+					"execution_id", exec.ID,
+					"objective_id", exec.ObjectiveID,
+				)
+				return
+			}
 			c.logger.Error("engine advance failed",
 				"execution_id", exec.ID,
 				"error", err,
 			)
+			c.failExecution(ctx, exec.ObjectiveID, fmt.Sprintf("engine advance failed: %v", err))
 			return
 		}
 		exec = updated
@@ -340,12 +350,14 @@ func (c *Coordinator) runExecution(ctx context.Context, exec *blueprint.Executio
 
 		switch exec.Status {
 		case "completed":
+			c.completeExecution(ctx, exec.ObjectiveID)
 			c.logger.Info("execution completed",
 				"execution_id", exec.ID,
 				"objective_id", exec.ObjectiveID,
 			)
 			return
 		case "failed":
+			c.failExecution(ctx, exec.ObjectiveID, "execution failed")
 			c.logger.Error("execution failed",
 				"execution_id", exec.ID,
 				"objective_id", exec.ObjectiveID,
@@ -364,14 +376,8 @@ func (c *Coordinator) runExecution(ctx context.Context, exec *blueprint.Executio
 
 // HandleAgentStep implements the StepHandler for agent-type blueprint steps.
 // Registered with the engine as the StepTypeAgent handler.
-//  1. Determine role from step.Role
-//  2. Build SpawnRequest (objective, role, task spec)
-//  3. Call spawner.Spawn() to create sandbox + agent
-//  4. Track the spawn result in agentMap
-//  5. Call process.Wait() — blocks until agent completes
-//  6. Update agent session status (completed or failed)
-//  7. Publish EventAgentCompleted or EventAgentFailed
-//  8. Return StepResult based on agent result
+// For single-stream executions (e.g. Hotfix) the lone stream is attached to the
+// agent session so stream state and quality gates operate on the same sandbox.
 func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error) {
 	role := step.Role
 	if role == "" {
@@ -389,13 +395,38 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		}, nil
 	}
 
+	stream, err := c.singleStreamForObjective(ctx, exec.ObjectiveID)
+	if err != nil {
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("getting stream context: %s", err),
+		}, nil
+	}
+	if stream != nil && stream.Status == "pending" {
+		if err := c.scheduler.MarkExecuting(ctx, stream.ID); err != nil {
+			return blueprint.StepResult{
+				Status: blueprint.StepStatusFailed,
+				Error:  fmt.Sprintf("marking stream %s executing: %s", stream.ID, err),
+			}, nil
+		}
+	}
+
+	taskSpec := step.Description
+	if taskSpec == "" && stream != nil {
+		taskSpec = stream.Description
+	}
+
 	// Spawn the agent.
 	result, err := c.spawner.Spawn(ctx, SpawnRequest{
 		Objective: obj,
+		Stream:    stream,
 		Role:      role,
-		TaskSpec:  step.Description,
+		TaskSpec:  taskSpec,
 	})
 	if err != nil {
+		if stream != nil {
+			_ = c.scheduler.MarkFailed(ctx, stream.ID)
+		}
 		return blueprint.StepResult{
 			Status: blueprint.StepStatusFailed,
 			Error:  fmt.Sprintf("spawning agent for step %q: %s", step.ID, err),
@@ -405,6 +436,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 	// Track the spawn result.
 	c.mu.Lock()
 	c.agentMap[result.Session.ID] = result
+	delete(c.terminated, result.Session.ID)
 	c.mu.Unlock()
 
 	c.logger.Info("agent spawned for step",
@@ -417,15 +449,25 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 	// Block until agent completes.
 	agentResult, waitErr := result.Process.Wait()
 
-	// Clean up tracking.
-	c.mu.Lock()
-	delete(c.agentMap, result.Session.ID)
-	c.mu.Unlock()
+	wasKilled := c.finishTrackedAgent(result.Session.ID)
+	if wasKilled {
+		if stream != nil {
+			_ = c.scheduler.MarkFailed(ctx, stream.ID)
+		}
+		c.spawner.MarkFailed(ctx, result.Session, "killed")
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("agent step %q failed: killed", step.ID),
+		}, nil
+	}
 
 	if waitErr != nil || !agentResult.Success {
 		errMsg := agentResult.Error
 		if waitErr != nil {
 			errMsg = waitErr.Error()
+		}
+		if stream != nil {
+			_ = c.scheduler.MarkFailed(ctx, stream.ID)
 		}
 		c.spawner.MarkFailed(ctx, result.Session, errMsg)
 		return blueprint.StepResult{
@@ -645,15 +687,17 @@ func (c *Coordinator) spawnAndMonitor(ctx context.Context, req SpawnRequest) (*S
 
 	c.mu.Lock()
 	c.agentMap[result.Session.ID] = result
+	delete(c.terminated, result.Session.ID)
 	c.mu.Unlock()
 
 	go func() {
 		agentResult, waitErr := result.Process.Wait()
+		wasKilled := c.finishTrackedAgent(result.Session.ID)
 
-		c.mu.Lock()
-		delete(c.agentMap, result.Session.ID)
-		c.mu.Unlock()
-
+		if wasKilled {
+			c.spawner.MarkFailed(ctx, result.Session, "killed")
+			return
+		}
 		if waitErr != nil || !agentResult.Success {
 			errMsg := agentResult.Error
 			if waitErr != nil {
@@ -666,4 +710,137 @@ func (c *Coordinator) spawnAndMonitor(ctx context.Context, req SpawnRequest) (*S
 	}()
 
 	return result, nil
+}
+
+// KillAgent terminates a live agent process when possible and marks its session failed.
+func (c *Coordinator) KillAgent(ctx context.Context, sessionID string) error {
+	c.mu.Lock()
+	result, ok := c.agentMap[sessionID]
+	if ok {
+		c.terminated[sessionID] = true
+	}
+	c.mu.Unlock()
+
+	if !ok {
+		return c.spawner.Kill(ctx, sessionID)
+	}
+
+	if err := result.Process.Kill(); err != nil {
+		return fmt.Errorf("killing agent process %s: %w", sessionID, err)
+	}
+	c.spawner.MarkFailed(ctx, result.Session, "killed")
+	return nil
+}
+
+func (c *Coordinator) finishTrackedAgent(sessionID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.agentMap, sessionID)
+	wasKilled := c.terminated[sessionID]
+	delete(c.terminated, sessionID)
+	return wasKilled
+}
+
+func (c *Coordinator) prepareExecutionForApprovedObjective(exec *blueprint.Execution) {
+	bp, ok := c.engine.GetBlueprint(exec.BlueprintName)
+	if !ok || len(bp.Steps) == 0 {
+		return
+	}
+
+	first := bp.Steps[0]
+	if first.Type != blueprint.StepTypeAgent || first.Role != string(domain.AgentRolePlanner) {
+		return
+	}
+
+	now := time.Now()
+	if state := exec.StepStates[first.ID]; state != nil {
+		state.Status = blueprint.StepStatusCompleted
+		state.Error = ""
+	}
+
+	nextID := first.Next
+	if nextID != "" {
+		if step, err := c.engine.GetStepByID(bp, nextID); err == nil && step.Type == blueprint.StepTypeHuman {
+			if state := exec.StepStates[step.ID]; state != nil {
+				state.Status = blueprint.StepStatusCompleted
+				state.Error = ""
+			}
+			nextID = step.Next
+		}
+	}
+
+	exec.CurrentStep = nextID
+	exec.UpdatedAt = now
+}
+
+func (c *Coordinator) singleStreamForObjective(ctx context.Context, objectiveID string) (*domain.Stream, error) {
+	plan, err := c.plans.GetByObjective(ctx, objectiveID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	streams, err := c.streams.ListByPlan(ctx, plan.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(streams) != 1 {
+		return nil, nil
+	}
+	stream := streams[0]
+	return &stream, nil
+}
+
+func (c *Coordinator) completeExecution(ctx context.Context, objectiveID string) {
+	plan, err := c.plans.GetByObjective(ctx, objectiveID)
+	if err != nil {
+		c.logger.Error("failed to load plan on execution completion", "objective_id", objectiveID, "error", err)
+		return
+	}
+	if err := c.plans.UpdateStatus(ctx, plan.ID, domain.PlanStatusCompleted); err != nil {
+		c.logger.Error("failed to mark plan completed", "plan_id", plan.ID, "error", err)
+	}
+
+	stream, err := c.singleStreamForObjective(ctx, objectiveID)
+	if err != nil {
+		c.logger.Error("failed to load single stream on execution completion", "objective_id", objectiveID, "error", err)
+		return
+	}
+	if stream != nil && (stream.Status == "pending" || stream.Status == "executing") {
+		if err := c.scheduler.MarkCompleted(ctx, stream.ID, plan.ID); err != nil {
+			c.logger.Error("failed to mark single stream completed", "stream_id", stream.ID, "error", err)
+		}
+	}
+}
+
+func (c *Coordinator) failExecution(ctx context.Context, objectiveID, reason string) {
+	plan, err := c.plans.GetByObjective(ctx, objectiveID)
+	if err == nil {
+		if err := c.plans.UpdateStatus(ctx, plan.ID, domain.PlanStatusFailed); err != nil {
+			c.logger.Error("failed to mark plan failed", "plan_id", plan.ID, "error", err)
+		}
+	} else {
+		c.logger.Error("failed to load plan on execution failure", "objective_id", objectiveID, "error", err)
+	}
+
+	stream, streamErr := c.singleStreamForObjective(ctx, objectiveID)
+	if streamErr != nil {
+		c.logger.Error("failed to load single stream on execution failure", "objective_id", objectiveID, "error", streamErr)
+	} else if stream != nil && (stream.Status == "pending" || stream.Status == "executing") {
+		if err := c.scheduler.MarkFailed(ctx, stream.ID); err != nil {
+			c.logger.Error("failed to mark single stream failed", "stream_id", stream.ID, "error", err)
+		}
+	}
+
+	obj, err := c.objectives.Get(ctx, objectiveID)
+	if err != nil {
+		c.logger.Error("failed to load objective on execution failure", "objective_id", objectiveID, "error", err)
+		return
+	}
+	if obj.Status != domain.ObjectiveStatusFailed && lifecycle.IsValidTransition(obj.Status, domain.ObjectiveStatusFailed) {
+		if err := c.lifecycle.Transition(ctx, objectiveID, domain.ObjectiveStatusFailed); err != nil {
+			c.logger.Error("failed to transition objective to failed", "objective_id", objectiveID, "reason", reason, "error", err)
+		}
+	}
 }

@@ -56,17 +56,17 @@ Borrowed from the best of what we studied:
 |-----------|--------|-------------|
 | **Deterministic gates around agentic nodes** | Stripe blueprints | Lint, test, merge steps are code, not LLM decisions |
 | **Hook-injected communication** | Overstory | Agents don't choose to check mail — it's forced via Pi hooks |
-| **Hierarchical spawning with depth limits** | Overstory, OpenClaw | Coordinator → Leads → Workers. Max depth enforced. |
+| **Hierarchical spawning with depth limits** | Overstory, OpenClaw | Coordinator → Leads → Builder/Reviewer/Scout agents. Max depth enforced. |
 | **File scope isolation** | Overstory | Each agent owns specific files. Eliminates merge conflicts from overlap. |
 | **Observable state as truth** | Overstory watchdog | Process alive? Sandbox running? Don't trust self-reported status. |
 | **Shift feedback left** | Stripe | Lint/test in sandbox before merge queue, not after |
-| **One-shot workers, persistent leads** | Stripe + Overstory | Depth-2 workers do one job and die. Leads persist across a task lifecycle. |
+| **One-shot delegated agents, persistent leads** | Stripe + Overstory | Depth-2 execution agents do one job and die. Leads persist across a task lifecycle. |
 | **Daemon-first, TUI-as-client** | OpenClaw | Core runs headless on any machine. Multiple clients connect. |
 | **Clean service architecture** | OpenCode | Pub/sub broker, SQLite persistence, typed events |
 | **SDK-driven sandboxes** | Daytona | Programmatic sandbox lifecycle, not manual environment setup |
 | **Configurable blueprints** | Stripe | Blueprints are user-defined YAML files, not hardcoded logic |
 | **Scoped rules that compound** | Stripe, Hashimoto | Every mistake becomes a glob-scoped rule for future agents |
-| **Tool curation per task** | Stripe Tool Shed | Daemon curates which tools each Worker gets, not all 500 |
+| **Tool curation per task** | Stripe Tool Shed | Daemon curates which tools each execution agent gets, not all 500 |
 | **Pluggable agent runtime** | Harness engineering | Runtime interface wraps Pi, Claude Code, Codex, or any agent |
 | **Progressive autonomy** | Anthropic research | 4-tier autonomy system tied to the blueprint state machine |
 
@@ -250,14 +250,14 @@ Four agent capabilities, mapped to Pi agent instances:
 | Role | Depth | Sandbox | Persistence | Purpose |
 |------|-------|---------|-------------|---------|
 | **Planner** | 0 | Optional (can run on daemon host) | Persistent per objective | Explores codebase, proposes plan, iterates with you |
-| **Lead** | 1 | Daytona sandbox | Persistent per stream | Manages workers, writes specs, signals merge readiness |
-| **Worker** | 2 | Daytona sandbox | Ephemeral (one-shot) | Scout, Builder, or Reviewer. Does one job, reports, dies. |
+| **Lead** | 1 | Daytona sandbox | Persistent per stream | Manages delegated agents, writes specs, signals merge readiness |
+| **Builder / Reviewer / Scout** | 2 | Daytona sandbox | Ephemeral (one-shot) | Implements, reviews, or explores. Does one job, reports, dies. |
 | **Merger** | 1 | Daytona sandbox | Ephemeral | Integrates branches, resolves conflicts, runs quality gates |
 
 **Hierarchy enforcement:**
 - Planner spawns only Leads
-- Leads spawn only Workers
-- Workers cannot spawn anything
+- Leads spawn only Builder / Reviewer / Scout / Merger agents
+- Builder / Reviewer / Scout agents cannot spawn anything
 - Max concurrent agents configurable (default: 8)
 
 ### 4. Sandboxes (Provider-Agnostic)
@@ -398,7 +398,7 @@ CREATE TABLE mail (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     from_agent  TEXT NOT NULL,
     to_agent    TEXT NOT NULL,       -- agent name or broadcast (@builders, @all)
-    type        TEXT NOT NULL,       -- status, question, result, error, dispatch, worker_done, merge_ready, escalation
+    type        TEXT NOT NULL,       -- status, question, result, error, dispatch, agent_done, merge_ready, escalation
     payload     TEXT NOT NULL,       -- JSON
     objective   TEXT NOT NULL,       -- objective ID
     stream      TEXT,                -- stream ID (nullable for cross-stream)
@@ -630,7 +630,7 @@ FIFO merge queue with tiered conflict resolution:
 
 ### 8. Scoped Rules (`.deck/rules/`)
 
-**Every mistake becomes a rule.** When a Worker fails and a human corrects it, the pattern should be captured as a scoped rule that prevents future agents from making the same mistake. This is the compounding loop that makes the harness smarter over time.
+**Every mistake becomes a rule.** When a Builder, Reviewer, or Scout agent fails and a human corrects it, the pattern should be captured as a scoped rule that prevents future agents from making the same mistake. This is the compounding loop that makes the harness smarter over time.
 
 Rules live in `.deck/rules/` as markdown files with glob-scoped frontmatter:
 
@@ -698,7 +698,7 @@ Agent overlay for builder-payments-1:
 
 Stripe built "Tool Shed" — a meta-MCP server managing ~500 internal tools — because loading all tools into every agent kills performance. As Deck becomes provider-agnostic and users bring their own MCP servers, the daemon needs the same tool selection layer.
 
-**The problem:** A project might have MCP servers for GitHub, database, Sentry, Figma, Slack, and custom internal tools. A Worker fixing a CSS bug doesn't need database tools. A Worker writing migrations doesn't need Figma tools. Loading everything wastes tokens and confuses the agent.
+**The problem:** A project might have MCP servers for GitHub, database, Sentry, Figma, Slack, and custom internal tools. A Builder fixing a CSS bug doesn't need database tools. A Builder writing migrations doesn't need Figma tools. Loading everything wastes tokens and confuses the agent.
 
 **Solution: tool scoping in blueprints and rules.**
 
@@ -735,7 +735,7 @@ tools:
     - "mcp:slack:send_message"
 ```
 
-**How it works:** When the daemon constructs a Worker's environment, it resolves the effective tool set: blueprint step tools + matched rule tools + global config, deduplicated and capped at `max_per_agent`. The resulting tool list is passed to the agent runtime. Tools outside this list are not registered in the agent's session.
+**How it works:** When the daemon constructs an execution agent's environment, it resolves the effective tool set: blueprint step tools + matched rule tools + global config, deduplicated and capped at `max_per_agent`. The resulting tool list is passed to the agent runtime. Tools outside this list are not registered in the agent's session.
 
 **Why 15 tools max:** Stripe found that curating ~15 relevant tools per task (from 500+ available) was the sweet spot. Beyond that, agents spend tokens reasoning about tool selection instead of the actual task.
 
@@ -1340,8 +1340,8 @@ Deck implements progressive autonomy tied to the blueprint state machine. Higher
 
 | Level | Name | Plan | Execution | Review | Merge | Best For |
 |-------|------|------|-----------|--------|-------|----------|
-| 0 | **Supervised** | Human approves | Human reviews each Worker output | Human reviews | Human approves | New projects, unfamiliar codebases |
-| 1 | **Guided** | Human approves | Workers autonomous with deterministic gates | Human reviews final PR | Human approves | Default after test coverage established |
+| 0 | **Supervised** | Human approves | Human reviews each execution agent output | Human reviews | Human approves | New projects, unfamiliar codebases |
+| 1 | **Guided** | Human approves | Builder / Reviewer / Scout agents autonomous with deterministic gates | Human reviews final PR | Human approves | Default after test coverage established |
 | 2 | **Monitored** | Auto-generated, human reviews | Autonomous with retry cap | Auto-review if diff < threshold | Auto-merge if CI green | Projects with strong test suites |
 | 3 | **Autonomous** | Fully automatic | Fully automatic | Automatic | Auto-merge | Pre-defined task types only (deps, docs, tests) |
 
@@ -1363,13 +1363,13 @@ autonomy:
 **Stuck detection (enforced at all autonomy levels):**
 1. **Repeater** — same tool call with same arguments twice in a row → inject "try a different approach"
 2. **Spinner** — no file modifications after N tool calls → force progress report to Lead
-3. **Timeout** — hard wall clock limit per Worker (configurable, default 30 min)
+3. **Timeout** — hard wall clock limit per execution agent (configurable, default 30 min)
 
 After 3 consecutive stuck signals: escalate to Lead. After Lead failure: escalate to human via SSE notification regardless of autonomy level. **Autonomy never means unmonitored.**
 
 ## Simple Mode (Single-Agent Escape Hatch)
 
-Not every task needs the full Planner → Lead → Worker hierarchy. Simple mode collapses the pipeline to a single agent in a single sandbox — no decomposition, no streams, no inter-agent communication.
+Not every task needs the full Planner → Lead → Builder hierarchy. Simple mode collapses the pipeline to a single agent in a single sandbox — no decomposition, no streams, no inter-agent communication.
 
 ```
 deck plan "fix the typo in README" --simple
@@ -1380,7 +1380,7 @@ Simple mode is:
 - Blueprint: `hotfix.yaml` (or any single-step blueprint)
 - Quality gates still run (deterministic, non-negotiable)
 - Merge queue still processes the result
-- No Lead, no Workers, no mail system
+- No Lead, no delegated agents, no mail system
 
 **Why this matters:** The research consistently shows multi-agent benefits diminish as model capabilities improve. A single frontier model handles 80% of tasks better than a coordinated team of lesser agents. Simple mode proves value immediately without requiring users to understand the full hierarchy. Power users unlock the full orchestration for genuinely complex, multi-stream work.
 
@@ -1616,8 +1616,8 @@ planning:
   default_mode: "interactive"     # interactive | auto
   model: "claude-sonnet-4-6"      # model for planner agents
 
-workers:
-  model: "claude-sonnet-4-6"      # model for worker agents
+builders:
+  model: "claude-sonnet-4-6"      # model for builder agents
 
 merge:
   ai_resolve_enabled: true        # enable tier 3 (AI conflict resolution)
@@ -1757,7 +1757,7 @@ Everything in `.deck/` is version-controlled. Rules and blueprints are shared ac
 - Blueprint execution (step-by-step state machine with gates)
 - Agent role definitions and overlay generation (with rules + tools injection)
 - Deck Pi extension (mail injection hooks, tools, scope enforcement)
-- Lead → Worker spawning
+- Lead → Builder / Reviewer / Scout spawning
 - Mail broker (send, receive, broadcast, inject)
 - Dependency-aware stream scheduling
 

@@ -4,9 +4,9 @@ package agents
 type RoleDefinition struct {
 	Name        string   // "planner", "lead", "builder", "reviewer", "merger"
 	Description string   // human-readable role description
-	MaxDepth    int      // hierarchy depth (0=planner, 1=lead, 2=worker)
-	CanSpawn    []string // roles this role can spawn (planner→lead, lead→worker)
-	Persistent  bool     // true for planner/lead, false for workers
+	MaxDepth    int      // hierarchy depth (0=planner, 1=lead, 2=execution agent)
+	CanSpawn    []string // roles this role can spawn (planner→lead, lead→builder/reviewer/merger)
+	Persistent  bool     // true for planner/lead, false for delegated execution agents
 }
 
 // DefaultRoles returns the built-in role definitions.
@@ -21,7 +21,7 @@ func DefaultRoles() map[string]*RoleDefinition {
 		},
 		"lead": {
 			Name:        "lead",
-			Description: "Manages a work stream, writes specs, coordinates workers",
+			Description: "Manages a work stream, writes specs, and coordinates builder/reviewer/scout agents",
 			MaxDepth:    1,
 			CanSpawn:    []string{"builder", "reviewer", "merger"},
 			Persistent:  true,

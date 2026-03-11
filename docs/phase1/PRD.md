@@ -127,10 +127,12 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   ```go
   type AgentRole string
   const (
-      AgentRolePlanner AgentRole = "planner"
-      AgentRoleLead    AgentRole = "lead"
-      AgentRoleWorker  AgentRole = "worker"
-      AgentRoleMerger  AgentRole = "merger"
+      AgentRolePlanner  AgentRole = "planner"
+      AgentRoleLead     AgentRole = "lead"
+      AgentRoleBuilder  AgentRole = "builder"
+      AgentRoleReviewer AgentRole = "reviewer"
+      AgentRoleMerger   AgentRole = "merger"
+      AgentRoleScout    AgentRole = "scout"
   )
 
   type AgentSession struct {

@@ -17,6 +17,7 @@ var defaultBlueprints embed.FS
 // Registry holds loaded blueprints and provides lookup.
 type Registry struct {
 	blueprints map[string]*Blueprint
+	aliases    map[string]string
 	mu         sync.RWMutex
 }
 
@@ -24,6 +25,7 @@ type Registry struct {
 func NewRegistry() *Registry {
 	return &Registry{
 		blueprints: make(map[string]*Blueprint),
+		aliases:    make(map[string]string),
 	}
 }
 
@@ -63,7 +65,7 @@ func (r *Registry) LoadDefaults() error {
 		}
 
 		r.mu.Lock()
-		r.blueprints[bp.Name] = &bp
+		r.registerLocked(&bp, []string{bp.Name, strings.TrimSuffix(entry.Name(), ext)})
 		r.mu.Unlock()
 	}
 
@@ -77,26 +79,35 @@ func (r *Registry) LoadDefaults() error {
 // LoadFromDir loads blueprints from a directory (e.g., .deck/blueprints/ or ~/.config/deck/blueprints/).
 // Blueprints loaded later override earlier ones with the same name.
 func (r *Registry) LoadFromDir(dir string) error {
-	loaded, err := LoadDir(dir)
+	entries, err := LoadDir(dir)
 	if err != nil {
 		return err
 	}
 
 	r.mu.Lock()
-	for name, bp := range loaded {
-		r.blueprints[name] = bp
+	for name, bp := range entries {
+		r.registerLocked(bp, []string{name})
 	}
 	r.mu.Unlock()
 
 	return nil
 }
 
-// Get returns a blueprint by name. Returns nil, false if not found.
+// Get returns a blueprint by name or normalized alias. Returns nil, false if not found.
 func (r *Registry) Get(name string) (*Blueprint, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	bp, ok := r.blueprints[name]
-	return bp, ok
+
+	if bp, ok := r.blueprints[name]; ok {
+		return bp, true
+	}
+
+	if canonical, ok := r.aliases[normalizeBlueprintKey(name)]; ok {
+		bp, ok := r.blueprints[canonical]
+		return bp, ok
+	}
+
+	return nil, false
 }
 
 // GetDefault returns the blueprint with trigger "default". Returns nil, false if none.
@@ -121,4 +132,44 @@ func (r *Registry) List() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func (r *Registry) registerLocked(bp *Blueprint, aliases []string) {
+	r.blueprints[bp.Name] = bp
+
+	registerAlias := func(alias string) {
+		key := normalizeBlueprintKey(alias)
+		if key != "" {
+			r.aliases[key] = bp.Name
+		}
+	}
+
+	registerAlias(bp.Name)
+	for _, alias := range aliases {
+		registerAlias(alias)
+	}
+}
+
+func normalizeBlueprintKey(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	lastDash := false
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if !lastDash {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+
+	return strings.Trim(b.String(), "-")
 }

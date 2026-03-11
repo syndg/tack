@@ -106,6 +106,9 @@ func RunMigrations(db *sql.DB) error {
 	if err := ensureColumnExists(db, "objectives", "planning_mode", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("ensuring objectives.planning_mode: %w", err)
 	}
+	if _, err := db.ExecContext(context.Background(), `UPDATE agent_sessions SET role = 'builder' WHERE role = 'worker'`); err != nil {
+		return fmt.Errorf("normalizing agent session roles: %w", err)
+	}
 	return nil
 }
 

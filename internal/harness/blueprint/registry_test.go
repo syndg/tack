@@ -56,6 +56,28 @@ func TestGet_ReturnsSpecificBlueprint(t *testing.T) {
 	}
 }
 
+func TestGet_ResolvesNormalizedAliases(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.LoadDefaults(); err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+
+	cases := map[string]string{
+		"hotfix":                 "Hotfix",
+		"feature":                "Feature Implementation",
+		"feature implementation": "Feature Implementation",
+	}
+	for input, want := range cases {
+		bp, ok := reg.Get(input)
+		if !ok {
+			t.Fatalf("Get(%q) returned false", input)
+		}
+		if bp.Name != want {
+			t.Fatalf("Get(%q) = %q, want %q", input, bp.Name, want)
+		}
+	}
+}
+
 func TestStreamExecutionDefaultIncludesOptionalScout(t *testing.T) {
 	reg := NewRegistry()
 	if err := reg.LoadDefaults(); err != nil {
