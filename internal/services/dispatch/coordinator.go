@@ -158,12 +158,14 @@ func (c *Coordinator) handleObjectiveUpdated(ctx context.Context, event domain.E
 		return
 	}
 
-	if err := c.StartExecution(ctx, event.Objective); err != nil {
-		c.logger.Error("failed to start execution after approval",
-			"objective_id", event.Objective,
-			"error", err,
-		)
-	}
+	go func() {
+		if err := c.StartExecution(ctx, event.Objective); err != nil {
+			c.logger.Error("failed to start execution after approval",
+				"objective_id", event.Objective,
+				"error", err,
+			)
+		}
+	}()
 }
 
 // handleStreamReady processes EventStreamReady by spawning a lead agent

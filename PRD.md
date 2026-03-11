@@ -941,7 +941,7 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
 
 ## Phase 8: Integration & Wiring
 
-- [ ] **8.1** Wire execution layer into daemon
+- [x] **8.1** Wire execution layer into daemon
   Update `internal/daemon/daemon.go` to:
 
   1. Add fields to `Daemon` struct:
@@ -999,7 +999,7 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
 
   File: `internal/daemon/daemon.go`
 
-- [ ] **8.2** Add event-driven execution trigger
+- [x] **8.2** Add event-driven execution trigger
   Update `internal/daemon/daemon.go` to handle automatic execution triggering:
 
   The coordinator's `Start()` method already subscribes to `EventObjectiveUpdated`.
@@ -1030,7 +1030,7 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
 
   File: `internal/daemon/daemon.go`
 
-- [ ] **8.3** Add unit tests
+- [x] **8.3** Add unit tests
   Create test files:
 
   `internal/services/mail/broker_test.go`:

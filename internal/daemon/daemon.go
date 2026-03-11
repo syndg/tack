@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/syndg/deck/internal/config"
@@ -16,6 +17,10 @@ import (
 	"github.com/syndg/deck/internal/harness/gates"
 	"github.com/syndg/deck/internal/harness/rules"
 	"github.com/syndg/deck/internal/harness/tools"
+	"github.com/syndg/deck/internal/runtime"
+	"github.com/syndg/deck/internal/runtime/claudecode"
+	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/deck/internal/sandbox/local"
 	"github.com/syndg/deck/internal/services/dispatch"
 	"github.com/syndg/deck/internal/services/events"
 	"github.com/syndg/deck/internal/services/lifecycle"
@@ -35,9 +40,15 @@ type Daemon struct {
 	plans      *db.PlanStore
 	streams    *db.StreamStore
 
-	mailBroker  *mail.Broker
-	coordinator *dispatch.Coordinator
-	spawner     *dispatch.Spawner
+	mailBroker      *mail.Broker
+	sandboxProvider sandbox.SandboxProvider
+	agentRuntime    runtime.AgentRuntime
+	spawner         *dispatch.Spawner
+	scheduler       *dispatch.Scheduler
+	coordinator     *dispatch.Coordinator
+
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	lifecycleManager *lifecycle.Manager
 	planningService  *planner.Service
@@ -139,6 +150,51 @@ func New(cfg *config.Config) (*Daemon, error) {
 	toolCur := tools.NewCurator(logger)
 	gateRun := gates.NewRunner(logger)
 
+	// Get project root for the sandbox provider.
+	projectRoot, err := os.Getwd()
+	if err != nil {
+		database.Close()
+		return nil, fmt.Errorf("getting working directory: %w", err)
+	}
+
+	// Derive daemon URL from listen address (replace 0.0.0.0 with 127.0.0.1).
+	listenAddr := cfg.Daemon.Listen
+	var daemonURL string
+	if strings.HasPrefix(listenAddr, "0.0.0.0:") {
+		daemonURL = "http://127.0.0.1:" + listenAddr[len("0.0.0.0:"):]
+	} else {
+		daemonURL = "http://" + listenAddr
+	}
+
+	// Create mail broker.
+	mailBroker := mail.New(mailStore, agentStore, eventBus, logger)
+
+	// Create sandbox provider (local git worktrees).
+	worktreeDir := filepath.Join(os.TempDir(), "deck-worktrees")
+	sandboxProv := local.New(projectRoot, worktreeDir, logger)
+
+	// Create agent runtime (Claude Code).
+	agentRuntime := claudecode.New(cfg.Planning.Model, logger)
+
+	// Create spawner.
+	spawner := dispatch.NewSpawner(agentStore, agentRuntime, sandboxProv, rulesEng, toolCur, eventBus, logger, daemonURL)
+
+	// Create scheduler.
+	scheduler := dispatch.NewScheduler(streamStore, planStore, cfg.Agents.MaxConcurrent, eventBus, logger)
+
+	// Create step handlers and register deterministic + human types.
+	handlers := dispatch.NewHandlers(scheduler, gateRun, lifecycleMgr, planStore, streamStore, objectiveStore, executionStore, agentStore, sandboxProv, eventBus, logger)
+	bpEngine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
+	bpEngine.RegisterHandler(blueprint.StepTypeHuman, handlers.HandleHuman)
+
+	// Create coordinator (also self-registers agent + blueprint_ref handlers).
+	coordinator := dispatch.NewCoordinator(bpEngine, scheduler, spawner, lifecycleMgr, executionStore, objectiveStore, planStore, streamStore, eventBus, logger)
+	bpEngine.RegisterHandler(blueprint.StepTypeAgent, coordinator.HandleAgentStep)
+	bpEngine.RegisterHandler(blueprint.StepTypeBlueprintRef, coordinator.HandleBlueprintRefStep)
+
+	// Create daemon lifecycle context (cancelled in Shutdown).
+	daemonCtx, daemonCancel := context.WithCancel(context.Background())
+
 	mux := http.NewServeMux()
 
 	d := &Daemon{
@@ -152,6 +208,13 @@ func New(cfg *config.Config) (*Daemon, error) {
 		plans:      planStore,
 		streams:    streamStore,
 
+		mailBroker:      mailBroker,
+		sandboxProvider: sandboxProv,
+		agentRuntime:    agentRuntime,
+		spawner:         spawner,
+		scheduler:       scheduler,
+		coordinator:     coordinator,
+
 		lifecycleManager: lifecycleMgr,
 		planningService:  planningService,
 
@@ -160,6 +223,9 @@ func New(cfg *config.Config) (*Daemon, error) {
 		rulesEngine:       rulesEng,
 		toolCurator:       toolCur,
 		gateRunner:        gateRun,
+
+		ctx:    daemonCtx,
+		cancel: daemonCancel,
 
 		mux: mux,
 		server: &http.Server{
@@ -175,9 +241,14 @@ func New(cfg *config.Config) (*Daemon, error) {
 	return d, nil
 }
 
-// Start begins listening for HTTP requests. It blocks until the server
+// Start begins event processing and HTTP serving. It blocks until the server
 // is shut down. Returns nil if shutdown was triggered via Shutdown.
 func (d *Daemon) Start() error {
+	if d.coordinator != nil {
+		if err := d.coordinator.Start(d.ctx); err != nil {
+			return fmt.Errorf("starting coordinator: %w", err)
+		}
+	}
 	d.logger.Info("Deck daemon listening", "addr", d.cfg.Daemon.Listen)
 	err := d.server.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {
@@ -186,9 +257,15 @@ func (d *Daemon) Start() error {
 	return err
 }
 
-// Shutdown gracefully shuts down the HTTP server and closes the database.
+// Shutdown gracefully shuts down the coordinator, HTTP server, and database.
 func (d *Daemon) Shutdown(ctx context.Context) error {
 	d.logger.Info("shutting down daemon")
+	if d.cancel != nil {
+		d.cancel()
+	}
+	if d.coordinator != nil {
+		d.coordinator.Stop()
+	}
 	if err := d.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("shutting down server: %w", err)
 	}

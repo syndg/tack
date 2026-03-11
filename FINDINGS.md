@@ -128,6 +128,26 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 - `init()` registers `killAgentCmd` as a subcommand of `agentsCmd`, then adds `agentsCmd` to `rootCmd`.
 - Package builds cleanly with `go build ./cmd/deck/...`.
 
+## Task 8.1: Wire execution layer into daemon
+
+- Added `sandboxProvider sandbox.SandboxProvider`, `agentRuntime runtime.AgentRuntime`, `scheduler *dispatch.Scheduler`, `ctx context.Context`, and `cancel context.CancelFunc` to `Daemon` struct (joining the already-present `mailBroker`, `coordinator`, `spawner`).
+- Added 5 new imports: `"strings"`, `internal/runtime`, `internal/runtime/claudecode`, `internal/sandbox`, `internal/sandbox/local`.
+- `daemonURL` is derived from `cfg.Daemon.Listen` by replacing `0.0.0.0` with `127.0.0.1`; passed to `NewSpawner` (PRD omitted it from the snippet but the spawner requires it).
+- `projectRoot` obtained via `os.Getwd()` at daemon startup; errors return early (db closed first).
+- `NewHandlers` call passes `agentStore` and `sandboxProv` beyond the PRD's simplified snippet — both are required by the actual `NewHandlers` signature from task 5.1.
+- `coordinator.HandleAgentStep` and `coordinator.HandleBlueprintRefStep` are explicitly re-registered after `NewCoordinator` (coordinator self-registers them internally, but PRD spec calls for explicit registration — harmless overwrite).
+- `Start()` calls `coordinator.Start(d.ctx)` before `ListenAndServe`; `Shutdown()` calls `d.cancel()` then `coordinator.Stop()` before server shutdown.
+- `go build ./...` passes cleanly.
+
+## Task 8.2: Add event-driven execution trigger
+
+- The event-driven trigger and manual HTTP trigger were both already implemented in prior tasks (6.1, 7.1, 8.1) — the coordinator's `handleObjectiveUpdated` called `StartExecution`, and `handleExecuteObjective` was wired in routes.go.
+- The one gap: `handleObjectiveUpdated` was calling `StartExecution` synchronously in the event loop, while the PRD specifies `go c.StartExecution(...)` to keep the event loop non-blocking.
+- Fixed by wrapping `c.StartExecution(ctx, event.Objective)` in an anonymous goroutine inside `handleObjectiveUpdated` in coordinator.go; error logging is preserved inside the goroutine.
+- PRD says "File: `internal/daemon/daemon.go`" but the actual change is in `coordinator.go` — the description itself says "coordinator's event loop"; daemon.go wiring was already correct from task 8.1.
+- The trigger flow works end-to-end: `POST /plans/{id}/approve` → `ApprovePlan` → `Transition(→approved)` → publishes `EventObjectiveUpdated{to: "approved"}` → coordinator goroutine calls `StartExecution` → spawns `runExecution` goroutine.
+- `go build ./...` passes cleanly.
+
 ## Task 7.5: Create deck mail command
 
 - Created `cmd/deck/mail.go` with `mailCmd` (view unread mail) and `sendMailCmd` (send mail) as a subcommand.
@@ -136,3 +156,13 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 - `mailObjective` is a package-level var (not inside `init`) to avoid re-declaration issues; `sendMailCmd.MarkFlagRequired("objective")` enforces the flag before the command runs.
 - Reuses `timeAgo` helper from `plans.go` (same `main` package) — no duplication needed.
 - Package builds cleanly with `go build ./cmd/deck/...`.
+
+## Task 8.3: Add unit tests
+
+- Created 4 test files: `broker_test.go`, `scheduler_test.go`, `spawner_test.go`, `provider_test.go` — all in the same package as the code under test (white-box).
+- All tests use real SQLite DBs via `db.Open(t.TempDir())` + `Migrate()`; no mocking of the store layer.
+- `broker_test.go`: 8 tests covering `Send`, `SendBroadcast` (all 5 address types), `GetUnread`, `MarkRead`, `MarkAllRead`, `IsBroadcast`; event assertions use a buffered `bus.Subscribe(10)` channel drained with a non-blocking select.
+- `scheduler_test.go`: 7 tests covering `GetReadyStreams` (dependency, concurrency), `MarkExecuting`, `MarkCompleted` (cascade event), `MarkFailed`, `CanScheduleMore`; cascade test creates A→B dependency chain and verifies `EventStreamReady` is published after A completes.
+- `spawner_test.go`: 5 tests using mock `AgentRuntime` and `SandboxProvider` defined in the test file; `mockRuntime.lastOpts` captures the opts for overlay assertions; fixed wrong role assertion (`"builder"` is stored verbatim, not mapped to `AgentRoleWorker`).
+- `provider_test.go`: 6 tests exercising real git worktree operations; `initTestRepo` uses `t.Skip` if git is unavailable, and passes `-c user.email/user.name` inline to avoid needing global git config.
+- `go build ./...` and all new test files pass cleanly.
