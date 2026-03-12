@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/syndg/deck/internal/db"
@@ -72,6 +73,7 @@ func NewHandlers(
 //   - "signal_merge_ready" → marks streams as merge-ready and publishes EventMergeQueued
 //   - "mark_complete"      → transitions objective to reviewing
 //   - "merge_queue"        → enqueues merge_ready streams into the merge processor
+//   - "create_pr"          → pushes branch and creates a GitHub PR
 func (h *Handlers) HandleDeterministic(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error) {
 	switch step.Action {
 	case "dispatch_streams":
@@ -84,6 +86,8 @@ func (h *Handlers) HandleDeterministic(ctx context.Context, exec *blueprint.Exec
 		return h.markComplete(ctx, exec)
 	case "merge_queue":
 		return h.mergeQueue(ctx, exec)
+	case "create_pr":
+		return h.createPR(ctx, exec)
 	default:
 		return blueprint.StepResult{
 			Status: blueprint.StepStatusFailed,
@@ -317,6 +321,124 @@ func (h *Handlers) markComplete(ctx context.Context, exec *blueprint.Execution) 
 	)
 
 	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
+}
+
+// createPR implements the "create_pr" deterministic action.
+// Pushes the agent's branch to origin and creates a GitHub PR via `gh pr create`.
+func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution) (blueprint.StepResult, error) {
+	obj, err := h.objectives.Get(ctx, exec.ObjectiveID)
+	if err != nil {
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("getting objective: %s", err),
+		}, nil
+	}
+
+	sb, err := h.findSandboxForObjective(ctx, exec.ObjectiveID)
+	if err != nil {
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  err.Error(),
+		}, nil
+	}
+
+	// Get the current branch name.
+	branchResult, err := sb.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
+	if err != nil || branchResult.ExitCode != 0 {
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("getting branch name: %s", branchResult.Stderr),
+		}, nil
+	}
+	branch := strings.TrimSpace(branchResult.Stdout)
+
+	// Push the branch to origin.
+	pushResult, err := sb.Exec(ctx, fmt.Sprintf("git push -u origin %s", branch), sandbox.ExecOpts{})
+	if err != nil || pushResult.ExitCode != 0 {
+		stderr := ""
+		if pushResult.Stderr != "" {
+			stderr = pushResult.Stderr
+		}
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("pushing branch: %s", stderr),
+		}, nil
+	}
+
+	h.logger.Info("branch pushed",
+		"branch", branch,
+		"objective_id", exec.ObjectiveID,
+	)
+
+	// Create PR via gh CLI.
+	title := obj.Description
+	body := fmt.Sprintf("Automated PR created by Deck.\n\nObjective: %s\nObjective ID: %s", obj.Description, obj.ID)
+	escapedTitle := "'" + escapeShellSingleQuote(title) + "'"
+	escapedBody := "'" + escapeShellSingleQuote(body) + "'"
+	prCmd := fmt.Sprintf("gh pr create --title %s --body %s --head %s", escapedTitle, escapedBody, branch)
+
+	prResult, err := sb.Exec(ctx, prCmd, sandbox.ExecOpts{})
+	if err != nil || prResult.ExitCode != 0 {
+		stderr := ""
+		if prResult.Stderr != "" {
+			stderr = prResult.Stderr
+		}
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("creating PR: %s", stderr),
+		}, nil
+	}
+
+	prURL := prResult.Stdout
+	h.logger.Info("PR created",
+		"url", prURL,
+		"branch", branch,
+		"objective_id", exec.ObjectiveID,
+	)
+
+	return blueprint.StepResult{
+		Status: blueprint.StepStatusCompleted,
+		Output: prURL,
+	}, nil
+}
+
+// findSandboxForObjective locates an active agent sandbox for the given objective.
+// Prefers a lead agent sandbox; falls back to any agent sandbox (e.g. builder in hotfix).
+func (h *Handlers) findSandboxForObjective(ctx context.Context, objectiveID string) (sandbox.Sandbox, error) {
+	sessions, err := h.agents.ListByObjective(ctx, objectiveID)
+	if err != nil {
+		return nil, fmt.Errorf("listing agents for objective: %s", err)
+	}
+
+	find := func(preferredRole domain.AgentRole) sandbox.Sandbox {
+		for _, session := range sessions {
+			if session.SandboxID == "" {
+				continue
+			}
+			if preferredRole != "" && session.Role != preferredRole {
+				continue
+			}
+			found, err := h.sandboxProvider.Get(ctx, session.SandboxID)
+			if err != nil {
+				continue
+			}
+			return found
+		}
+		return nil
+	}
+
+	sb := find(domain.AgentRoleLead)
+	if sb == nil {
+		sb = find("")
+	}
+	if sb == nil {
+		return nil, fmt.Errorf("no agent sandbox found for objective %s", objectiveID)
+	}
+	return sb, nil
+}
+
+func escapeShellSingleQuote(s string) string {
+	return strings.Replace(s, "'", `'\''`, -1)
 }
 
 // mergeQueue implements the "merge_queue" deterministic action.

@@ -6,12 +6,14 @@ steps:
     type: agent
     role: scout
     optional: true
+    commit: none
     next: build
 
   - id: build
     type: agent
     role: builder
     description: "Implement the stream's task"
+    commit: auto
     next: lint
 
   - id: lint
@@ -24,6 +26,7 @@ steps:
     type: agent
     role: reviewer
     description: "Review the implementation"
+    commit: none
     next: merge_ready
 
   - id: merge_ready

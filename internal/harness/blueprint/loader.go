@@ -104,6 +104,9 @@ func Validate(bp *Blueprint) error {
 			if step.Role == "" {
 				errs = append(errs, fmt.Sprintf("agent step %q must have a role", step.ID))
 			}
+			if step.Commit != "" && step.Commit != CommitModeAuto && step.Commit != CommitModeAgent && step.Commit != CommitModeNone {
+				errs = append(errs, fmt.Sprintf("agent step %q has invalid commit mode %q (must be auto, agent, or none)", step.ID, step.Commit))
+			}
 		case StepTypeDeterministic:
 			if step.Action == "" {
 				errs = append(errs, fmt.Sprintf("deterministic step %q must have an action", step.ID))

@@ -22,6 +22,7 @@ type OverlayInput struct {
 	QualityGates []string             // gate commands to run before completion
 	LeadAgent    string               // name of this agent's lead (empty for planners)
 	Guidance     string               // project-level guidance from .deck/config.yaml
+	CommitMode   string               // "auto", "agent", "none" — controls commit behavior
 }
 
 // BuildOverlay generates the markdown system prompt overlay for an agent.
@@ -93,12 +94,27 @@ func BuildOverlay(input OverlayInput) string {
 	b.WriteString("- Use deck.escalate() if you're blocked\n")
 	b.WriteString("- Use deck.done() when finished\n\n")
 
-	// 7. Constraints
+	// 7. Commit instructions (based on commit mode)
+	switch input.CommitMode {
+	case "agent":
+		b.WriteString("## Commit Instructions\n")
+		b.WriteString("When you are done with your changes, you MUST commit them:\n")
+		b.WriteString("1. Stage all changes: git add -A\n")
+		b.WriteString("2. Write a clear, descriptive commit message summarizing what you changed and why\n")
+		b.WriteString("3. Run: git commit -m \"<your message>\"\n")
+		b.WriteString("4. Do NOT push — Deck handles merging\n\n")
+	case "none":
+		// No commit instructions for analysis/scout agents.
+	default: // "auto" or empty
+		b.WriteString("## Commit Policy\n")
+		b.WriteString("- Do NOT run git add or git commit — Deck commits your changes automatically\n\n")
+	}
+
+	// 8. Constraints
 	b.WriteString("## Constraints\n")
 	b.WriteString("- Do NOT modify files outside your scope\n")
 	b.WriteString("- Do NOT push to git (Deck handles merging)\n")
 	b.WriteString("- Do NOT install new dependencies without escalating\n")
-	b.WriteString("- Commit frequently with descriptive messages\n")
 
 	return b.String()
 }

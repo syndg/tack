@@ -138,7 +138,7 @@ func Default() *Config {
 			AlwaysInclude: []string{},
 			AlwaysExclude: []string{},
 		},
-		QualityGates: []string{"lint", "test", "build"},
+		QualityGates: []string{"go vet ./...", "go test ./...", "go build ./..."},
 	}
 }
 

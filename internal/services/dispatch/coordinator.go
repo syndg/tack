@@ -12,6 +12,7 @@ import (
 	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
 	"github.com/syndg/deck/internal/harness/blueprint"
+	"github.com/syndg/deck/internal/sandbox"
 	events "github.com/syndg/deck/internal/services/events"
 	"github.com/syndg/deck/internal/services/lifecycle"
 )
@@ -360,10 +361,11 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 
 	// Spawn the agent.
 	result, err := c.spawner.Spawn(ctx, SpawnRequest{
-		Objective: obj,
-		Stream:    stream,
-		Role:      role,
-		TaskSpec:  taskSpec,
+		Objective:  obj,
+		Stream:     stream,
+		Role:       role,
+		TaskSpec:   taskSpec,
+		CommitMode: string(step.EffectiveCommitMode()),
 	})
 	if err != nil {
 		if stream != nil {
@@ -416,6 +418,27 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 			Status: blueprint.StepStatusFailed,
 			Error:  fmt.Sprintf("agent step %q failed: %s", step.ID, errMsg),
 		}, nil
+	}
+
+	// Handle commit mode after successful agent completion.
+	commitMode := step.EffectiveCommitMode()
+	switch commitMode {
+	case blueprint.CommitModeAuto:
+		if err := c.autoCommit(ctx, result.Sandbox, obj.Description); err != nil {
+			c.logger.Error("auto-commit failed", "step", step.ID, "error", err)
+			// Non-fatal: changes are still in the worktree for the merge processor.
+		}
+	case blueprint.CommitModeAgent:
+		// Verify the agent actually committed; fall back to auto if not.
+		statusResult, err := result.Sandbox.Exec(ctx, "git status --porcelain", sandbox.ExecOpts{})
+		if err == nil && strings.TrimSpace(statusResult.Stdout) != "" {
+			c.logger.Warn("agent mode set but uncommitted changes found, falling back to auto-commit", "step", step.ID)
+			if err := c.autoCommit(ctx, result.Sandbox, obj.Description); err != nil {
+				c.logger.Error("fallback auto-commit failed", "step", step.ID, "error", err)
+			}
+		}
+	case blueprint.CommitModeNone:
+		// No commit needed.
 	}
 
 	c.spawner.MarkCompleted(ctx, result.Session, agentResult.Summary)
@@ -732,6 +755,49 @@ func (c *Coordinator) singleStreamForObjective(ctx context.Context, objectiveID 
 	}
 	stream := streams[0]
 	return &stream, nil
+}
+
+// autoCommit stages and commits all changes in a sandbox worktree.
+// The commit message is derived from the objective description and diff stat.
+func (c *Coordinator) autoCommit(ctx context.Context, sb sandbox.Sandbox, objectiveDesc string) error {
+	// Check if there are uncommitted changes.
+	statusResult, err := sb.Exec(ctx, "git status --porcelain", sandbox.ExecOpts{})
+	if err != nil {
+		return fmt.Errorf("checking git status: %w", err)
+	}
+	if strings.TrimSpace(statusResult.Stdout) == "" {
+		c.logger.Info("no uncommitted changes, skipping auto-commit")
+		return nil
+	}
+
+	// Get diff stat for the commit message body.
+	diffResult, _ := sb.Exec(ctx, "git diff --stat", sandbox.ExecOpts{})
+
+	// Build commit message.
+	var msg strings.Builder
+	fmt.Fprintf(&msg, "deck: %s", objectiveDesc)
+	if strings.TrimSpace(diffResult.Stdout) != "" {
+		fmt.Fprintf(&msg, "\n\n%s", strings.TrimSpace(diffResult.Stdout))
+	}
+
+	// Stage all changes.
+	if stageResult, err := sb.Exec(ctx, "git add -A", sandbox.ExecOpts{}); err != nil {
+		return fmt.Errorf("staging changes: %w (stderr: %s)", err, stageResult.Stderr)
+	}
+
+	// Commit with shell-escaped message.
+	escaped := strings.ReplaceAll(msg.String(), "'", `'\''`)
+	commitCmd := fmt.Sprintf("git commit -m '%s'", escaped)
+	commitResult, err := sb.Exec(ctx, commitCmd, sandbox.ExecOpts{})
+	if err != nil {
+		return fmt.Errorf("committing: %w (stderr: %s)", err, commitResult.Stderr)
+	}
+	if commitResult.ExitCode != 0 {
+		return fmt.Errorf("git commit failed (exit %d): %s", commitResult.ExitCode, commitResult.Stderr)
+	}
+
+	c.logger.Info("auto-committed agent changes")
+	return nil
 }
 
 func (c *Coordinator) completeExecution(ctx context.Context, objectiveID string) {

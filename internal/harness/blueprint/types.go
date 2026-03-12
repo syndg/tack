@@ -10,6 +10,15 @@ const (
 	StepTypeBlueprintRef  StepType = "blueprint_ref"
 )
 
+// CommitMode controls how agent changes are committed after a step completes.
+type CommitMode string
+
+const (
+	CommitModeAuto  CommitMode = "auto"  // deterministic commit after agent finishes
+	CommitModeAgent CommitMode = "agent" // agent is instructed to commit itself
+	CommitModeNone  CommitMode = "none"  // no commit (scout/analysis agents)
+)
+
 // Blueprint defines a workflow as a sequence of steps.
 type Blueprint struct {
 	Name        string `yaml:"name" json:"name"`
@@ -30,6 +39,19 @@ type Step struct {
 	Retry       int        `yaml:"retry,omitempty" json:"retry,omitempty"`
 	Optional    bool       `yaml:"optional,omitempty" json:"optional,omitempty"`
 	Tools       *ToolScope `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Commit      CommitMode `yaml:"commit,omitempty" json:"commit,omitempty"`
+}
+
+// EffectiveCommitMode returns the commit mode for this step, defaulting to
+// CommitModeAuto for agent steps and CommitModeNone for all others.
+func (s *Step) EffectiveCommitMode() CommitMode {
+	if s.Commit != "" {
+		return s.Commit
+	}
+	if s.Type == StepTypeAgent {
+		return CommitModeAuto
+	}
+	return CommitModeNone
 }
 
 // ToolScope restricts which tools are available during a step.

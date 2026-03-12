@@ -44,10 +44,14 @@ func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.Ag
 		model = opts.Model
 	}
 
-	// 4. Construct command: shell-quote the prompt using single quotes
+	// 4. Construct command: shell-quote the prompt using single quotes.
+	// --dangerously-skip-permissions is safe here because agents run in
+	// isolated worktrees with no internet access or sensitive data.
 	quotedPrompt := "'" + strings.ReplaceAll(prompt, "'", `'\''`) + "'"
-	cmd := fmt.Sprintf("claude -p %s --model %s --allowedTools %s",
-		quotedPrompt, model, toolList)
+	cmd := fmt.Sprintf("claude -p %s --model %s --dangerously-skip-permissions", quotedPrompt, model)
+	if toolList != "" {
+		cmd += " --allowedTools " + toolList
+	}
 
 	// 5. Set up env vars
 	env := make(map[string]string)

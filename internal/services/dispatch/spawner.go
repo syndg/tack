@@ -26,6 +26,7 @@ type SpawnRequest struct {
 	TaskSpec    string         // task description or spec content
 	ParentAgent string         // name of parent agent (empty for top-level)
 	Guidance    string         // project-level guidance from config
+	CommitMode  string         // "auto", "agent", "none" — controls commit behavior
 }
 
 // SpawnResult contains the created agent session, process, and sandbox.
@@ -174,6 +175,7 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 			CuratedTools: curationResult,
 			LeadAgent:    req.ParentAgent,
 			Guidance:     req.Guidance,
+			CommitMode:   req.CommitMode,
 		})
 	}
 
