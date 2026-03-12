@@ -217,7 +217,6 @@ func (s *LocalSandbox) Exec(ctx context.Context, cmdStr string, opts sandbox.Exe
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
-			err = nil // non-zero exit is not a Go error
 		} else {
 			return sandbox.ExecResult{}, fmt.Errorf("executing command: %w", err)
 		}

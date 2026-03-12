@@ -19,7 +19,7 @@ var statusCmd = &cobra.Command{
 		c := client.New(daemonURL)
 		status, err := c.GetStatus(cmd.Context())
 		if err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Daemon not reachable at %s\n", daemonURL)
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Daemon not reachable at %s\n", daemonURL)
 			return err
 		}
 

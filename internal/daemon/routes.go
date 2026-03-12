@@ -836,7 +836,9 @@ func (d *Daemon) handleGetStreamDiff(w http.ResponseWriter, r *http.Request) {
 	// diff_stat is already a JSON string — write it directly to avoid double-encoding.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(entry.DiffStat))
+	if _, err := w.Write([]byte(entry.DiffStat)); err != nil {
+		d.logger.Warn("writing diff stat response", "error", err)
+	}
 }
 
 // writeJSON marshals data to JSON and writes it to the response with the given status code.

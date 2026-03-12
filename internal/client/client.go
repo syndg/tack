@@ -68,7 +68,7 @@ func (c *Client) CreateObjectiveWithOptions(ctx context.Context, description str
 	if err != nil {
 		return nil, fmt.Errorf("creating objective: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var obj domain.Objective
 	if err := json.NewDecoder(resp.Body).Decode(&obj); err != nil {
@@ -83,7 +83,7 @@ func (c *Client) GetObjective(ctx context.Context, id string) (*domain.Objective
 	if err != nil {
 		return nil, fmt.Errorf("getting objective: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var obj domain.Objective
 	if err := json.NewDecoder(resp.Body).Decode(&obj); err != nil {
@@ -98,7 +98,7 @@ func (c *Client) ListObjectives(ctx context.Context) ([]domain.Objective, error)
 	if err != nil {
 		return nil, fmt.Errorf("listing objectives: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var objectives []domain.Objective
 	if err := json.NewDecoder(resp.Body).Decode(&objectives); err != nil {
@@ -137,7 +137,7 @@ func (c *Client) CreateObjectiveSimple(ctx context.Context, description, bluepri
 	if err != nil {
 		return nil, fmt.Errorf("creating simple objective: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var result CreateObjectiveSimpleResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -158,7 +158,7 @@ func (c *Client) ListPlans(ctx context.Context) ([]domain.Plan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing plans: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var plans []domain.Plan
 	if err := json.NewDecoder(resp.Body).Decode(&plans); err != nil {
@@ -173,7 +173,7 @@ func (c *Client) GetPlan(ctx context.Context, id string) (*PlanResponse, error) 
 	if err != nil {
 		return nil, fmt.Errorf("getting plan: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var pr PlanResponse
 	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
@@ -188,7 +188,7 @@ func (c *Client) GetObjectivePlan(ctx context.Context, objectiveID string) (*Pla
 	if err != nil {
 		return nil, fmt.Errorf("getting objective plan: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var pr PlanResponse
 	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
@@ -203,7 +203,7 @@ func (c *Client) ApprovePlan(ctx context.Context, planID string) error {
 	if err != nil {
 		return fmt.Errorf("approving plan: %w", err)
 	}
-	resp.Body.Close()
+	closeBody(resp)
 	return nil
 }
 
@@ -213,7 +213,7 @@ func (c *Client) RejectPlan(ctx context.Context, planID string) error {
 	if err != nil {
 		return fmt.Errorf("rejecting plan: %w", err)
 	}
-	resp.Body.Close()
+	closeBody(resp)
 	return nil
 }
 
@@ -223,7 +223,7 @@ func (c *Client) ExecuteObjective(ctx context.Context, objectiveID string) error
 	if err != nil {
 		return fmt.Errorf("executing objective: %w", err)
 	}
-	resp.Body.Close()
+	closeBody(resp)
 	return nil
 }
 
@@ -233,7 +233,7 @@ func (c *Client) ListAgents(ctx context.Context) ([]domain.AgentSession, error) 
 	if err != nil {
 		return nil, fmt.Errorf("listing agents: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var agents []domain.AgentSession
 	if err := json.NewDecoder(resp.Body).Decode(&agents); err != nil {
@@ -248,7 +248,7 @@ func (c *Client) GetAgent(ctx context.Context, id string) (*domain.AgentSession,
 	if err != nil {
 		return nil, fmt.Errorf("getting agent: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var agent domain.AgentSession
 	if err := json.NewDecoder(resp.Body).Decode(&agent); err != nil {
@@ -263,7 +263,7 @@ func (c *Client) KillAgent(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("killing agent: %w", err)
 	}
-	resp.Body.Close()
+	closeBody(resp)
 	return nil
 }
 
@@ -273,7 +273,7 @@ func (c *Client) ApproveExecution(ctx context.Context, executionID string) error
 	if err != nil {
 		return fmt.Errorf("approving execution: %w", err)
 	}
-	resp.Body.Close()
+	closeBody(resp)
 	return nil
 }
 
@@ -283,7 +283,7 @@ func (c *Client) ListMail(ctx context.Context, agentName string) ([]domain.MailM
 	if err != nil {
 		return nil, fmt.Errorf("listing mail: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var messages []domain.MailMessage
 	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
@@ -303,7 +303,7 @@ func (c *Client) SendMail(ctx context.Context, msg *domain.MailMessage) error {
 	if err != nil {
 		return fmt.Errorf("sending mail: %w", err)
 	}
-	resp.Body.Close()
+	closeBody(resp)
 	return nil
 }
 
@@ -313,7 +313,7 @@ func (c *Client) GetStatus(ctx context.Context) (*StatusResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting status: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var status StatusResponse
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
@@ -333,7 +333,7 @@ func (c *Client) ListMergeQueue(ctx context.Context, objectiveID string) ([]doma
 	if err != nil {
 		return nil, fmt.Errorf("listing merge queue: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var entries []domain.MergeEntry
 	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
@@ -348,7 +348,7 @@ func (c *Client) GetMergeEntry(ctx context.Context, id string) (*domain.MergeEnt
 	if err != nil {
 		return nil, fmt.Errorf("getting merge entry: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var entry domain.MergeEntry
 	if err := json.NewDecoder(resp.Body).Decode(&entry); err != nil {
@@ -363,7 +363,7 @@ func (c *Client) RetryMerge(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("retrying merge: %w", err)
 	}
-	resp.Body.Close()
+	closeBody(resp)
 	return nil
 }
 
@@ -373,7 +373,7 @@ func (c *Client) GetStreamDiff(ctx context.Context, streamID string) (*merge.Dif
 	if err != nil {
 		return nil, fmt.Errorf("getting stream diff: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	var diff merge.DiffSummary
 	if err := json.NewDecoder(resp.Body).Decode(&diff); err != nil {
@@ -399,10 +399,15 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		defer resp.Body.Close()
+		defer resp.Body.Close() //nolint:errcheck // error path, body is read-only
 		respBody, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	return resp, nil
+}
+
+// closeBody closes an HTTP response body, intentionally ignoring close errors.
+func closeBody(resp *http.Response) {
+	_ = resp.Body.Close()
 }

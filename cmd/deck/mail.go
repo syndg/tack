@@ -60,7 +60,9 @@ var sendMailCmd = &cobra.Command{
 
 func init() {
 	sendMailCmd.Flags().StringVar(&mailObjective, "objective", "", "objective ID (required)")
-	sendMailCmd.MarkFlagRequired("objective")
+	if err := sendMailCmd.MarkFlagRequired("objective"); err != nil {
+		panic(err)
+	}
 	mailCmd.AddCommand(sendMailCmd)
 	rootCmd.AddCommand(mailCmd)
 }

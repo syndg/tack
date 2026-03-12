@@ -20,9 +20,9 @@ var agentsCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tROLE\tOBJECTIVE\tSTREAM\tSANDBOX\tSTATUS\tCREATED")
+		_, _ = fmt.Fprintln(w, "ID\tROLE\tOBJECTIVE\tSTREAM\tSANDBOX\tSTATUS\tCREATED")
 		for _, s := range sessions {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				truncateID(s.ID),
 				string(s.Role),
 				truncateID(s.ObjectiveID),

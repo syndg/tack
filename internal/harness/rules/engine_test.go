@@ -172,4 +172,3 @@ Rule two body.
 func newTestLogger() *slog.Logger {
 	return slog.Default()
 }
-

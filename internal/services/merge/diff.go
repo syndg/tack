@@ -248,10 +248,9 @@ func parseStatLine(line string) FileDiff {
 				deletions++
 			}
 		}
-	} else if len(fields) == 1 {
-		// Just a number with no +/- indicator (e.g., new file or pure change count).
-		// The actual insertions/deletions are ambiguous; leave as zero.
 	}
+	// If len(fields) == 1: just a number with no +/- indicator (e.g., new file).
+	// Insertions/deletions are ambiguous; left as zero.
 
 	return FileDiff{
 		Path:       path,

@@ -24,8 +24,8 @@ func New(model string, logger *slog.Logger) *Runtime {
 	}
 }
 
-func (r *Runtime) Name() string       { return "claude-code" }
-func (r *Runtime) SupportsRPC() bool  { return false }
+func (r *Runtime) Name() string        { return "claude-code" }
+func (r *Runtime) SupportsRPC() bool   { return false }
 func (r *Runtime) SupportsHooks() bool { return true }
 
 // Spawn starts a Claude Code process in the sandbox.

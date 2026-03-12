@@ -246,9 +246,7 @@ func doMatchGlob(pattern, name string) bool {
 			rest := pattern[2:]
 
 			// "**/" — consume the separator after **.
-			if strings.HasPrefix(rest, "/") {
-				rest = rest[1:]
-			}
+			rest = strings.TrimPrefix(rest, "/")
 
 			// Try matching rest against every suffix of name.
 			// Start with current position (** matches zero segments).

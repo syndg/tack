@@ -25,9 +25,9 @@ var plansCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tOBJECTIVE\tSTATUS\tCREATED")
+		_, _ = fmt.Fprintln(w, "ID\tOBJECTIVE\tSTATUS\tCREATED")
 		for _, p := range plans {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 				truncateID(p.ID),
 				truncateID(p.ObjectiveID),
 				string(p.Status),

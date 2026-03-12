@@ -2,7 +2,7 @@ package rules
 
 // Rule represents a scoped rule loaded from a markdown file with YAML frontmatter.
 type Rule struct {
-	Scope    string     `yaml:"scope"`             // glob pattern (e.g., "src/auth/**")
+	Scope    string     `yaml:"scope"`              // glob pattern (e.g., "src/auth/**")
 	Priority string     `yaml:"priority,omitempty"` // "high", "normal" (default: "normal")
 	Tools    *ToolScope `yaml:"tools,omitempty"`    // optional tool restrictions
 	Body     string     `yaml:"-"`                  // markdown content after frontmatter

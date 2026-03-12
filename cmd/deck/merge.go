@@ -35,9 +35,9 @@ var mergeCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tSTREAM\tBRANCH\tSTATUS\tTIER\tCREATED")
+		_, _ = fmt.Fprintln(w, "ID\tSTREAM\tBRANCH\tSTATUS\tTIER\tCREATED")
 		for _, e := range entries {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\n",
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\n",
 				truncateID(e.ID),
 				truncateID(e.StreamID),
 				e.Branch,

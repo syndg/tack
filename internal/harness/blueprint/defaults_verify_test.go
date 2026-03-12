@@ -1,8 +1,8 @@
 package blueprint_test
 
 import (
-	"testing"
 	"github.com/syndg/deck/internal/harness/blueprint"
+	"testing"
 )
 
 func TestDefaultsLoad(t *testing.T) {

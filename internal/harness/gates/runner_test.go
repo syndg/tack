@@ -14,8 +14,8 @@ type mockSandbox struct {
 	execFn func(ctx context.Context, cmd string, opts sandbox.ExecOpts) (sandbox.ExecResult, error)
 }
 
-func (m *mockSandbox) ID() string                                        { return "mock-sb" }
-func (m *mockSandbox) Status() sandbox.SandboxStatus                     { return sandbox.SandboxStatusRunning }
+func (m *mockSandbox) ID() string                                           { return "mock-sb" }
+func (m *mockSandbox) Status() sandbox.SandboxStatus                        { return sandbox.SandboxStatusRunning }
 func (m *mockSandbox) Upload(ctx context.Context, c []byte, p string) error { return nil }
 func (m *mockSandbox) Download(ctx context.Context, p string) ([]byte, error) {
 	return nil, nil

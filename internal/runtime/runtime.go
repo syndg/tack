@@ -31,12 +31,12 @@ type AgentOpts struct {
 }
 
 type AgentMessage struct {
-	Type    string `json:"type"`    // "prompt", "steer"
+	Type    string `json:"type"` // "prompt", "steer"
 	Content string `json:"content"`
 }
 
 type AgentEvent struct {
-	Type    string `json:"type"`    // "output", "tool_call", "error"
+	Type    string `json:"type"` // "output", "tool_call", "error"
 	Content string `json:"content"`
 }
 

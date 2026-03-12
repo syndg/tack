@@ -56,9 +56,9 @@ type AgentsConfig struct {
 
 type PiConfig struct {
 	Provider      string `yaml:"provider"`       // LLM provider (default: "anthropic")
-	Model         string `yaml:"model"`           // model override
-	ThinkingLevel string `yaml:"thinking_level"`  // default: "medium"
-	ExtensionPath string `yaml:"extension_path"`  // custom path (default: embedded)
+	Model         string `yaml:"model"`          // model override
+	ThinkingLevel string `yaml:"thinking_level"` // default: "medium"
+	ExtensionPath string `yaml:"extension_path"` // custom path (default: embedded)
 }
 
 type PlanningConfig struct {

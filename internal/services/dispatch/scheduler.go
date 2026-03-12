@@ -18,7 +18,7 @@ type Scheduler struct {
 	plans         *db.PlanStore
 	maxConcurrent int
 	mu            sync.Mutex
-	activeStreams  map[string]bool // streamID → executing
+	activeStreams map[string]bool // streamID → executing
 	eventBus      *events.PersistentBus
 	logger        *slog.Logger
 }
@@ -35,7 +35,7 @@ func NewScheduler(
 		streams:       streams,
 		plans:         plans,
 		maxConcurrent: maxConcurrent,
-		activeStreams:  make(map[string]bool),
+		activeStreams: make(map[string]bool),
 		eventBus:      eventBus,
 		logger:        logger,
 	}

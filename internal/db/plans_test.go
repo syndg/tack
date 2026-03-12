@@ -130,13 +130,11 @@ func TestPlanStore_List_ReturnsAllPlans(t *testing.T) {
 	obj := createTestObjective(t, NewObjectiveStore(d.Conn()), "test")
 
 	store := NewPlanStore(d.Conn())
-	var created []*domain.Plan
 	for i := 0; i < 3; i++ {
 		p := &domain.Plan{ObjectiveID: obj.ID, QualityGates: []string{}}
 		if err := store.Create(ctx, p); err != nil {
 			t.Fatalf("Create plan %d: %v", i, err)
 		}
-		created = append(created, p)
 	}
 
 	list, err := store.List(ctx)

@@ -1,0 +1,45 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofmt
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - goconst
+    - misspell
+    - unconvert
+    - bodyclose
+    - noctx
+    - errname
+
+  settings:
+    goconst:
+      min-len: 3
+      min-occurrences: 5
+    errcheck:
+      check-type-assertions: true
+      exclude-functions:
+        - (*database/sql.Rows).Close
+        - (*database/sql.DB).Close
+
+  exclusions:
+    paths:
+      - docs
+      - configs
+    rules:
+      - path: '_test\.go'
+        linters:
+          - errcheck
+          - noctx
+          - goconst
+      # QF1002 suggests tagged switch but some cases use dynamic expressions.
+      - text: 'QF1002'
+        path: '_test\.go'
+        linters:
+          - staticcheck

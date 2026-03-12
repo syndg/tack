@@ -33,7 +33,7 @@ type Coordinator struct {
 	ctx         context.Context // set in Start(); used as parent for execution goroutines
 	mu          sync.Mutex
 	activeExecs map[string]context.CancelFunc // objectiveID → cancel
-	agentMap    map[string]*SpawnResult        // sessionID → spawn result
+	agentMap    map[string]*SpawnResult       // sessionID → spawn result
 	terminated  map[string]bool               // sessionID → explicitly killed
 }
 
@@ -163,64 +163,6 @@ func (c *Coordinator) handleObjectiveUpdated(ctx context.Context, event domain.E
 			)
 		}
 	}()
-}
-
-// handleStreamReady processes EventStreamReady by spawning a lead agent
-// for the newly unblocked stream (dispatched by the dispatch_streams step).
-// Only spawns if the stream is still "pending" to prevent double-spawn with
-// HandleBlueprintRefStep.
-func (c *Coordinator) handleStreamReady(ctx context.Context, event domain.Event) {
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
-		c.logger.Error("failed to parse stream ready payload", "error", err)
-		return
-	}
-
-	streamID := payload["stream_id"]
-	if streamID == "" {
-		return
-	}
-
-	stream, err := c.streams.Get(ctx, streamID)
-	if err != nil {
-		c.logger.Error("failed to get stream", "stream_id", streamID, "error", err)
-		return
-	}
-
-	// Only spawn for pending streams; skip if already claimed by HandleBlueprintRefStep.
-	if stream.Status != "pending" {
-		return
-	}
-
-	plan, err := c.plans.Get(ctx, stream.PlanID)
-	if err != nil {
-		c.logger.Error("failed to get plan for stream", "plan_id", stream.PlanID, "error", err)
-		return
-	}
-
-	obj, err := c.objectives.Get(ctx, plan.ObjectiveID)
-	if err != nil {
-		c.logger.Error("failed to get objective", "objective_id", plan.ObjectiveID, "error", err)
-		return
-	}
-
-	// Claim the stream before spawning to prevent double-spawn.
-	if err := c.scheduler.MarkExecuting(ctx, streamID); err != nil {
-		c.logger.Error("failed to mark stream executing", "stream_id", streamID, "error", err)
-		return
-	}
-
-	if _, err := c.spawnAndMonitor(ctx, SpawnRequest{
-		Objective: obj,
-		Stream:    stream,
-		Role:      "lead",
-		TaskSpec:  stream.Description,
-	}); err != nil {
-		c.logger.Error("failed to spawn lead for stream",
-			"stream_id", streamID,
-			"error", err,
-		)
-	}
 }
 
 // StartExecution begins blueprint execution for an approved objective.
@@ -646,7 +588,7 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 					continue
 				}
 
-				// Only spawn if pending; skip if already claimed by Start()'s handler.
+				// Only spawn if pending; skip if already claimed by HandleBlueprintRefStep.
 				if stream.Status != "pending" {
 					continue
 				}

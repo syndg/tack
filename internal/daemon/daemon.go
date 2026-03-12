@@ -84,7 +84,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 	}
 
 	if err := database.Migrate(); err != nil {
-		database.Close()
+		_ = database.Close()
 		return nil, fmt.Errorf("running migrations: %w", err)
 	}
 
@@ -104,7 +104,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 	// Initialize blueprint registry and load defaults
 	bpRegistry := blueprint.NewRegistry()
 	if err := bpRegistry.LoadDefaults(); err != nil {
-		database.Close()
+		_ = database.Close()
 		return nil, fmt.Errorf("loading default blueprints: %w", err)
 	}
 
@@ -159,7 +159,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 	// Get project root for the sandbox provider.
 	projectRoot, err := os.Getwd()
 	if err != nil {
-		database.Close()
+		_ = database.Close()
 		return nil, fmt.Errorf("getting working directory: %w", err)
 	}
 
@@ -195,7 +195,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 				Snapshot: cfg.Sandbox.Daytona.Snapshot,
 			}, logger)
 			if err != nil {
-				database.Close()
+				_ = database.Close()
 				return nil, fmt.Errorf("creating daytona provider: %w", err)
 			}
 			sandboxProv = dp

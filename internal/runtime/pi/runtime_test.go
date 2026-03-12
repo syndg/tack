@@ -35,7 +35,7 @@ func (h *mockProcessHandle) ReadLine() (string, error) {
 }
 
 func (h *mockProcessHandle) Wait() (int, error) { return 0, nil }
-func (h *mockProcessHandle) Kill() error         { h.killed = true; return nil }
+func (h *mockProcessHandle) Kill() error        { h.killed = true; return nil }
 
 // mockSandbox for Pi runtime tests.
 type mockSandbox struct {

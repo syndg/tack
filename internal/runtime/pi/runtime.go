@@ -43,8 +43,8 @@ func New(cfg RuntimeConfig, logger *slog.Logger) *Runtime {
 	}
 }
 
-func (r *Runtime) Name() string       { return "pi" }
-func (r *Runtime) SupportsRPC() bool  { return true }
+func (r *Runtime) Name() string        { return "pi" }
+func (r *Runtime) SupportsRPC() bool   { return true }
 func (r *Runtime) SupportsHooks() bool { return true }
 
 // Spawn starts a Pi process in the sandbox.
@@ -111,12 +111,12 @@ func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.Ag
 	}
 	data, err := json.Marshal(initCmd)
 	if err != nil {
-		handle.Kill()
+		_ = handle.Kill()
 		return nil, fmt.Errorf("marshaling initial prompt: %w", err)
 	}
 	data = append(data, '\n')
 	if err := handle.Write(data); err != nil {
-		handle.Kill()
+		_ = handle.Kill()
 		return nil, fmt.Errorf("sending initial prompt: %w", err)
 	}
 

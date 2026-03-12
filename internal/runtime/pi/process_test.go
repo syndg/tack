@@ -266,7 +266,7 @@ type errorProcessHandle struct {
 	err error
 }
 
-func (h *errorProcessHandle) Write(_ []byte) error        { return nil }
-func (h *errorProcessHandle) ReadLine() (string, error)   { return "", h.err }
-func (h *errorProcessHandle) Wait() (int, error)          { return -1, h.err }
-func (h *errorProcessHandle) Kill() error                 { return nil }
+func (h *errorProcessHandle) Write(_ []byte) error      { return nil }
+func (h *errorProcessHandle) ReadLine() (string, error) { return "", h.err }
+func (h *errorProcessHandle) Wait() (int, error)        { return -1, h.err }
+func (h *errorProcessHandle) Kill() error               { return nil }

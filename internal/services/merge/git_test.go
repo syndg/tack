@@ -38,12 +38,12 @@ func TestTryCleanMerge_Success(t *testing.T) {
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
 			callLog = append(callLog, cmd)
-			switch {
-			case cmd == "git fetch origin":
+			switch cmd {
+			case "git fetch origin":
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case cmd == "git merge --no-edit feature-branch":
+			case "git merge --no-edit feature-branch":
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case cmd == "git diff --stat HEAD~1":
+			case "git diff --stat HEAD~1":
 				return sandbox.ExecResult{
 					ExitCode: 0,
 					Stdout:   " src/auth.go | 10 ++++----\n src/jwt.go  |  5 +++--\n 2 files changed, 7 insertions(+), 8 deletions(-)\n",
@@ -92,20 +92,20 @@ func TestTryCleanMerge_Conflict(t *testing.T) {
 	sb := &mockSandbox{
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
-			switch {
-			case cmd == "git fetch origin":
+			switch cmd {
+			case "git fetch origin":
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case cmd == "git merge --no-edit conflict-branch":
+			case "git merge --no-edit conflict-branch":
 				return sandbox.ExecResult{
 					ExitCode: 1,
 					Stderr:   "CONFLICT (content): Merge conflict in src/auth.go\nAutomatic merge failed",
 				}, nil
-			case cmd == "git diff --name-only --diff-filter=U":
+			case "git diff --name-only --diff-filter=U":
 				return sandbox.ExecResult{
 					ExitCode: 0,
 					Stdout:   "src/auth.go\nsrc/config.go\n",
 				}, nil
-			case cmd == "git merge --abort":
+			case "git merge --abort":
 				abortCalled = true
 				return sandbox.ExecResult{ExitCode: 0}, nil
 			default:
@@ -137,10 +137,10 @@ func TestTryAutoResolve_Success(t *testing.T) {
 	sb := &mockSandbox{
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
-			switch {
-			case cmd == "git merge -X theirs --no-edit feature-branch":
+			switch cmd {
+			case "git merge -X theirs --no-edit feature-branch":
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case cmd == "git diff --stat HEAD~1":
+			case "git diff --stat HEAD~1":
 				return sandbox.ExecResult{
 					ExitCode: 0,
 					Stdout:   " src/auth.go | 5 +++++\n 1 file changed, 5 insertions(+)\n",
@@ -175,12 +175,12 @@ func TestTryAutoResolve_Failure(t *testing.T) {
 	sb := &mockSandbox{
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
-			switch {
-			case cmd == "git merge -X theirs --no-edit bad-branch":
+			switch cmd {
+			case "git merge -X theirs --no-edit bad-branch":
 				return sandbox.ExecResult{ExitCode: 1, Stderr: "CONFLICT"}, nil
-			case cmd == "git diff --name-only --diff-filter=U":
+			case "git diff --name-only --diff-filter=U":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: "binary.dat\n"}, nil
-			case cmd == "git merge --abort":
+			case "git merge --abort":
 				abortCalled = true
 				return sandbox.ExecResult{ExitCode: 0}, nil
 			default:
@@ -367,25 +367,25 @@ func TestMerge_TiersSequentially(t *testing.T) {
 	sb := &mockSandbox{
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
-			switch {
-			case cmd == "git fetch origin":
+			switch cmd {
+			case "git fetch origin":
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case cmd == "git merge --no-edit test-branch":
+			case "git merge --no-edit test-branch":
 				tierAttempts++
 				// Tier 1 fails with conflict.
 				return sandbox.ExecResult{
 					ExitCode: 1,
 					Stderr:   "CONFLICT (content): Merge conflict in file.go",
 				}, nil
-			case cmd == "git diff --name-only --diff-filter=U":
+			case "git diff --name-only --diff-filter=U":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: "file.go\n"}, nil
-			case cmd == "git merge --abort":
+			case "git merge --abort":
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case cmd == "git merge -X theirs --no-edit test-branch":
+			case "git merge -X theirs --no-edit test-branch":
 				tierAttempts++
 				// Tier 2 succeeds.
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case cmd == "git diff --stat HEAD~1":
+			case "git diff --stat HEAD~1":
 				return sandbox.ExecResult{
 					ExitCode: 0,
 					Stdout:   " file.go | 3 +++\n 1 file changed, 3 insertions(+)\n",
@@ -416,22 +416,22 @@ func TestMerge_AllTiersFail(t *testing.T) {
 	sb := &mockSandbox{
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
-			switch {
-			case cmd == "git fetch origin":
+			switch cmd {
+			case "git fetch origin":
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case cmd == "git merge --no-edit stuck-branch":
+			case "git merge --no-edit stuck-branch":
 				return sandbox.ExecResult{
 					ExitCode: 1,
 					Stderr:   "CONFLICT (content): Merge conflict in binary.dat",
 				}, nil
-			case cmd == "git merge -X theirs --no-edit stuck-branch":
+			case "git merge -X theirs --no-edit stuck-branch":
 				return sandbox.ExecResult{
 					ExitCode: 1,
 					Stderr:   "CONFLICT (binary): Merge conflict in binary.dat",
 				}, nil
-			case cmd == "git diff --name-only --diff-filter=U":
+			case "git diff --name-only --diff-filter=U":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: "binary.dat\n"}, nil
-			case cmd == "git merge --abort":
+			case "git merge --abort":
 				return sandbox.ExecResult{ExitCode: 0}, nil
 			default:
 				return sandbox.ExecResult{ExitCode: 0}, nil
