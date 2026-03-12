@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// Version is the current version of the deck CLI.
+const Version = "0.1.0"
+
 // FormatDuration returns a human-friendly duration string.
 // It uses the two most significant non-zero units for readability
 // (e.g. "2h 5m", "3d 1h", "45s").
