@@ -35,3 +35,24 @@
 - **Same root cause as attempts 1 & 2**: The `go build ./...` error (`directory prefix . does not contain main module`) is caused by the running ralph.sh process holding a stale `PROJECT_DIR=/Volumes/External` variable. The fix on disk (line 18: `PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"`) is already correct since attempt 1.
 - **No Go code changes needed**: `go build ./...` and `go vet ./...` both pass cleanly from `/Volumes/External/Coding/deck`. All Phase 1 files (`internal/db/merge_queue.go`, `internal/db/migrations.go`, `internal/domain/types.go`) compile without errors.
 - **Action required**: Ralph must be **restarted** so the corrected `PROJECT_DIR` takes effect. The running process cannot self-heal this variable — it was set once at startup and the in-memory value persists regardless of file edits.
+
+## Task 2.1: Create merge operations package
+
+- Created `internal/services/merge/git.go` — the `GitMerger` type with full implementations of `Merge`, `TryCleanMerge`, `TryAutoResolve`, `GetDiffStat`, `GetConflictFiles`, and `AbortMerge`.
+- `Merge()` tries tiers sequentially: tier 1 (clean `git merge --no-edit`), tier 2 (`git merge -X theirs --no-edit`), tier 3 (stub — logs warning, returns failure). Tier 3 AI merge is deferred to Phase 8.
+- `TryCleanMerge` fetches origin first (`git fetch origin`) to ensure refs are up-to-date before attempting the merge. `TryAutoResolve` does not re-fetch since it runs immediately after a tier 1 failure.
+- Conflict detection checks both `res.Stderr` and `res.Stdout` for "CONFLICT" — git versions vary on where they output the conflict message.
+- `GetDiffStat` parses the summary line of `git diff --stat HEAD~1` using a regex that handles optional insertions/deletions (e.g., a file-only-deleted diff won't have an insertions clause).
+- Exported `parseDiffStatSummary` as unexported helper — kept internal since task 2.2 (`diff.go`) will have its own `ParseDiffStat` for different purposes.
+- All sandbox operations use `sandbox.ExecOpts{}` (zero value) — the caller (processor, task 3.1) is responsible for setting work dir and timeouts on the sandbox itself.
+- `go build ./...` and `go vet ./...` pass with no errors.
+
+## Task 2.2: Create diff extraction
+
+- Created `internal/services/merge/diff.go` with `DiffExtractor`, `DiffSummary`, `FileDiff` types and all specified methods.
+- `Extract` runs three git diff commands via `sb.Exec()`: `--stat` (per-file +/- counts), `--name-status` (A/M/D/R labels), and full diff (patch content). Results are merged by file path into `[]FileDiff`.
+- `ParseDiffStat` handles the `git diff --stat` format including binary files (`Bin 0 -> N bytes`), the +/- indicator characters, and the summary line (`N files changed, N insertions(+), N deletions(-)`). Uses `extractNumberBefore` helper to find the number preceding "insertion"/"deletion" keywords.
+- `ParseNameStatus` handles rename entries (`R100\told\tnew`) by using the destination path, and maps single-char status codes to human labels via `nameStatusToLabel`.
+- `parsePatchOutput` (unexported) splits unified diff output on `"diff --git "` boundaries and keys by the `b/` path — handles renames correctly.
+- Added `strconv` import (beyond PRD's listed imports) for parsing insertion/deletion counts from the stat summary line.
+- `go build ./...` passes with no errors.

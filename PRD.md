@@ -124,7 +124,7 @@ The `merge_queue` table schema already exists in `internal/db/migrations.go`. Th
 
 Implement the core git operations that perform branch merging with tiered conflict resolution. These operations run inside sandboxes via `Exec()`.
 
-- [ ] **2.1** Create merge operations package
+- [x] **2.1** Create merge operations package
   Create `internal/services/merge/git.go` with:
 
   ```go
@@ -212,7 +212,7 @@ Implement the core git operations that perform branch merging with tiered confli
 
   File: `internal/services/merge/git.go`
 
-- [ ] **2.2** Create diff extraction
+- [x] **2.2** Create diff extraction
   Create `internal/services/merge/diff.go` with:
 
   ```go
