@@ -410,7 +410,7 @@ The central merge processing loop. Consumes the merge queue FIFO, coordinates gi
 
 Connect the merge processor to the existing blueprint engine and daemon infrastructure.
 
-- [ ] **4.1** Wire merge processor into daemon
+- [x] **4.1** Wire merge processor into daemon
   Update `internal/daemon/daemon.go` to:
 
   1. Add fields to `Daemon` struct:
@@ -449,7 +449,7 @@ Connect the merge processor to the existing blueprint engine and daemon infrastr
 
   File: `internal/daemon/daemon.go`
 
-- [ ] **4.2** Replace merge_queue stub in handlers
+- [x] **4.2** Replace merge_queue stub in handlers
   Update `internal/services/dispatch/handlers.go`:
 
   1. Add `mergeProcessor *merge.Processor` field to `Handlers` struct

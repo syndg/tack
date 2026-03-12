@@ -27,6 +27,7 @@ import (
 	"github.com/syndg/deck/internal/services/events"
 	"github.com/syndg/deck/internal/services/lifecycle"
 	mail "github.com/syndg/deck/internal/services/mail"
+	"github.com/syndg/deck/internal/services/merge"
 	"github.com/syndg/deck/internal/services/planner"
 )
 
@@ -48,6 +49,9 @@ type Daemon struct {
 	spawner         *dispatch.Spawner
 	scheduler       *dispatch.Scheduler
 	coordinator     *dispatch.Coordinator
+
+	mergeQueueStore *db.MergeQueueStore
+	mergeProcessor  *merge.Processor
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -224,8 +228,18 @@ func New(cfg *config.Config) (*Daemon, error) {
 	// Create scheduler.
 	scheduler := dispatch.NewScheduler(streamStore, planStore, cfg.Agents.MaxConcurrent, eventBus, logger)
 
+	// Create merge queue store and processor.
+	mergeQueueStore := db.NewMergeQueueStore(conn)
+	gitMerger := merge.NewGitMerger(logger)
+	diffExtractor := merge.NewDiffExtractor(logger)
+	mergeProcessor := merge.NewProcessor(
+		mergeQueueStore, streamStore, planStore, objectiveStore,
+		gitMerger, diffExtractor, gateRun, sandboxProv,
+		eventBus, logger,
+	)
+
 	// Create step handlers and register deterministic + human types.
-	handlers := dispatch.NewHandlers(scheduler, gateRun, lifecycleMgr, planStore, streamStore, objectiveStore, executionStore, agentStore, sandboxProv, eventBus, logger)
+	handlers := dispatch.NewHandlers(scheduler, gateRun, lifecycleMgr, mergeProcessor, planStore, streamStore, objectiveStore, executionStore, agentStore, sandboxProv, eventBus, logger)
 	bpEngine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
 	bpEngine.RegisterHandler(blueprint.StepTypeHuman, handlers.HandleHuman)
 
@@ -256,6 +270,9 @@ func New(cfg *config.Config) (*Daemon, error) {
 		spawner:         spawner,
 		scheduler:       scheduler,
 		coordinator:     coordinator,
+
+		mergeQueueStore: mergeQueueStore,
+		mergeProcessor:  mergeProcessor,
 
 		lifecycleManager: lifecycleMgr,
 		planningService:  planningService,
@@ -291,6 +308,11 @@ func (d *Daemon) Start() error {
 			return fmt.Errorf("starting coordinator: %w", err)
 		}
 	}
+	if d.mergeProcessor != nil {
+		if err := d.mergeProcessor.Start(d.ctx); err != nil {
+			return fmt.Errorf("starting merge processor: %w", err)
+		}
+	}
 	d.logger.Info("Deck daemon listening", "addr", d.cfg.Daemon.Listen)
 	err := d.server.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {
@@ -304,6 +326,9 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 	d.logger.Info("shutting down daemon")
 	if d.cancel != nil {
 		d.cancel()
+	}
+	if d.mergeProcessor != nil {
+		d.mergeProcessor.Stop()
 	}
 	if d.coordinator != nil {
 		d.coordinator.Stop()

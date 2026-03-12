@@ -66,3 +66,21 @@
 - **Merger sandbox**: Uses `sandboxProv.List` with `{deck.role: merger, deck.objective: objectiveID}` to reuse an existing merger sandbox across multiple stream merges for the same objective. Creates one if none exists.
 - **Event flow**: `EnqueueStream` publishes `EventMergeQueued` (which the processor subscribes to). Note that `signalMergeReady` (handlers.go) also publishes `EventMergeQueued` before entries exist — the processor handles this gracefully by finding an empty queue.
 - `go build ./...` and `go vet ./...` pass with no errors.
+
+## Task 4.1: Wire merge processor into daemon
+
+- Added `mergeQueueStore *db.MergeQueueStore` and `mergeProcessor *merge.Processor` fields to the `Daemon` struct.
+- In `New()`: create `MergeQueueStore`, `GitMerger`, `DiffExtractor`, and `Processor` — placed after scheduler creation so all dependencies are available. Passed `mergeProcessor` to `dispatch.NewHandlers()`.
+- In `Start()`: call `mergeProcessor.Start(d.ctx)` after coordinator start, guarded by nil check.
+- In `Shutdown()`: call `mergeProcessor.Stop()` before coordinator stop — merge processor should drain before the coordinator shuts down.
+- Task 4.2 was already implemented in a prior session (handlers.go updated with field, constructor param, and full `mergeQueue` handler). This task completed the daemon-side wiring that 4.2's findings noted was partial.
+- `go build ./...` and `go vet ./...` pass with no errors.
+
+## Task 4.2: Replace merge_queue stub in handlers
+
+- Added `mergeProcessor *merge.Processor` field to `Handlers` struct and as the 4th parameter of `NewHandlers()` (after `lc *lifecycle.Manager`).
+- Replaced the `mergeQueue` stub with full implementation: fetches plan by objective, lists streams by plan, enqueues all `merge_ready` streams via `h.mergeProcessor.EnqueueStream()`. Uses `domain.StreamStatusMergeReady` constant instead of raw string literal.
+- Added nil guard on `h.mergeProcessor` — logs a warning and returns completed (no-op) if the processor isn't wired. This makes the handler safe regardless of daemon initialization order.
+- Task 4.1 was already partially implemented in `daemon.go` but appended `mergeProcessor` at the end of the `NewHandlers()` call. Fixed the argument order to match the new signature (4th position).
+- Errors from individual `EnqueueStream` calls are logged but don't fail the handler — the merge processor runs asynchronously and partial enqueue is better than aborting all streams.
+- `go build ./...` and `go vet ./...` pass with no errors.

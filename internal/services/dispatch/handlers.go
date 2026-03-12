@@ -14,6 +14,7 @@ import (
 	"github.com/syndg/deck/internal/sandbox"
 	events "github.com/syndg/deck/internal/services/events"
 	"github.com/syndg/deck/internal/services/lifecycle"
+	"github.com/syndg/deck/internal/services/merge"
 )
 
 // Handlers implements blueprint step handlers for deterministic and human steps.
@@ -21,6 +22,7 @@ type Handlers struct {
 	scheduler       *Scheduler
 	gateRunner      *gates.Runner
 	lifecycle       *lifecycle.Manager
+	mergeProcessor  *merge.Processor
 	plans           *db.PlanStore
 	streams         *db.StreamStore
 	objectives      *db.ObjectiveStore
@@ -36,6 +38,7 @@ func NewHandlers(
 	scheduler *Scheduler,
 	gateRunner *gates.Runner,
 	lc *lifecycle.Manager,
+	mergeProcessor *merge.Processor,
 	plans *db.PlanStore,
 	streams *db.StreamStore,
 	objectives *db.ObjectiveStore,
@@ -49,6 +52,7 @@ func NewHandlers(
 		scheduler:       scheduler,
 		gateRunner:      gateRunner,
 		lifecycle:       lc,
+		mergeProcessor:  mergeProcessor,
 		plans:           plans,
 		streams:         streams,
 		objectives:      objectives,
@@ -67,7 +71,7 @@ func NewHandlers(
 //   - "run_quality_gates"  → runs quality gates in sandbox
 //   - "signal_merge_ready" → marks streams as merge-ready and publishes EventMergeQueued
 //   - "mark_complete"      → transitions objective to reviewing
-//   - "merge_queue"        → stub for Phase 5
+//   - "merge_queue"        → enqueues merge_ready streams into the merge processor
 func (h *Handlers) HandleDeterministic(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error) {
 	switch step.Action {
 	case "dispatch_streams":
@@ -316,11 +320,41 @@ func (h *Handlers) markComplete(ctx context.Context, exec *blueprint.Execution) 
 }
 
 // mergeQueue implements the "merge_queue" deterministic action.
-// Stub for Phase 5 — actual merge queue processing is deferred.
+// Enqueues all merge_ready streams for the objective into the merge processor.
+// The merge processor runs asynchronously — this handler completes immediately
+// and the processor transitions the objective to "reviewing" when all merges finish.
 func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (blueprint.StepResult, error) {
-	h.logger.Info("merge_queue stub — Phase 5 will implement actual merge queue processing",
-		"execution_id", exec.ID,
-		"objective_id", exec.ObjectiveID,
-	)
+	if h.mergeProcessor == nil {
+		h.logger.Warn("merge processor not configured, skipping merge queue",
+			"execution_id", exec.ID,
+			"objective_id", exec.ObjectiveID,
+		)
+		return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
+	}
+
+	// Get the plan for this objective.
+	plan, err := h.plans.GetByObjective(ctx, exec.ObjectiveID)
+	if err != nil {
+		return blueprint.StepResult{Status: blueprint.StepStatusFailed}, fmt.Errorf("getting plan: %w", err)
+	}
+
+	// Get all streams for the plan.
+	streams, err := h.streams.ListByPlan(ctx, plan.ID)
+	if err != nil {
+		return blueprint.StepResult{Status: blueprint.StepStatusFailed}, fmt.Errorf("listing streams: %w", err)
+	}
+
+	// Enqueue all merge_ready streams.
+	for _, stream := range streams {
+		if stream.Status == domain.StreamStatusMergeReady {
+			if err := h.mergeProcessor.EnqueueStream(ctx, stream.ID); err != nil {
+				h.logger.Error("failed to enqueue stream for merge",
+					"stream_id", stream.ID,
+					"error", err,
+				)
+			}
+		}
+	}
+
 	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
 }
