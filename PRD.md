@@ -494,7 +494,7 @@ Connect the merge processor to the existing blueprint engine and daemon infrastr
 
 Expose merge queue management and diff viewing through the HTTP API and CLI.
 
-- [ ] **5.1** Add merge queue HTTP routes
+- [x] **5.1** Add merge queue HTTP routes
   Add to `internal/daemon/routes.go`:
 
   ```go
@@ -534,7 +534,7 @@ Expose merge queue management and diff viewing through the HTTP API and CLI.
 
   File: `internal/daemon/routes.go`
 
-- [ ] **5.2** Add merge queue client methods
+- [x] **5.2** Add merge queue client methods
   Add to `internal/client/client.go`:
 
   ```go
@@ -555,7 +555,7 @@ Expose merge queue management and diff viewing through the HTTP API and CLI.
 
   File: `internal/client/client.go`
 
-- [ ] **5.3** Create `deck merge` command
+- [x] **5.3** Create `deck merge` command
   Create `cmd/deck/merge.go` with:
 
   ```go

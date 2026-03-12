@@ -84,3 +84,30 @@
 - Task 4.1 was already partially implemented in `daemon.go` but appended `mergeProcessor` at the end of the `NewHandlers()` call. Fixed the argument order to match the new signature (4th position).
 - Errors from individual `EnqueueStream` calls are logged but don't fail the handler — the merge processor runs asynchronously and partial enqueue is better than aborting all streams.
 - `go build ./...` and `go vet ./...` pass with no errors.
+
+## Task 5.1: Add merge queue HTTP routes
+
+- Added 4 routes to `registerRoutes()`: `GET /merge-queue`, `GET /merge-queue/{id}`, `POST /merge-queue/{id}/retry`, `GET /streams/{id}/diff`.
+- `handleListMergeQueue` uses `?objective=` query param to switch between `ListByObjective()` (all statuses for an objective) and `ListPending()` (only pending entries). This matches the PRD spec.
+- `handleRetryMerge` validates entry status is `failed` or `conflict` before resetting to `pending` with tier=0 and cleared error/diff_stat fields.
+- `handleGetStreamDiff` writes the `diff_stat` JSON string directly to the response using `w.Write()` instead of `writeJSON()` to avoid double-encoding the already-serialized JSON.
+- All handlers follow existing patterns: `errors.Is(err, sql.ErrNoRows)` for 404s, `d.logger.Error` for server errors, nil-slice-to-empty-slice normalization.
+- `go build ./...` and `go vet ./...` pass with no errors.
+
+## Task 5.2: Add merge queue client methods
+
+- Added four methods to `internal/client/client.go`: `ListMergeQueue`, `GetMergeEntry`, `RetryMerge`, `GetStreamDiff`.
+- All methods follow the existing `do()` helper pattern — construct request, check for error, decode JSON response.
+- `ListMergeQueue` appends `?objective={id}` query param when `objectiveID` is non-empty, matching the server route spec from task 5.1.
+- `GetStreamDiff` returns `*merge.DiffSummary` — added `internal/services/merge` import. No circular dependency since `merge` doesn't import `client`.
+- `RetryMerge` follows the same fire-and-forget pattern as `ApprovePlan`/`RejectPlan` — closes body, returns nil on success.
+- `go build ./...` and `go vet ./...` pass with no errors.
+
+## Task 5.3: Create deck merge command
+
+- Created `cmd/deck/merge.go` with three subcommands: `deck merge` (list queue), `deck merge retry [id]` (re-queue failed entry), `deck merge diff [stream-id]` (view diff summary).
+- `MergeEntry.CreatedAt` is `int64` (Unix timestamp), so wrapped with `time.Unix(e.CreatedAt, 0)` before passing to the existing `timeAgo` helper from `plans.go`.
+- Added `statusLetter` helper to map `FileDiff.Status` strings ("added", "modified", "deleted", "renamed") to single-letter indicators (A/M/D/R) for the diff output.
+- Reuses `truncateID` and `timeAgo` from `plans.go` — no duplication needed since they're in the same `main` package.
+- Table output uses `text/tabwriter` consistent with `plansCmd`. Diff output uses `fmt.Printf` with manual alignment per the PRD format spec.
+- `go build ./...` passes with no errors.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/deck/internal/services/merge"
 )
 
 // Client communicates with the Deck daemon over HTTP.
@@ -319,6 +320,66 @@ func (c *Client) GetStatus(ctx context.Context) (*StatusResponse, error) {
 		return nil, fmt.Errorf("decoding status response: %w", err)
 	}
 	return &status, nil
+}
+
+// ListMergeQueue returns merge queue entries, optionally filtered by objective.
+func (c *Client) ListMergeQueue(ctx context.Context, objectiveID string) ([]domain.MergeEntry, error) {
+	path := "/merge-queue"
+	if objectiveID != "" {
+		path += "?objective=" + objectiveID
+	}
+
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing merge queue: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var entries []domain.MergeEntry
+	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+		return nil, fmt.Errorf("decoding merge queue response: %w", err)
+	}
+	return entries, nil
+}
+
+// GetMergeEntry returns a single merge queue entry.
+func (c *Client) GetMergeEntry(ctx context.Context, id string) (*domain.MergeEntry, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/merge-queue/"+id, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting merge entry: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var entry domain.MergeEntry
+	if err := json.NewDecoder(resp.Body).Decode(&entry); err != nil {
+		return nil, fmt.Errorf("decoding merge entry response: %w", err)
+	}
+	return &entry, nil
+}
+
+// RetryMerge resets a failed merge entry to pending.
+func (c *Client) RetryMerge(ctx context.Context, id string) error {
+	resp, err := c.do(ctx, http.MethodPost, "/merge-queue/"+id+"/retry", nil)
+	if err != nil {
+		return fmt.Errorf("retrying merge: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// GetStreamDiff returns the diff summary for a merged stream.
+func (c *Client) GetStreamDiff(ctx context.Context, streamID string) (*merge.DiffSummary, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/streams/"+streamID+"/diff", nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting stream diff: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var diff merge.DiffSummary
+	if err := json.NewDecoder(resp.Body).Decode(&diff); err != nil {
+		return nil, fmt.Errorf("decoding stream diff response: %w", err)
+	}
+	return &diff, nil
 }
 
 // do executes an HTTP request and returns the response. It returns an error
