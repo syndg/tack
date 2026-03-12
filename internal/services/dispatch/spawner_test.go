@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
@@ -283,5 +284,69 @@ drainFailed:
 	}
 	if !gotFailed {
 		t.Error("expected EventAgentFailed to be published after Kill")
+	}
+}
+
+func TestFindSandboxForStep_FiltersByStreamAndRole(t *testing.T) {
+	spawner, _, _, _, _ := setupSpawnerTest(t)
+	ctx := context.Background()
+	obj := makeSpawnObjective("obj-find-sandbox-1234")
+
+	builderA, err := spawner.Spawn(ctx, SpawnRequest{
+		Objective: obj,
+		Role:      "builder",
+		Stream:    &domain.Stream{ID: "stream-a", Title: "A"},
+	})
+	if err != nil {
+		t.Fatalf("Spawn builderA: %v", err)
+	}
+	if _, err := spawner.Spawn(ctx, SpawnRequest{
+		Objective: obj,
+		Role:      "reviewer",
+		Stream:    &domain.Stream{ID: "stream-a", Title: "A"},
+	}); err != nil {
+		t.Fatalf("Spawn reviewerA: %v", err)
+	}
+	if _, err := spawner.Spawn(ctx, SpawnRequest{
+		Objective: obj,
+		Role:      "builder",
+		Stream:    &domain.Stream{ID: "stream-b", Title: "B"},
+	}); err != nil {
+		t.Fatalf("Spawn builderB: %v", err)
+	}
+
+	sb, err := spawner.FindSandboxForStep(ctx, obj.ID, "stream-a", "builder")
+	if err != nil {
+		t.Fatalf("FindSandboxForStep: %v", err)
+	}
+	if sb.ID() != builderA.Sandbox.ID() {
+		t.Fatalf("sandbox = %q, want %q", sb.ID(), builderA.Sandbox.ID())
+	}
+}
+
+func TestFindSandboxForStep_PrefersMostRecentMatch(t *testing.T) {
+	spawner, _, _, _, _ := setupSpawnerTest(t)
+	ctx := context.Background()
+	obj := makeSpawnObjective("obj-find-latest-5678")
+	stream := &domain.Stream{ID: "stream-a", Title: "A"}
+
+	first, err := spawner.Spawn(ctx, SpawnRequest{Objective: obj, Role: "builder", Stream: stream})
+	if err != nil {
+		t.Fatalf("Spawn first: %v", err)
+	}
+	// AgentStore ordering uses created_at DESC with second-level precision, so
+	// ensure the second session lands in a later second.
+	time.Sleep(1100 * time.Millisecond)
+	second, err := spawner.Spawn(ctx, SpawnRequest{Objective: obj, Role: "builder", Stream: stream})
+	if err != nil {
+		t.Fatalf("Spawn second: %v", err)
+	}
+
+	sb, err := spawner.FindSandboxForStep(ctx, obj.ID, stream.ID, "builder")
+	if err != nil {
+		t.Fatalf("FindSandboxForStep: %v", err)
+	}
+	if sb.ID() != second.Sandbox.ID() {
+		t.Fatalf("sandbox = %q, want most recent %q (first was %q)", sb.ID(), second.Sandbox.ID(), first.Sandbox.ID())
 	}
 }

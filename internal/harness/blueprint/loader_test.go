@@ -109,6 +109,41 @@ func TestValidate_DeterministicWithoutAction(t *testing.T) {
 	}
 }
 
+func TestValidate_RejectsEmptyMessagesConfig(t *testing.T) {
+	bp := &Blueprint{
+		Name: "empty-messages",
+		Steps: []Step{
+			{ID: "s1", Type: StepTypeAgent, Role: "builder", Messages: &MessageRequests{}},
+		},
+	}
+
+	err := Validate(bp)
+	if err == nil {
+		t.Fatal("expected error for empty messages config")
+	}
+	if !strings.Contains(err.Error(), "empty messages config") {
+		t.Errorf("error = %q, want to contain 'empty messages config'", err.Error())
+	}
+}
+
+func TestValidate_RejectsUnknownMessageSource(t *testing.T) {
+	bp := &Blueprint{
+		Name: "unknown-message-source",
+		Steps: []Step{
+			{ID: "fix", Type: StepTypeAgent, Role: "builder"},
+			{ID: "pr", Type: StepTypeDeterministic, Action: "create_pr", MessageSource: "missing"},
+		},
+	}
+
+	err := Validate(bp)
+	if err == nil {
+		t.Fatal("expected error for unknown message source")
+	}
+	if !strings.Contains(err.Error(), "non-existent message source") {
+		t.Errorf("error = %q, want to contain 'non-existent message source'", err.Error())
+	}
+}
+
 func TestValidate_UnreachableStepChain(t *testing.T) {
 	bp := &Blueprint{
 		Name: "unreachable",

@@ -5,24 +5,27 @@ import (
 	"strings"
 
 	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/deck/internal/harness/blueprint"
 	"github.com/syndg/deck/internal/harness/rules"
 	"github.com/syndg/deck/internal/harness/tools"
 )
 
 // OverlayInput holds all inputs for constructing an agent's system overlay.
 type OverlayInput struct {
-	AgentName    string               // e.g., "builder-auth-1"
-	Role         *RoleDefinition      // role definition for this agent
-	Objective    *domain.Objective    // the objective being executed
-	Stream       *domain.Stream       // nil for planner
-	TaskSpec     string               // from lead or plan description
-	FileScope    []string             // files this agent may modify
-	MatchedRules []rules.MatchedRule  // rules matched against file scope
-	CuratedTools tools.CurationResult // resolved tool set
-	QualityGates []string             // gate commands to run before completion
-	LeadAgent    string               // name of this agent's lead (empty for planners)
-	Guidance     string               // project-level guidance from .deck/config.yaml
-	CommitMode   string               // "auto", "agent", "none" — controls commit behavior
+	AgentName    string                     // e.g., "builder-auth-1"
+	Role         *RoleDefinition            // role definition for this agent
+	Objective    *domain.Objective          // the objective being executed
+	Stream       *domain.Stream             // nil for planner
+	TaskSpec     string                     // from lead or plan description
+	FileScope    []string                   // files this agent may modify
+	MatchedRules []rules.MatchedRule        // rules matched against file scope
+	CuratedTools tools.CurationResult       // resolved tool set
+	QualityGates []string                   // gate commands to run before completion
+	LeadAgent    string                     // name of this agent's lead (empty for planners)
+	Guidance     string                     // project-level guidance from .deck/config.yaml
+	CommitMode   string                     // "auto", "agent", "none" — controls commit behavior
+	Messages     *blueprint.MessageRequests // optional delivery messages to generate
+	FixContext   string                     // quality gate errors from a previous fix-loop iteration
 }
 
 // BuildOverlay generates the markdown system prompt overlay for an agent.
@@ -33,7 +36,9 @@ type OverlayInput struct {
 //  4. Matched rules (high-priority prefixed with "IMPORTANT CONSTRAINT:")
 //  5. Quality gates
 //  6. Communication config
-//  7. Constraints
+//  7. Delivery metadata (optional)
+//  8. Commit policy/instructions
+//  9. Constraints
 func BuildOverlay(input OverlayInput) string {
 	var b strings.Builder
 
@@ -52,6 +57,16 @@ func BuildOverlay(input OverlayInput) string {
 		fmt.Fprintf(&b, "%s\n", input.TaskSpec)
 	}
 	b.WriteString("\n")
+
+	// 2b. Fix context (when agent is re-running after gate failure)
+	if input.FixContext != "" {
+		b.WriteString("## Fix Context\n")
+		b.WriteString("Your previous changes failed quality gates. Fix the errors below:\n\n")
+		b.WriteString("```\n")
+		b.WriteString(input.FixContext)
+		b.WriteString("\n```\n\n")
+		b.WriteString("Your previous code is still in the worktree. Fix the failing issues and ensure quality gates pass.\n\n")
+	}
 
 	// 3. File scope (conditional)
 	if len(input.FileScope) > 0 {
@@ -94,12 +109,50 @@ func BuildOverlay(input OverlayInput) string {
 	b.WriteString("- Use deck.escalate() if you're blocked\n")
 	b.WriteString("- Use deck.done() when finished\n\n")
 
-	// 7. Commit instructions (based on commit mode)
+	// 7. Delivery metadata (optional, based on requested messages)
+	if input.Messages != nil && input.Messages.Any() {
+		b.WriteString("## Delivery Metadata\n")
+		b.WriteString("At the very end of your final response, emit exactly one line starting with `DECK_MESSAGES:` followed by compact JSON containing the requested fields below.\n")
+		b.WriteString("Do not wrap it in a code fence. Keep it on a single line so Deck can parse it reliably.\n")
+		b.WriteString("If your runtime supports deck.done(), include that same final `DECK_MESSAGES:` line in the summary you pass to deck.done().\n")
+		if input.CommitMode == "agent" {
+			b.WriteString("If you are committing manually, you may write the commit first, then emit the final DECK_MESSAGES line in your response.\n")
+		}
+		b.WriteString("\nRequested fields:\n")
+		if input.Messages.Commit {
+			b.WriteString("- `commit_message`: the exact git commit message Deck should use (subject line with optional body)\n")
+		}
+		if input.Messages.PR {
+			b.WriteString("- `pr_title`: concise pull request title\n")
+			b.WriteString("- `pr_body`: markdown pull request body summarizing the change, testing, and context\n")
+		}
+		b.WriteString("\nExample final line:\n")
+		fields := RequestedMessageFieldNames(input.Messages)
+		b.WriteString("`DECK_MESSAGES:{")
+		for i, field := range fields {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			sample := "Describe this field"
+			switch field {
+			case MetadataKeyCommitMessage:
+				sample = "feat: implement the requested change"
+			case MetadataKeyPRTitle:
+				sample = "Implement the requested change"
+			case MetadataKeyPRBody:
+				sample = "## Summary\\n- What changed\\n\\n## Testing\\n- go test ./..."
+			}
+			fmt.Fprintf(&b, "\"%s\":\"%s\"", field, sample)
+		}
+		b.WriteString("}`\n\n")
+	}
+
+	// 8. Commit instructions (based on commit mode)
 	switch input.CommitMode {
 	case "agent":
 		b.WriteString("## Commit Instructions\n")
 		b.WriteString("When you are done with your changes, you MUST commit them:\n")
-		b.WriteString("1. Stage all changes: git add -A\n")
+		b.WriteString("1. Stage all code changes\n")
 		b.WriteString("2. Write a clear, descriptive commit message summarizing what you changed and why\n")
 		b.WriteString("3. Run: git commit -m \"<your message>\"\n")
 		b.WriteString("4. Do NOT push — Deck handles merging\n\n")
@@ -110,7 +163,7 @@ func BuildOverlay(input OverlayInput) string {
 		b.WriteString("- Do NOT run git add or git commit — Deck commits your changes automatically\n\n")
 	}
 
-	// 8. Constraints
+	// 9. Constraints
 	b.WriteString("## Constraints\n")
 	b.WriteString("- Do NOT modify files outside your scope\n")
 	b.WriteString("- Do NOT push to git (Deck handles merging)\n")

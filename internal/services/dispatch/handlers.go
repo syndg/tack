@@ -13,6 +13,7 @@ import (
 	"github.com/syndg/deck/internal/harness/blueprint"
 	"github.com/syndg/deck/internal/harness/gates"
 	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/deck/internal/services/agents"
 	events "github.com/syndg/deck/internal/services/events"
 	"github.com/syndg/deck/internal/services/lifecycle"
 	"github.com/syndg/deck/internal/services/merge"
@@ -87,7 +88,7 @@ func (h *Handlers) HandleDeterministic(ctx context.Context, exec *blueprint.Exec
 	case "merge_queue":
 		return h.mergeQueue(ctx, exec)
 	case "create_pr":
-		return h.createPR(ctx, exec)
+		return h.createPR(ctx, exec, step)
 	default:
 		return blueprint.StepResult{
 			Status: blueprint.StepStatusFailed,
@@ -243,7 +244,7 @@ func (h *Handlers) runQualityGates(ctx context.Context, exec *blueprint.Executio
 	if !result.AllPassed {
 		return blueprint.StepResult{
 			Status: blueprint.StepStatusFailed,
-			Error:  "one or more quality gates failed",
+			Error:  formatGateErrors(result),
 		}, nil
 	}
 
@@ -325,7 +326,7 @@ func (h *Handlers) markComplete(ctx context.Context, exec *blueprint.Execution) 
 
 // createPR implements the "create_pr" deterministic action.
 // Pushes the agent's branch to origin and creates a GitHub PR via `gh pr create`.
-func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution) (blueprint.StepResult, error) {
+func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error) {
 	obj, err := h.objectives.Get(ctx, exec.ObjectiveID)
 	if err != nil {
 		return blueprint.StepResult{
@@ -371,8 +372,15 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution) (blu
 	)
 
 	// Create PR via gh CLI.
+	messages := generatedMessagesFromSource(exec, step.MessageSource)
 	title := obj.Description
+	if messages.PRTitle != "" {
+		title = messages.PRTitle
+	}
 	body := fmt.Sprintf("Automated PR created by Deck.\n\nObjective: %s\nObjective ID: %s", obj.Description, obj.ID)
+	if messages.PRBody != "" {
+		body = messages.PRBody
+	}
 	escapedTitle := "'" + escapeShellSingleQuote(title) + "'"
 	escapedBody := "'" + escapeShellSingleQuote(body) + "'"
 	prCmd := fmt.Sprintf("gh pr create --title %s --body %s --head %s", escapedTitle, escapedBody, branch)
@@ -435,6 +443,48 @@ func (h *Handlers) findSandboxForObjective(ctx context.Context, objectiveID stri
 		return nil, fmt.Errorf("no agent sandbox found for objective %s", objectiveID)
 	}
 	return sb, nil
+}
+
+func generatedMessagesFromSource(exec *blueprint.Execution, sourceStepID string) agents.GeneratedMessages {
+	if sourceStepID == "" || exec == nil || exec.StepStates == nil {
+		return agents.GeneratedMessages{}
+	}
+	state := exec.StepStates[sourceStepID]
+	if state == nil {
+		return agents.GeneratedMessages{}
+	}
+	return agents.GeneratedMessagesFromMetadata(state.Metadata)
+}
+
+// formatGateErrors builds a structured error string from gate failures,
+// including the command, exit code, and truncated stderr/stdout.
+func formatGateErrors(result *gates.RunResult) string {
+	const maxOutputLen = 2000
+	truncate := func(s string) string {
+		s = strings.TrimSpace(s)
+		if len(s) <= maxOutputLen {
+			return s
+		}
+		return "..." + s[len(s)-maxOutputLen:]
+	}
+
+	var b strings.Builder
+	for _, gr := range result.Results {
+		if gr.Passed {
+			continue
+		}
+		fmt.Fprintf(&b, "gate %q failed (exit %d)\n", gr.Gate.Command, gr.ExitCode)
+		if stderr := truncate(gr.Stderr); stderr != "" {
+			fmt.Fprintf(&b, "stderr:\n%s\n", stderr)
+		}
+		if stdout := truncate(gr.Stdout); stdout != "" {
+			fmt.Fprintf(&b, "stdout:\n%s\n", stdout)
+		}
+	}
+	if b.Len() == 0 {
+		return "one or more quality gates failed"
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func escapeShellSingleQuote(s string) string {

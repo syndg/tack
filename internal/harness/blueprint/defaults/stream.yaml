@@ -14,12 +14,16 @@ steps:
     role: builder
     description: "Implement the stream's task"
     commit: auto
+    messages:
+      commit: true
     next: lint
 
   - id: lint
     type: deterministic
     action: run_quality_gates
     retry: 2
+    on_fail: build
+    max_fix_iterations: 3
     next: review
 
   - id: review

@@ -97,6 +97,14 @@ func Validate(bp *Blueprint) error {
 		stepIDs[step.ID] = true
 	}
 
+	// Build step-type lookup for cross-references.
+	stepByID := make(map[string]Step, len(bp.Steps))
+	for _, step := range bp.Steps {
+		if step.ID != "" {
+			stepByID[step.ID] = step
+		}
+	}
+
 	// Check step-type-specific requirements and next references.
 	for _, step := range bp.Steps {
 		switch step.Type {
@@ -107,16 +115,36 @@ func Validate(bp *Blueprint) error {
 			if step.Commit != "" && step.Commit != CommitModeAuto && step.Commit != CommitModeAgent && step.Commit != CommitModeNone {
 				errs = append(errs, fmt.Sprintf("agent step %q has invalid commit mode %q (must be auto, agent, or none)", step.ID, step.Commit))
 			}
+			if step.Messages != nil && !step.Messages.Any() {
+				errs = append(errs, fmt.Sprintf("agent step %q has empty messages config", step.ID))
+			}
+			if step.OnFail != "" {
+				errs = append(errs, fmt.Sprintf("agent step %q cannot use on_fail (only deterministic steps can)", step.ID))
+			}
 		case StepTypeDeterministic:
 			if step.Action == "" {
 				errs = append(errs, fmt.Sprintf("deterministic step %q must have an action", step.ID))
+			}
+			if step.Messages != nil {
+				errs = append(errs, fmt.Sprintf("deterministic step %q cannot declare agent messages", step.ID))
 			}
 		case StepTypeBlueprintRef:
 			if step.Ref == "" {
 				errs = append(errs, fmt.Sprintf("blueprint_ref step %q must have a ref", step.ID))
 			}
+			if step.Messages != nil {
+				errs = append(errs, fmt.Sprintf("blueprint_ref step %q cannot declare agent messages", step.ID))
+			}
+			if step.OnFail != "" {
+				errs = append(errs, fmt.Sprintf("blueprint_ref step %q cannot use on_fail (only deterministic steps can)", step.ID))
+			}
 		case StepTypeHuman:
-			// No additional requirements.
+			if step.Messages != nil {
+				errs = append(errs, fmt.Sprintf("human step %q cannot declare agent messages", step.ID))
+			}
+			if step.OnFail != "" {
+				errs = append(errs, fmt.Sprintf("human step %q cannot use on_fail (only deterministic steps can)", step.ID))
+			}
 		default:
 			errs = append(errs, fmt.Sprintf("step %q has unknown type %q", step.ID, step.Type))
 		}
@@ -124,18 +152,21 @@ func Validate(bp *Blueprint) error {
 		if step.Next != "" && !stepIDs[step.Next] {
 			errs = append(errs, fmt.Sprintf("step %q references non-existent next step %q", step.ID, step.Next))
 		}
-	}
-
-	// Check for unreachable steps.
-	// A step is reachable only if it can be reached by following Next pointers
-	// starting from the first step (the entry point).
-	stepByID := make(map[string]Step, len(bp.Steps))
-	for _, step := range bp.Steps {
-		if step.ID != "" {
-			stepByID[step.ID] = step
+		if step.MessageSource != "" && !stepIDs[step.MessageSource] {
+			errs = append(errs, fmt.Sprintf("step %q references non-existent message source %q", step.ID, step.MessageSource))
+		}
+		if step.OnFail != "" {
+			if !stepIDs[step.OnFail] {
+				errs = append(errs, fmt.Sprintf("step %q references non-existent on_fail target %q", step.ID, step.OnFail))
+			} else if target, ok := stepByID[step.OnFail]; ok && target.Type != StepTypeAgent {
+				errs = append(errs, fmt.Sprintf("step %q on_fail target %q must be an agent step", step.ID, step.OnFail))
+			}
 		}
 	}
 
+	// Check for unreachable steps.
+	// A step is reachable if it can be reached by following Next or OnFail
+	// pointers starting from the first step (the entry point).
 	reachable := make(map[string]bool, len(bp.Steps))
 	var visit func(string)
 	visit = func(stepID string) {
@@ -148,6 +179,7 @@ func Validate(bp *Blueprint) error {
 		}
 		reachable[stepID] = true
 		visit(step.Next)
+		visit(step.OnFail)
 	}
 
 	if len(bp.Steps) > 0 {

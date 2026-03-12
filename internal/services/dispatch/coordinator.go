@@ -13,6 +13,7 @@ import (
 	"github.com/syndg/deck/internal/domain"
 	"github.com/syndg/deck/internal/harness/blueprint"
 	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/deck/internal/services/agents"
 	events "github.com/syndg/deck/internal/services/events"
 	"github.com/syndg/deck/internal/services/lifecycle"
 )
@@ -359,13 +360,34 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		taskSpec = stream.Description
 	}
 
+	// Check for fix-loop context: if this step has fix_context metadata, the
+	// engine routed us here via on_fail. Find the previous sandbox to reuse,
+	// scoped to this specific stream and role so we don't grab a sandbox from
+	// a different agent (e.g. scout or reviewer) within the same objective.
+	var fixContext, reuseSandboxID string
+	if state := exec.StepStates[step.ID]; state != nil && state.Metadata != nil {
+		fixContext = state.Metadata["fix_context"]
+	}
+	if fixContext != "" {
+		streamID := ""
+		if stream != nil {
+			streamID = stream.ID
+		}
+		if sb, err := c.spawner.FindSandboxForStep(ctx, exec.ObjectiveID, streamID, role); err == nil && sb != nil {
+			reuseSandboxID = sb.ID()
+		}
+	}
+
 	// Spawn the agent.
 	result, err := c.spawner.Spawn(ctx, SpawnRequest{
-		Objective:  obj,
-		Stream:     stream,
-		Role:       role,
-		TaskSpec:   taskSpec,
-		CommitMode: string(step.EffectiveCommitMode()),
+		Objective:      obj,
+		Stream:         stream,
+		Role:           role,
+		TaskSpec:       taskSpec,
+		CommitMode:     string(step.EffectiveCommitMode()),
+		Messages:       step.Messages,
+		FixContext:     fixContext,
+		ReuseSandboxID: reuseSandboxID,
 	})
 	if err != nil {
 		if stream != nil {
@@ -420,11 +442,13 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		}, nil
 	}
 
+	cleanSummary, generatedMessages := c.extractGeneratedMessages(step, agentResult.Summary)
+
 	// Handle commit mode after successful agent completion.
 	commitMode := step.EffectiveCommitMode()
 	switch commitMode {
 	case blueprint.CommitModeAuto:
-		if err := c.autoCommit(ctx, result.Sandbox, obj.Description); err != nil {
+		if err := c.autoCommit(ctx, result.Sandbox, obj.Description, generatedMessages.CommitMessage); err != nil {
 			c.logger.Error("auto-commit failed", "step", step.ID, "error", err)
 			// Non-fatal: changes are still in the worktree for the merge processor.
 		}
@@ -433,7 +457,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		statusResult, err := result.Sandbox.Exec(ctx, "git status --porcelain", sandbox.ExecOpts{})
 		if err == nil && strings.TrimSpace(statusResult.Stdout) != "" {
 			c.logger.Warn("agent mode set but uncommitted changes found, falling back to auto-commit", "step", step.ID)
-			if err := c.autoCommit(ctx, result.Sandbox, obj.Description); err != nil {
+			if err := c.autoCommit(ctx, result.Sandbox, obj.Description, generatedMessages.CommitMessage); err != nil {
 				c.logger.Error("fallback auto-commit failed", "step", step.ID, "error", err)
 			}
 		}
@@ -441,10 +465,11 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		// No commit needed.
 	}
 
-	c.spawner.MarkCompleted(ctx, result.Session, agentResult.Summary)
+	c.spawner.MarkCompleted(ctx, result.Session, cleanSummary)
 	return blueprint.StepResult{
-		Status: blueprint.StepStatusCompleted,
-		Output: agentResult.Summary,
+		Status:   blueprint.StepStatusCompleted,
+		Output:   cleanSummary,
+		Metadata: generatedMessages.ToMetadata(),
 	}, nil
 }
 
@@ -757,9 +782,32 @@ func (c *Coordinator) singleStreamForObjective(ctx context.Context, objectiveID 
 	return &stream, nil
 }
 
+func (c *Coordinator) extractGeneratedMessages(step *blueprint.Step, summary string) (string, agents.GeneratedMessages) {
+	if step.Messages == nil || !step.Messages.Any() {
+		return summary, agents.GeneratedMessages{}
+	}
+
+	cleanSummary, msgs, found, err := agents.ExtractGeneratedMessages(summary)
+	if err != nil {
+		c.logger.Warn("agent produced invalid generated messages output",
+			"step", step.ID,
+			"error", err,
+		)
+		return cleanSummary, agents.GeneratedMessages{}
+	}
+	if !found {
+		c.logger.Warn("agent did not emit generated messages output",
+			"step", step.ID,
+		)
+		return cleanSummary, agents.GeneratedMessages{}
+	}
+	return cleanSummary, msgs
+}
+
 // autoCommit stages and commits all changes in a sandbox worktree.
-// The commit message is derived from the objective description and diff stat.
-func (c *Coordinator) autoCommit(ctx context.Context, sb sandbox.Sandbox, objectiveDesc string) error {
+// The commit message is taken from the agent when provided, otherwise it falls
+// back to the objective description plus diff stat.
+func (c *Coordinator) autoCommit(ctx context.Context, sb sandbox.Sandbox, objectiveDesc, generatedCommitMessage string) error {
 	// Check if there are uncommitted changes.
 	statusResult, err := sb.Exec(ctx, "git status --porcelain", sandbox.ExecOpts{})
 	if err != nil {
@@ -770,24 +818,35 @@ func (c *Coordinator) autoCommit(ctx context.Context, sb sandbox.Sandbox, object
 		return nil
 	}
 
-	// Get diff stat for the commit message body.
-	diffResult, _ := sb.Exec(ctx, "git diff --stat", sandbox.ExecOpts{})
+	commitMessage := strings.TrimSpace(generatedCommitMessage)
+	if commitMessage == "" {
+		// Get diff stat for the commit message body.
+		diffResult, _ := sb.Exec(ctx, "git diff --stat", sandbox.ExecOpts{})
 
-	// Build commit message.
-	var msg strings.Builder
-	fmt.Fprintf(&msg, "deck: %s", objectiveDesc)
-	if strings.TrimSpace(diffResult.Stdout) != "" {
-		fmt.Fprintf(&msg, "\n\n%s", strings.TrimSpace(diffResult.Stdout))
+		// Build commit message.
+		var msg strings.Builder
+		fmt.Fprintf(&msg, "deck: %s", objectiveDesc)
+		if strings.TrimSpace(diffResult.Stdout) != "" {
+			fmt.Fprintf(&msg, "\n\n%s", strings.TrimSpace(diffResult.Stdout))
+		}
+		commitMessage = msg.String()
 	}
 
-	// Stage all changes.
+	// Stage all changes before uploading the temporary commit-message file so it
+	// never becomes part of the commit.
 	if stageResult, err := sb.Exec(ctx, "git add -A", sandbox.ExecOpts{}); err != nil {
 		return fmt.Errorf("staging changes: %w (stderr: %s)", err, stageResult.Stderr)
 	}
 
-	// Commit with shell-escaped message.
-	escaped := strings.ReplaceAll(msg.String(), "'", `'\''`)
-	commitCmd := fmt.Sprintf("git commit -m '%s'", escaped)
+	const commitMessagePath = ".deck/tmp/auto-commit-message.txt"
+	if err := sb.Upload(ctx, []byte(commitMessage+"\n"), commitMessagePath); err != nil {
+		return fmt.Errorf("uploading commit message: %w", err)
+	}
+	defer func() {
+		_, _ = sb.Exec(context.Background(), fmt.Sprintf("rm -f '%s'", escapeShellSingleQuote(commitMessagePath)), sandbox.ExecOpts{})
+	}()
+
+	commitCmd := fmt.Sprintf("git commit -F '%s'", escapeShellSingleQuote(commitMessagePath))
 	commitResult, err := sb.Exec(ctx, commitCmd, sandbox.ExecOpts{})
 	if err != nil {
 		return fmt.Errorf("committing: %w (stderr: %s)", err, commitResult.Stderr)

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/deck/internal/harness/blueprint"
 	"github.com/syndg/deck/internal/harness/rules"
 	"github.com/syndg/deck/internal/harness/tools"
 	"github.com/syndg/deck/internal/runtime"
@@ -20,13 +21,16 @@ import (
 
 // SpawnRequest describes what agent to create.
 type SpawnRequest struct {
-	Objective   *domain.Objective
-	Stream      *domain.Stream // nil for planner agents
-	Role        string         // "planner", "lead", "builder", "reviewer", "scout"
-	TaskSpec    string         // task description or spec content
-	ParentAgent string         // name of parent agent (empty for top-level)
-	Guidance    string         // project-level guidance from config
-	CommitMode  string         // "auto", "agent", "none" — controls commit behavior
+	Objective      *domain.Objective
+	Stream         *domain.Stream             // nil for planner agents
+	Role           string                     // "planner", "lead", "builder", "reviewer", "scout"
+	TaskSpec       string                     // task description or spec content
+	ParentAgent    string                     // name of parent agent (empty for top-level)
+	Guidance       string                     // project-level guidance from config
+	CommitMode     string                     // "auto", "agent", "none" — controls commit behavior
+	Messages       *blueprint.MessageRequests // delivery messages the agent should generate
+	ReuseSandboxID string                     // if set, reuse this sandbox instead of creating a new one
+	FixContext     string                     // quality gate errors from a previous fix-loop iteration
 }
 
 // SpawnResult contains the created agent session, process, and sandbox.
@@ -105,7 +109,7 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 		return nil, fmt.Errorf("creating agent session: %w", err)
 	}
 
-	// 3. Provision sandbox.
+	// 3. Provision sandbox (or reuse existing one for fix-loop iterations).
 	objShort := req.Objective.ID
 	if len(objShort) > 8 {
 		objShort = objShort[:8]
@@ -114,23 +118,35 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	if len(sessShort) > 8 {
 		sessShort = sessShort[:8]
 	}
-	sandboxName := fmt.Sprintf("deck-%s-%s-%s", objShort, req.Role, sessShort)
 
-	labels := map[string]string{
-		"deck.objective": req.Objective.ID,
-		"deck.role":      req.Role,
+	var sb sandbox.Sandbox
+	var err error
+	if req.ReuseSandboxID != "" {
+		sb, err = s.sp.Get(ctx, req.ReuseSandboxID)
+		if err != nil {
+			s.logger.Warn("failed to reuse sandbox, creating new one",
+				"sandbox_id", req.ReuseSandboxID,
+				"error", err,
+			)
+		}
 	}
-	if req.Stream != nil {
-		labels["deck.stream"] = req.Stream.ID
-	}
-
-	sb, err := s.sp.Create(ctx, sandbox.CreateOpts{
-		Name:      sandboxName,
-		Labels:    labels,
-		Ephemeral: !role.Persistent,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("provisioning sandbox: %w", err)
+	if sb == nil {
+		sandboxName := fmt.Sprintf("deck-%s-%s-%s", objShort, req.Role, sessShort)
+		labels := map[string]string{
+			"deck.objective": req.Objective.ID,
+			"deck.role":      req.Role,
+		}
+		if req.Stream != nil {
+			labels["deck.stream"] = req.Stream.ID
+		}
+		sb, err = s.sp.Create(ctx, sandbox.CreateOpts{
+			Name:      sandboxName,
+			Labels:    labels,
+			Ephemeral: !role.Persistent,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("provisioning sandbox: %w", err)
+		}
 	}
 
 	// 4. Match rules against file scope (empty for planners).
@@ -176,6 +192,8 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 			LeadAgent:    req.ParentAgent,
 			Guidance:     req.Guidance,
 			CommitMode:   req.CommitMode,
+			Messages:     req.Messages,
+			FixContext:   req.FixContext,
 		})
 	}
 
@@ -234,6 +252,37 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 		Process: process,
 		Sandbox: sb,
 	}, nil
+}
+
+// FindSandboxForStep locates the sandbox used by a previous run of the same
+// agent step. It filters by stream and role so fix-loop reuse targets the
+// correct worktree instead of grabbing an unrelated sandbox from a different
+// stream or role within the same objective.
+func (s *Spawner) FindSandboxForStep(ctx context.Context, objectiveID, streamID, role string) (sandbox.Sandbox, error) {
+	sessions, err := s.agentStore.ListByObjective(ctx, objectiveID)
+	if err != nil {
+		return nil, fmt.Errorf("listing agents for objective: %s", err)
+	}
+
+	// Sessions are ordered by created_at DESC, so the first match is the
+	// most recent. Filter by stream + role for a precise hit.
+	for _, session := range sessions {
+		if session.SandboxID == "" {
+			continue
+		}
+		if streamID != "" && session.StreamID != streamID {
+			continue
+		}
+		if role != "" && string(session.Role) != role {
+			continue
+		}
+		found, err := s.sp.Get(ctx, session.SandboxID)
+		if err != nil {
+			continue
+		}
+		return found, nil
+	}
+	return nil, fmt.Errorf("no sandbox found for objective %s stream %s role %s", objectiveID, streamID, role)
 }
 
 // MarkCompleted updates an agent session to "completed" and publishes EventAgentCompleted.

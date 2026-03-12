@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/deck/internal/harness/blueprint"
 	"github.com/syndg/deck/internal/harness/rules"
 	"github.com/syndg/deck/internal/harness/tools"
 )
@@ -156,6 +157,33 @@ func TestBuildOverlay_EmptyLeadAgent_NoLeadLine(t *testing.T) {
 
 	if strings.Contains(result, "Your lead is:") {
 		t.Error("should not include lead agent line when LeadAgent is empty")
+	}
+}
+
+func TestBuildOverlay_MessageMetadataInstructions(t *testing.T) {
+	input := OverlayInput{
+		AgentName:  "builder-1",
+		Role:       builderRole(),
+		Objective:  testObjective(),
+		CommitMode: "auto",
+		Messages: &blueprint.MessageRequests{
+			Commit: true,
+			PR:     true,
+		},
+	}
+
+	result := BuildOverlay(input)
+
+	if !strings.Contains(result, "## Delivery Metadata") {
+		t.Fatal("missing delivery metadata section")
+	}
+	if !strings.Contains(result, "DECK_MESSAGES:") {
+		t.Fatal("missing DECK_MESSAGES output instructions")
+	}
+	for _, field := range []string{"commit_message", "pr_title", "pr_body"} {
+		if !strings.Contains(result, field) {
+			t.Errorf("missing requested field %q", field)
+		}
 	}
 }
 

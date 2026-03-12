@@ -28,9 +28,10 @@ type StepHandler func(ctx context.Context, exec *Execution, step *Step) (StepRes
 
 // StepResult is the outcome of executing a step handler.
 type StepResult struct {
-	Status StepStatus `json:"status"`
-	Error  string     `json:"error,omitempty"`
-	Output string     `json:"output,omitempty"`
+	Status   StepStatus        `json:"status"`
+	Error    string            `json:"error,omitempty"`
+	Output   string            `json:"output,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // Engine drives blueprint execution as a synchronous state machine.
@@ -164,10 +165,16 @@ func (e *Engine) Advance(ctx context.Context, exec *Execution) (*Execution, erro
 	case StepStatusCompleted:
 		state.Status = StepStatusCompleted
 		state.Error = ""
+		state.Output = result.Output
+		state.Metadata = cloneMetadata(result.Metadata)
 		return e.advanceToNext(exec, step)
 
 	case StepStatusFailed:
 		state.Error = result.Error
+		state.Output = result.Output
+		state.Metadata = cloneMetadata(result.Metadata)
+
+		// Retry: re-run the same step (handles flaky failures).
 		if state.RetryCount < step.Retry {
 			state.RetryCount++
 			state.Status = StepStatusPending
@@ -180,6 +187,46 @@ func (e *Engine) Advance(ctx context.Context, exec *Execution) (*Execution, erro
 			)
 			return exec, nil
 		}
+
+		// OnFail: route back to an agent step for a fix attempt.
+		if step.OnFail != "" {
+			maxIter := step.MaxFixIterations
+			if maxIter <= 0 {
+				maxIter = 3
+			}
+			if state.FixIterations < maxIter {
+				state.FixIterations++
+				state.RetryCount = 0
+				state.Status = StepStatusPending
+
+				// Reset the target agent step so it re-runs.
+				targetState := exec.StepStates[step.OnFail]
+				if targetState != nil {
+					targetState.Status = StepStatusPending
+					targetState.Error = ""
+					targetState.Metadata = map[string]string{
+						"fix_context": result.Error,
+					}
+				}
+
+				exec.CurrentStep = step.OnFail
+				exec.UpdatedAt = time.Now()
+				e.logger.Info("routing to on_fail step",
+					"execution_id", exec.ID,
+					"from_step", step.ID,
+					"to_step", step.OnFail,
+					"fix_iteration", state.FixIterations,
+					"max_iterations", maxIter,
+				)
+				return exec, nil
+			}
+			e.logger.Warn("fix iterations exhausted",
+				"execution_id", exec.ID,
+				"step", step.ID,
+				"iterations", state.FixIterations,
+			)
+		}
+
 		state.Status = StepStatusFailed
 		if step.Optional {
 			e.logger.Info("optional step failed, skipping",
@@ -200,6 +247,8 @@ func (e *Engine) Advance(ctx context.Context, exec *Execution) (*Execution, erro
 
 	default:
 		state.Status = result.Status
+		state.Output = result.Output
+		state.Metadata = cloneMetadata(result.Metadata)
 		exec.UpdatedAt = time.Now()
 		return exec, nil
 	}
@@ -224,6 +273,17 @@ func (e *Engine) advanceToNext(exec *Execution, step *Step) (*Execution, error) 
 		"step", step.Next,
 	)
 	return exec, nil
+}
+
+func cloneMetadata(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // ApproveHuman unblocks a "waiting_human" execution and advances to the next step.

@@ -8,17 +8,23 @@ steps:
     role: builder
     description: "Fix the issue in a single agent session"
     commit: auto
+    messages:
+      commit: true
+      pr: true
     next: lint
 
   - id: lint
     type: deterministic
     action: run_quality_gates
     retry: 2
+    on_fail: fix
+    max_fix_iterations: 3
     next: create_pr
 
   - id: create_pr
     type: deterministic
     action: create_pr
+    message_source: fix
     next: complete
 
   - id: complete

@@ -195,3 +195,142 @@ func TestApproveHuman_UnblocksExecution(t *testing.T) {
 		t.Errorf("s2 status = %q, want completed", exec.StepStates["s2"].Status)
 	}
 }
+
+func TestAdvance_PersistsOutputAndMetadata(t *testing.T) {
+	bp := &Blueprint{
+		Name:  "metadata-bp",
+		Steps: []Step{{ID: "s1", Type: StepTypeAgent, Role: "builder"}},
+	}
+	reg := newTestRegistry(t, bp)
+	engine := NewEngine(reg, slog.Default())
+	engine.RegisterHandler(StepTypeAgent, func(ctx context.Context, exec *Execution, step *Step) (StepResult, error) {
+		return StepResult{
+			Status: StepStatusCompleted,
+			Output: "done",
+			Metadata: map[string]string{
+				"commit_message": "feat: add generated metadata",
+			},
+		}, nil
+	})
+
+	exec, _ := engine.Start(context.Background(), "metadata-bp", "obj-1")
+	exec, err := engine.Advance(context.Background(), exec)
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	state := exec.StepStates["s1"]
+	if state.Output != "done" {
+		t.Fatalf("output = %q, want done", state.Output)
+	}
+	if state.Metadata["commit_message"] != "feat: add generated metadata" {
+		t.Fatalf("metadata = %v, missing commit_message", state.Metadata)
+	}
+}
+
+func TestAdvance_OnFailRoutesBackToAgentWithFixContext(t *testing.T) {
+	bp := &Blueprint{
+		Name: "fix-loop-bp",
+		Steps: []Step{
+			{ID: "fix", Type: StepTypeAgent, Role: "builder", Next: "lint"},
+			{ID: "lint", Type: StepTypeDeterministic, Action: "run_quality_gates", Retry: 1, OnFail: "fix", MaxFixIterations: 2},
+		},
+	}
+	reg := newTestRegistry(t, bp)
+	engine := NewEngine(reg, slog.Default())
+
+	engine.RegisterHandler(StepTypeAgent, func(ctx context.Context, exec *Execution, step *Step) (StepResult, error) {
+		return StepResult{Status: StepStatusCompleted}, nil
+	})
+
+	lintAttempts := 0
+	engine.RegisterHandler(StepTypeDeterministic, func(ctx context.Context, exec *Execution, step *Step) (StepResult, error) {
+		lintAttempts++
+		return StepResult{Status: StepStatusFailed, Error: fmt.Sprintf("gate failure %d", lintAttempts)}, nil
+	})
+
+	exec, _ := engine.Start(context.Background(), "fix-loop-bp", "obj-1")
+
+	// Run fix once.
+	exec, err := engine.Advance(context.Background(), exec)
+	if err != nil {
+		t.Fatalf("Advance fix: %v", err)
+	}
+	if exec.CurrentStep != "lint" {
+		t.Fatalf("current_step = %q, want lint", exec.CurrentStep)
+	}
+
+	// First lint failure should use normal retry behavior.
+	exec, err = engine.Advance(context.Background(), exec)
+	if err != nil {
+		t.Fatalf("Advance lint retry: %v", err)
+	}
+	lintState := exec.StepStates["lint"]
+	if lintState.RetryCount != 1 {
+		t.Fatalf("retry_count = %d, want 1", lintState.RetryCount)
+	}
+	if exec.CurrentStep != "lint" {
+		t.Fatalf("current_step after retry = %q, want lint", exec.CurrentStep)
+	}
+
+	// Second lint failure should route back to fix.
+	exec, err = engine.Advance(context.Background(), exec)
+	if err != nil {
+		t.Fatalf("Advance lint on_fail: %v", err)
+	}
+	lintState = exec.StepStates["lint"]
+	if exec.CurrentStep != "fix" {
+		t.Fatalf("current_step after on_fail = %q, want fix", exec.CurrentStep)
+	}
+	if lintState.FixIterations != 1 {
+		t.Fatalf("fix_iterations = %d, want 1", lintState.FixIterations)
+	}
+	if lintState.RetryCount != 0 {
+		t.Fatalf("retry_count after on_fail = %d, want 0", lintState.RetryCount)
+	}
+	fixState := exec.StepStates["fix"]
+	if got := fixState.Metadata["fix_context"]; got != "gate failure 2" {
+		t.Fatalf("fix_context = %q, want %q", got, "gate failure 2")
+	}
+}
+
+func TestAdvance_OnFailStopsAfterMaxFixIterations(t *testing.T) {
+	bp := &Blueprint{
+		Name: "fix-loop-limit-bp",
+		Steps: []Step{
+			{ID: "fix", Type: StepTypeAgent, Role: "builder", Next: "lint"},
+			{ID: "lint", Type: StepTypeDeterministic, Action: "run_quality_gates", OnFail: "fix", MaxFixIterations: 2},
+		},
+	}
+	reg := newTestRegistry(t, bp)
+	engine := NewEngine(reg, slog.Default())
+
+	engine.RegisterHandler(StepTypeAgent, func(ctx context.Context, exec *Execution, step *Step) (StepResult, error) {
+		return StepResult{Status: StepStatusCompleted}, nil
+	})
+	engine.RegisterHandler(StepTypeDeterministic, func(ctx context.Context, exec *Execution, step *Step) (StepResult, error) {
+		return StepResult{Status: StepStatusFailed, Error: "still failing"}, nil
+	})
+
+	exec, _ := engine.Start(context.Background(), "fix-loop-limit-bp", "obj-1")
+
+	// 1st fix
+	exec, _ = engine.Advance(context.Background(), exec)
+	// 1st lint fail -> reroute (iteration 1)
+	exec, _ = engine.Advance(context.Background(), exec)
+	// 2nd fix
+	exec, _ = engine.Advance(context.Background(), exec)
+	// 2nd lint fail -> reroute (iteration 2)
+	exec, _ = engine.Advance(context.Background(), exec)
+	// 3rd fix
+	exec, _ = engine.Advance(context.Background(), exec)
+	// 3rd lint fail -> execution should fail, limit exhausted
+	exec, _ = engine.Advance(context.Background(), exec)
+
+	if exec.Status != "failed" {
+		t.Fatalf("status = %q, want failed", exec.Status)
+	}
+	if exec.StepStates["lint"].FixIterations != 2 {
+		t.Fatalf("fix_iterations = %d, want 2", exec.StepStates["lint"].FixIterations)
+	}
+}
