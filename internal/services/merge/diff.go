@@ -14,7 +14,7 @@ import (
 // FileDiff represents the diff for a single file.
 type FileDiff struct {
 	Path       string `json:"path"`
-	Status     string `json:"status"`     // added, modified, deleted, renamed
+	Status     string `json:"status"` // added, modified, deleted, renamed
 	Insertions int    `json:"insertions"`
 	Deletions  int    `json:"deletions"`
 	Patch      string `json:"patch"` // unified diff content
@@ -61,6 +61,15 @@ func (d *DiffExtractor) Extract(ctx context.Context, sb sandbox.Sandbox, base, h
 		return nil, fmt.Errorf("git diff --name-status failed (exit %d): %s", nameStatusResult.ExitCode, nameStatusResult.Stderr)
 	}
 
+	// Get numstat for accurate per-file insertion/deletion counts.
+	numStatResult, numStatErr := sb.Exec(ctx, fmt.Sprintf("git diff --numstat %s...%s", base, head), execOpts)
+	if numStatErr != nil {
+		d.logger.Warn("running git diff --numstat failed, falling back to --stat bars", "base", base, "head", head, "error", numStatErr)
+	}
+	if numStatErr == nil && numStatResult.ExitCode != 0 {
+		d.logger.Warn("git diff --numstat failed, falling back to --stat bars", "base", base, "head", head, "exit_code", numStatResult.ExitCode, "stderr", strings.TrimSpace(numStatResult.Stderr))
+	}
+
 	// Get full unified diff for patch content.
 	patchResult, err := sb.Exec(ctx, fmt.Sprintf("git diff %s...%s", base, head), execOpts)
 	if err != nil {
@@ -74,6 +83,10 @@ func (d *DiffExtractor) Extract(ctx context.Context, sb sandbox.Sandbox, base, h
 	statFiles, totalInsertions, totalDeletions := ParseDiffStat(statResult.Stdout)
 	statusMap := ParseNameStatus(nameStatusResult.Stdout)
 	patchMap := parsePatchOutput(patchResult.Stdout)
+	numStatMap := map[string]FileDiff{}
+	if numStatErr == nil && numStatResult.ExitCode == 0 {
+		numStatMap = parseNumStat(numStatResult.Stdout)
+	}
 
 	// Build FileDiff entries by merging stat and name-status data.
 	// Use statusMap as the authoritative file list (stat summary line can be ambiguous).
@@ -83,12 +96,17 @@ func (d *DiffExtractor) Extract(ctx context.Context, sb sandbox.Sandbox, base, h
 			Path:   path,
 			Status: status,
 		}
-		// Find matching stat entry for insertions/deletions.
-		for _, sf := range statFiles {
-			if sf.Path == path {
-				fd.Insertions = sf.Insertions
-				fd.Deletions = sf.Deletions
-				break
+		if ns, ok := numStatMap[path]; ok {
+			fd.Insertions = ns.Insertions
+			fd.Deletions = ns.Deletions
+		} else {
+			// Fall back to --stat parsing when --numstat is unavailable.
+			for _, sf := range statFiles {
+				if sf.Path == path {
+					fd.Insertions = sf.Insertions
+					fd.Deletions = sf.Deletions
+					break
+				}
 			}
 		}
 		if patch, ok := patchMap[path]; ok {
@@ -102,10 +120,15 @@ func (d *DiffExtractor) Extract(ctx context.Context, sb sandbox.Sandbox, base, h
 		files = make([]FileDiff, len(statFiles))
 		for i, sf := range statFiles {
 			files[i] = FileDiff{
-				Path:       sf.Path,
-				Status:     "modified",
-				Insertions: sf.Insertions,
-				Deletions:  sf.Deletions,
+				Path:   sf.Path,
+				Status: "modified",
+			}
+			if ns, ok := numStatMap[sf.Path]; ok {
+				files[i].Insertions = ns.Insertions
+				files[i].Deletions = ns.Deletions
+			} else {
+				files[i].Insertions = sf.Insertions
+				files[i].Deletions = sf.Deletions
 			}
 			if patch, ok := patchMap[sf.Path]; ok {
 				files[i].Patch = patch
@@ -161,6 +184,39 @@ func ParseDiffStat(output string) (files []FileDiff, totalInsertions, totalDelet
 	totalInsertions, totalDeletions = parseSummaryLine(summary)
 
 	return files, totalInsertions, totalDeletions
+}
+
+// parseNumStat parses `git diff --numstat` output into a map keyed by path.
+// Format: "<insertions>\t<deletions>\t<path>"; binary files use "-" values.
+func parseNumStat(output string) map[string]FileDiff {
+	result := make(map[string]FileDiff)
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		if len(parts) < 3 {
+			continue
+		}
+
+		insertions := 0
+		deletions := 0
+		if parts[0] != "-" {
+			insertions, _ = strconv.Atoi(parts[0])
+		}
+		if parts[1] != "-" {
+			deletions, _ = strconv.Atoi(parts[1])
+		}
+
+		path := parts[2]
+		result[path] = FileDiff{
+			Path:       path,
+			Insertions: insertions,
+			Deletions:  deletions,
+		}
+	}
+	return result
 }
 
 // parseStatLine parses a single git diff --stat file line.

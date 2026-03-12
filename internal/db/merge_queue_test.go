@@ -251,6 +251,34 @@ func TestMergeQueueStore_ListByObjective(t *testing.T) {
 	}
 }
 
+func TestMergeQueueStore_ListAll(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	store := NewMergeQueueStore(d.Conn())
+
+	e1 := &domain.MergeEntry{StreamID: "s1", Branch: "b1"}
+	store.Enqueue(ctx, e1)
+	time.Sleep(10 * time.Millisecond)
+
+	e2 := &domain.MergeEntry{StreamID: "s2", Branch: "b2"}
+	store.Enqueue(ctx, e2)
+	store.UpdateStatus(ctx, e2.ID, domain.MergeStatusMerged, 1, "", "")
+
+	entries, err := store.ListAll(ctx)
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("len = %d, want 2", len(entries))
+	}
+	if entries[0].ID != e1.ID || entries[1].ID != e2.ID {
+		t.Fatalf("ListAll order = [%s, %s], want [%s, %s]", entries[0].ID, entries[1].ID, e1.ID, e2.ID)
+	}
+	if entries[1].Status != domain.MergeStatusMerged {
+		t.Errorf("entries[1].Status = %q, want %q", entries[1].Status, domain.MergeStatusMerged)
+	}
+}
+
 func TestMergeQueueStore_ListPending(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()

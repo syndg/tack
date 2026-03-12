@@ -725,7 +725,7 @@ func (d *Daemon) handleExecuteObjective(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleListMergeQueue returns merge queue entries as a JSON array.
-// If ?objective={id} is provided, filters by objective. Otherwise returns all pending entries.
+// If ?objective={id} is provided, filters by objective. Otherwise returns all entries.
 func (d *Daemon) handleListMergeQueue(w http.ResponseWriter, r *http.Request) {
 	objectiveID := r.URL.Query().Get("objective")
 
@@ -735,7 +735,7 @@ func (d *Daemon) handleListMergeQueue(w http.ResponseWriter, r *http.Request) {
 	if objectiveID != "" {
 		entries, err = d.mergeQueueStore.ListByObjective(r.Context(), objectiveID)
 	} else {
-		entries, err = d.mergeQueueStore.ListPending(r.Context())
+		entries, err = d.mergeQueueStore.ListAll(r.Context())
 	}
 	if err != nil {
 		d.logger.Error("listing merge queue", "objective", objectiveID, "error", err)
@@ -793,6 +793,21 @@ func (d *Daemon) handleRetryMerge(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to retry merge entry")
 		return
 	}
+
+	payload, _ := json.Marshal(map[string]string{
+		"entry_id":     entry.ID,
+		"stream_id":    entry.StreamID,
+		"plan_id":      entry.PlanID,
+		"objective_id": entry.ObjectiveID,
+		"branch":       entry.Branch,
+	})
+	d.eventBus.Publish(domain.Event{
+		Type:      domain.EventMergeQueued,
+		Objective: entry.ObjectiveID,
+		Stream:    entry.StreamID,
+		Payload:   string(payload),
+		CreatedAt: time.Now(),
+	})
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

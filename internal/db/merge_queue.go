@@ -128,6 +128,20 @@ func (s *MergeQueueStore) ListByObjective(ctx context.Context, objectiveID strin
 	return scanMergeEntries(rows)
 }
 
+// ListAll returns all merge entries ordered by created_at (oldest first).
+func (s *MergeQueueStore) ListAll(ctx context.Context) ([]domain.MergeEntry, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at
+		 FROM merge_queue ORDER BY created_at ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing all merge entries: %w", err)
+	}
+	defer rows.Close()
+
+	return scanMergeEntries(rows)
+}
+
 // ListPending returns all pending entries ordered by created_at (FIFO).
 func (s *MergeQueueStore) ListPending(ctx context.Context) ([]domain.MergeEntry, error) {
 	rows, err := s.db.QueryContext(ctx,

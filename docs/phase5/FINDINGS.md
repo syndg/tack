@@ -121,3 +121,13 @@
 - Unix-second timestamps caused flaky ordering in `GetByStream` and `UpdateStatus` tests when using `time.Sleep(10ms)`. Fixed by pushing timestamps into the past via direct SQL updates instead of relying on wall-clock delays.
 - `ParseNameStatus` handles `C` (copy) entries using the source path (`parts[1]`) rather than the destination path — only `R` (rename) entries get the destination redirect. Tests match actual behavior; this is a minor implementation quirk that could be addressed in a future polish pass.
 - `go build ./...`, `go vet ./...`, and all tests pass.
+
+## Post-validation alignment fixes
+
+- Retry route (`POST /merge-queue/{id}/retry`) now publishes `EventMergeQueued` after resetting the entry to `pending`, so retries are actively re-queued instead of waiting for the processor's 30s polling fallback.
+- `GET /merge-queue` now returns all entries by default; objective-filtered requests still use `ListByObjective`. This resolves the PRD ambiguity in favor of the route headline and makes CLI/default inspection show merged/failed/conflict history instead of only pending items.
+- Merge diff/stat extraction now prefers `ORIG_HEAD...HEAD` and falls back to `HEAD~1`. This captures the full merged delta for fast-forward and multi-commit merges instead of only the last commit.
+- Post-merge diff extraction in the processor now uses the same `ORIG_HEAD`-first strategy, with a `HEAD~1` fallback before falling back to the minimal summary JSON.
+- Merge revert now prefers `git reset --hard ORIG_HEAD` and falls back to `HEAD~1`, so failed post-merge gates correctly undo the full merge even when the merge advanced by more than one commit.
+- `DiffExtractor` now queries `git diff --numstat` for accurate per-file insertion/deletion counts and only falls back to `--stat` bar parsing when `--numstat` is unavailable.
+- Added regression coverage for retry re-queue event publication, ORIG_HEAD diff-stat fallback behavior, and accurate per-file diff counts from `--numstat`.

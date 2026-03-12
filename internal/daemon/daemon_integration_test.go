@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/syndg/deck/internal/client"
 	"github.com/syndg/deck/internal/config"
+	"github.com/syndg/deck/internal/domain"
 )
 
 func TestDaemonIntegration(t *testing.T) {
@@ -286,6 +288,135 @@ func TestSimpleObjectiveUsesDefaultQualityGates(t *testing.T) {
 	}
 	if resp.Plan.QualityGates[0] != "go test ./..." || resp.Plan.QualityGates[1] != "go vet ./..." {
 		t.Fatalf("quality gates = %v, want configured defaults", resp.Plan.QualityGates)
+	}
+}
+
+func TestRetryMergePublishesQueuedEvent(t *testing.T) {
+	cfg := config.Default()
+	cfg.Daemon.DataDir = t.TempDir()
+
+	d, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer d.db.Close()
+
+	ctx := context.Background()
+	obj := &domain.Objective{Description: "retry merge", Status: domain.ObjectiveStatusExecuting}
+	if err := d.objectives.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	plan := &domain.Plan{ObjectiveID: obj.ID}
+	if err := d.plans.Create(ctx, plan); err != nil {
+		t.Fatalf("Create plan: %v", err)
+	}
+	stream := &domain.Stream{
+		PlanID:    plan.ID,
+		Title:     "stream one",
+		FileScope: []string{"README.md"},
+		Status:    domain.StreamStatusMergeReady,
+	}
+	if err := d.streams.Create(ctx, stream); err != nil {
+		t.Fatalf("Create stream: %v", err)
+	}
+
+	entry := &domain.MergeEntry{
+		StreamID:    stream.ID,
+		PlanID:      plan.ID,
+		ObjectiveID: obj.ID,
+		Branch:      "deck/test-stream/builder-1",
+	}
+	if err := d.mergeQueueStore.Enqueue(ctx, entry); err != nil {
+		t.Fatalf("Enqueue merge entry: %v", err)
+	}
+	if err := d.mergeQueueStore.UpdateStatus(ctx, entry.ID, domain.MergeStatusFailed, 2, "merge failed", ""); err != nil {
+		t.Fatalf("UpdateStatus: %v", err)
+	}
+
+	sub, unsub := d.eventBus.Subscribe(10)
+	defer unsub()
+
+	req := httptest.NewRequest(http.MethodPost, "/merge-queue/"+entry.ID+"/retry", nil)
+	rr := httptest.NewRecorder()
+	d.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("retry status = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	got, err := d.mergeQueueStore.Get(ctx, entry.ID)
+	if err != nil {
+		t.Fatalf("Get merge entry: %v", err)
+	}
+	if got.Status != domain.MergeStatusPending || got.Tier != 0 {
+		t.Fatalf("merge entry after retry = status=%q tier=%d, want pending/0", got.Status, got.Tier)
+	}
+
+	select {
+	case ev := <-sub:
+		if ev.Type != domain.EventMergeQueued {
+			t.Fatalf("event type = %q, want %q", ev.Type, domain.EventMergeQueued)
+		}
+		if ev.Objective != obj.ID || ev.Stream != stream.ID {
+			t.Fatalf("event = %+v, want objective=%s stream=%s", ev, obj.ID, stream.ID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected EventMergeQueued after retry")
+	}
+}
+
+func TestListMergeQueueReturnsAllEntriesByDefault(t *testing.T) {
+	cfg := config.Default()
+	cfg.Daemon.DataDir = t.TempDir()
+
+	d, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer d.db.Close()
+
+	ctx := context.Background()
+	obj := &domain.Objective{Description: "list merge queue", Status: domain.ObjectiveStatusExecuting}
+	if err := d.objectives.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	plan := &domain.Plan{ObjectiveID: obj.ID}
+	if err := d.plans.Create(ctx, plan); err != nil {
+		t.Fatalf("Create plan: %v", err)
+	}
+
+	e1 := &domain.MergeEntry{StreamID: "stream-1", PlanID: plan.ID, ObjectiveID: obj.ID, Branch: "branch-1"}
+	if err := d.mergeQueueStore.Enqueue(ctx, e1); err != nil {
+		t.Fatalf("Enqueue e1: %v", err)
+	}
+	e2 := &domain.MergeEntry{StreamID: "stream-2", PlanID: plan.ID, ObjectiveID: obj.ID, Branch: "branch-2"}
+	if err := d.mergeQueueStore.Enqueue(ctx, e2); err != nil {
+		t.Fatalf("Enqueue e2: %v", err)
+	}
+	if err := d.mergeQueueStore.UpdateStatus(ctx, e2.ID, domain.MergeStatusMerged, 1, "", "{}"); err != nil {
+		t.Fatalf("UpdateStatus e2: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/merge-queue", nil)
+	rr := httptest.NewRecorder()
+	d.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /merge-queue status = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var entries []domain.MergeEntry
+	if err := json.NewDecoder(rr.Body).Decode(&entries); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("len(entries) = %d, want 2", len(entries))
+	}
+	if entries[0].ID != e1.ID || entries[1].ID != e2.ID {
+		t.Fatalf("entries order = [%s, %s], want [%s, %s]", entries[0].ID, entries[1].ID, e1.ID, e2.ID)
+	}
+	if entries[1].Status != domain.MergeStatusMerged {
+		t.Fatalf("entries[1].Status = %q, want %q", entries[1].Status, domain.MergeStatusMerged)
 	}
 }
 
@@ -658,4 +789,3 @@ func mustGetJSON[T any](t *testing.T, url string) T {
 	}
 	return out
 }
-

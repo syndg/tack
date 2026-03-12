@@ -14,7 +14,7 @@ import (
 // MergeResult describes the outcome of a merge attempt.
 type MergeResult struct {
 	Success      bool     `json:"success"`
-	Tier         int      `json:"tier"`          // which tier resolved it (1-4)
+	Tier         int      `json:"tier"` // which tier resolved it (1-4)
 	FilesChanged int      `json:"files_changed"`
 	Insertions   int      `json:"insertions"`
 	Deletions    int      `json:"deletions"`
@@ -167,18 +167,36 @@ func (m *GitMerger) TryAutoResolve(ctx context.Context, sb sandbox.Sandbox, bran
 }
 
 // GetDiffStat returns diff statistics for the last merge.
-// Runs: git diff --stat HEAD~1
-// Parses output to extract files changed, insertions, deletions.
+// Prefers ORIG_HEAD...HEAD so multi-commit and fast-forward merges report the
+// full merged delta, then falls back to HEAD~1 for older environments/tests.
 func (m *GitMerger) GetDiffStat(ctx context.Context, sb sandbox.Sandbox) (filesChanged, insertions, deletions int, err error) {
-	res, err := sb.Exec(ctx, "git diff --stat HEAD~1", sandbox.ExecOpts{})
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("executing git diff --stat: %w", err)
-	}
-	if res.ExitCode != 0 {
-		return 0, 0, 0, fmt.Errorf("git diff --stat failed: %s", strings.TrimSpace(res.Stderr))
+	commands := []string{
+		"git diff --stat ORIG_HEAD...HEAD",
+		"git diff --stat HEAD~1",
 	}
 
-	return parseDiffStatSummary(res.Stdout)
+	var lastErr error
+	for _, cmd := range commands {
+		res, execErr := sb.Exec(ctx, cmd, sandbox.ExecOpts{})
+		if execErr != nil {
+			lastErr = fmt.Errorf("executing %q: %w", cmd, execErr)
+			continue
+		}
+		if res.ExitCode != 0 {
+			lastErr = fmt.Errorf("%s failed: %s", cmd, strings.TrimSpace(res.Stderr))
+			continue
+		}
+		if strings.TrimSpace(res.Stdout) == "" {
+			continue
+		}
+
+		return parseDiffStatSummary(res.Stdout)
+	}
+
+	if lastErr != nil {
+		return 0, 0, 0, lastErr
+	}
+	return 0, 0, 0, nil
 }
 
 // diffStatSummaryRe matches the summary line of git diff --stat output.

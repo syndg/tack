@@ -308,7 +308,7 @@ func (p *Processor) handleMergeSuccess(ctx context.Context, sb sandbox.Sandbox, 
 	}
 
 	// Extract diff summary.
-	diffJSON, err := p.differ.ExtractJSON(ctx, sb, "HEAD~1", "HEAD")
+	diffJSON, err := p.extractMergedDiffJSON(ctx, sb)
 	if err != nil {
 		p.logger.Warn("extracting diff after merge", "error", err)
 		// Fallback: build minimal diff from merge result.
@@ -341,11 +341,37 @@ func (p *Processor) handleMergeSuccess(ctx context.Context, sb sandbox.Sandbox, 
 	)
 }
 
-// revertMerge undoes the last merge commit in the sandbox.
-func (p *Processor) revertMerge(ctx context.Context, sb sandbox.Sandbox, entry *domain.MergeEntry) {
-	if _, err := sb.Exec(ctx, "git reset --hard HEAD~1", sandbox.ExecOpts{}); err != nil {
-		p.logger.Error("reverting merge", "entry", entry.ID, "error", err)
+// extractMergedDiffJSON prefers ORIG_HEAD..HEAD so the stored diff covers the
+// full merged delta, including fast-forward and multi-commit merges. Falls back
+// to HEAD~1 for older git state/tests.
+func (p *Processor) extractMergedDiffJSON(ctx context.Context, sb sandbox.Sandbox) (string, error) {
+	type diffRefPair struct {
+		base string
+		head string
 	}
+
+	for _, refs := range []diffRefPair{{base: "ORIG_HEAD", head: "HEAD"}, {base: "HEAD~1", head: "HEAD"}} {
+		diffJSON, err := p.differ.ExtractJSON(ctx, sb, refs.base, refs.head)
+		if err == nil {
+			return diffJSON, nil
+		}
+		p.logger.Warn("extract diff attempt failed", "base", refs.base, "head", refs.head, "error", err)
+	}
+
+	return "", fmt.Errorf("unable to extract merged diff")
+}
+
+// revertMerge undoes the last merge in the sandbox.
+func (p *Processor) revertMerge(ctx context.Context, sb sandbox.Sandbox, entry *domain.MergeEntry) {
+	var lastErr error
+	for _, cmd := range []string{"git reset --hard ORIG_HEAD", "git reset --hard HEAD~1"} {
+		if _, err := sb.Exec(ctx, cmd, sandbox.ExecOpts{}); err == nil {
+			return
+		} else {
+			lastErr = err
+		}
+	}
+	p.logger.Error("reverting merge", "entry", entry.ID, "error", lastErr)
 }
 
 // failEntry marks a merge entry as failed and publishes the failure event.

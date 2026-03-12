@@ -241,7 +241,12 @@ func TestGetDiffStat(t *testing.T) {
 			sb := &mockSandbox{
 				id: "test-sb",
 				execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
-					return sandbox.ExecResult{ExitCode: 0, Stdout: tt.stdout}, nil
+					switch cmd {
+					case "git diff --stat ORIG_HEAD...HEAD":
+						return sandbox.ExecResult{ExitCode: 0, Stdout: tt.stdout}, nil
+					default:
+						return sandbox.ExecResult{ExitCode: 0}, nil
+					}
 				},
 			}
 
@@ -260,6 +265,36 @@ func TestGetDiffStat(t *testing.T) {
 				t.Errorf("deletions = %d, want %d", del, tt.wantDeletion)
 			}
 		})
+	}
+}
+
+func TestGetDiffStat_FallsBackToHEADTilde1(t *testing.T) {
+	callLog := []string{}
+	sb := &mockSandbox{
+		id: "test-sb",
+		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
+			callLog = append(callLog, cmd)
+			switch cmd {
+			case "git diff --stat ORIG_HEAD...HEAD":
+				return sandbox.ExecResult{ExitCode: 128, Stderr: "fatal: bad revision 'ORIG_HEAD...HEAD'"}, nil
+			case "git diff --stat HEAD~1":
+				return sandbox.ExecResult{ExitCode: 0, Stdout: " f.go | 3 +++\n 1 file changed, 3 insertions(+)\n"}, nil
+			default:
+				return sandbox.ExecResult{ExitCode: 0}, nil
+			}
+		},
+	}
+
+	merger := NewGitMerger(slog.Default())
+	files, ins, del, err := merger.GetDiffStat(context.Background(), sb)
+	if err != nil {
+		t.Fatalf("GetDiffStat: %v", err)
+	}
+	if files != 1 || ins != 3 || del != 0 {
+		t.Fatalf("GetDiffStat = (%d, %d, %d), want (1, 3, 0)", files, ins, del)
+	}
+	if len(callLog) != 2 || callLog[0] != "git diff --stat ORIG_HEAD...HEAD" || callLog[1] != "git diff --stat HEAD~1" {
+		t.Fatalf("unexpected command sequence: %v", callLog)
 	}
 }
 

@@ -175,6 +175,11 @@ func TestExtract_MockSandbox(t *testing.T) {
 					ExitCode: 0,
 					Stdout:   "M\tsrc/auth.go\n",
 				}, nil
+			case "git diff --numstat main...feature":
+				return sandbox.ExecResult{
+					ExitCode: 0,
+					Stdout:   "6\t4\tsrc/auth.go\n",
+				}, nil
 			case "git diff main...feature":
 				return sandbox.ExecResult{
 					ExitCode: 0,
@@ -210,6 +215,9 @@ func TestExtract_MockSandbox(t *testing.T) {
 	if summary.Files[0].Status != "modified" {
 		t.Errorf("Files[0].Status = %q, want %q", summary.Files[0].Status, "modified")
 	}
+	if summary.Files[0].Insertions != 6 || summary.Files[0].Deletions != 4 {
+		t.Errorf("Files[0] counts = (+%d, -%d), want (+6, -4)", summary.Files[0].Insertions, summary.Files[0].Deletions)
+	}
 	if summary.Files[0].Patch == "" {
 		t.Error("expected non-empty patch content")
 	}
@@ -230,6 +238,8 @@ func TestExtractJSON_ValidJSON(t *testing.T) {
 					ExitCode: 0,
 					Stdout:   "A\tf.go\n",
 				}, nil
+			case "git diff --numstat base...head":
+				return sandbox.ExecResult{ExitCode: 0, Stdout: "2\t0\tf.go\n"}, nil
 			case "git diff base...head":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: ""}, nil
 			default:
@@ -254,6 +264,9 @@ func TestExtractJSON_ValidJSON(t *testing.T) {
 	}
 	if parsed.Insertions != 2 {
 		t.Errorf("parsed.Insertions = %d, want 2", parsed.Insertions)
+	}
+	if len(parsed.Files) != 1 || parsed.Files[0].Insertions != 2 || parsed.Files[0].Deletions != 0 {
+		t.Errorf("parsed.Files = %+v, want one file with (+2, -0)", parsed.Files)
 	}
 }
 
