@@ -634,7 +634,7 @@ Expose merge queue management and diff viewing through the HTTP API and CLI.
 
 ## Phase 6: Tests
 
-- [ ] **6.1** Add unit tests
+- [x] **6.1** Add unit tests
   Create test files:
 
   `internal/db/merge_queue_test.go`:
