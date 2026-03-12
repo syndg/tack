@@ -349,3 +349,11 @@ func (s *LocalSandbox) Start(ctx context.Context) error {
 	s.status = sandbox.SandboxStatusRunning
 	return nil
 }
+
+// Health returns an error if the worktree directory no longer exists.
+func (s *LocalSandbox) Health() error {
+	if _, err := os.Stat(s.path); err != nil {
+		return fmt.Errorf("worktree directory unavailable: %w", err)
+	}
+	return nil
+}

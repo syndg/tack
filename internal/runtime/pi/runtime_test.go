@@ -69,6 +69,7 @@ func (m *mockSandbox) Upload(_ context.Context, content []byte, path string) err
 func (m *mockSandbox) Download(_ context.Context, _ string) ([]byte, error) { return nil, nil }
 func (m *mockSandbox) Stop(_ context.Context) error                         { return nil }
 func (m *mockSandbox) Start(_ context.Context) error                        { return nil }
+func (m *mockSandbox) Health() error                                        { return nil }
 
 func TestRuntime_Name(t *testing.T) {
 	r := New(RuntimeConfig{}, slog.Default())
