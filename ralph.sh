@@ -15,7 +15,7 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
-PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PRD_FILE="$(cd "$(dirname "$0")" && pwd)/PRD.md"
 FINDINGS_FILE="$(cd "$(dirname "$0")" && pwd)/FINDINGS.md"
 LOG_FILE="$(cd "$(dirname "$0")" && pwd)/ralph.log"
@@ -217,7 +217,7 @@ RULES:
   log "  Running Claude for task ${task_id}..."
 
   claude -p "$prompt" \
-    --model sonnet \
+    --model opus \
     --allowedTools "Bash,Read,Write,Edit,Glob,Grep,mcp__plugin_context7_context7__resolve-library-id,mcp__plugin_context7_context7__query-docs" \
     >> "$task_log" 2>&1 || true
 
@@ -371,7 +371,7 @@ RULES:
 - IMPORTANT: Run go build ./... and go vet ./... after fixing to verify the build passes."
 
   claude -p "$prompt" \
-    --model sonnet \
+    --model opus \
     --allowedTools "Bash,Read,Write,Edit,Glob,Grep,mcp__plugin_context7_context7__resolve-library-id,mcp__plugin_context7_context7__query-docs" \
     >> "$LOG_FILE" 2>&1 || true
 }

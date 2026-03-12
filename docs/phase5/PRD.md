@@ -16,7 +16,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 The `merge_queue` table schema already exists in `internal/db/migrations.go`. This phase adds the domain model, database store, and extends stream status tracking for the merge lifecycle.
 
-- [x] **1.1** Create merge queue domain model and store
+- [ ] **1.1** Create merge queue domain model and store
   Add to `internal/domain/types.go`:
 
   ```go
@@ -103,7 +103,7 @@ The `merge_queue` table schema already exists in `internal/db/migrations.go`. Th
 
   Files: `internal/domain/types.go`, `internal/db/merge_queue.go`, `internal/db/migrations.go`
 
-- [x] **1.2** Add stream merge status tracking
+- [ ] **1.2** Add stream merge status tracking
   Update `internal/domain/types.go` to add stream merge-related status constants:
 
   ```go

@@ -96,6 +96,43 @@ type MailMessage struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// Stream statuses for merge lifecycle
+
+type StreamStatus = string
+
+const (
+	StreamStatusMergeReady StreamStatus = "merge_ready"
+	StreamStatusMerging    StreamStatus = "merging"
+	StreamStatusMerged     StreamStatus = "merged"
+)
+
+// Merge queue
+
+type MergeStatus string
+
+const (
+	MergeStatusPending  MergeStatus = "pending"
+	MergeStatusMerging  MergeStatus = "merging"
+	MergeStatusMerged   MergeStatus = "merged"
+	MergeStatusFailed   MergeStatus = "failed"
+	MergeStatusConflict MergeStatus = "conflict"
+)
+
+// MergeEntry represents a stream branch queued for merge.
+type MergeEntry struct {
+	ID          string      `json:"id"`
+	StreamID    string      `json:"stream_id"`
+	PlanID      string      `json:"plan_id"`
+	ObjectiveID string      `json:"objective_id"`
+	Branch      string      `json:"branch"`
+	Status      MergeStatus `json:"status"`
+	Tier        int         `json:"tier"`
+	Error       string      `json:"error"`
+	DiffStat    string      `json:"diff_stat"`
+	CreatedAt   int64       `json:"created_at"`
+	UpdatedAt   int64       `json:"updated_at"`
+}
+
 // Events
 
 type EventType string

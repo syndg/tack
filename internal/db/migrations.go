@@ -72,10 +72,15 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE TABLE IF NOT EXISTS merge_queue (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     stream_id TEXT NOT NULL,
+    plan_id TEXT NOT NULL DEFAULT '',
+    objective_id TEXT NOT NULL DEFAULT '',
     branch TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
+    tier INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    diff_stat TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -108,6 +113,18 @@ func RunMigrations(db *sql.DB) error {
 	}
 	if _, err := db.ExecContext(context.Background(), `UPDATE agent_sessions SET role = 'builder' WHERE role = 'worker'`); err != nil {
 		return fmt.Errorf("normalizing agent session roles: %w", err)
+	}
+	// Ensure merge_queue columns added in Phase 5
+	for _, col := range []struct{ name, def string }{
+		{"plan_id", "TEXT NOT NULL DEFAULT ''"},
+		{"objective_id", "TEXT NOT NULL DEFAULT ''"},
+		{"tier", "INTEGER NOT NULL DEFAULT 0"},
+		{"error", "TEXT NOT NULL DEFAULT ''"},
+		{"diff_stat", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureColumnExists(db, "merge_queue", col.name, col.def); err != nil {
+			return fmt.Errorf("ensuring merge_queue.%s: %w", col.name, err)
+		}
 	}
 	return nil
 }
