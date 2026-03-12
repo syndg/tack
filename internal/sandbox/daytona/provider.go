@@ -213,6 +213,10 @@ func (s *DaytonaSandbox) Start(ctx context.Context) error {
 	return s.sandbox.Start(ctx)
 }
 
+func (s *DaytonaSandbox) Health() error {
+	return nil
+}
+
 // daytonaPtyHandle implements sandbox.ProcessHandle over a Daytona PTY.
 type daytonaPtyHandle struct {
 	pty     *daytona.PtyHandle

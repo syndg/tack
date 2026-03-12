@@ -89,6 +89,7 @@ func (m *mockSandboxEntry) Upload(_ context.Context, _ []byte, _ string) error  
 func (m *mockSandboxEntry) Download(_ context.Context, _ string) ([]byte, error) { return nil, nil }
 func (m *mockSandboxEntry) Stop(_ context.Context) error                         { return nil }
 func (m *mockSandboxEntry) Start(_ context.Context) error                        { return nil }
+func (m *mockSandboxEntry) Health() error                                        { return nil }
 
 func setupSpawnerTest(t *testing.T) (*Spawner, *mockRuntime, *mockSandboxProvider, *db.AgentStore, *events.PersistentBus) {
 	t.Helper()

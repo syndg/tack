@@ -18,6 +18,7 @@ type Sandbox interface {
 	Download(ctx context.Context, path string) ([]byte, error)
 	Stop(ctx context.Context) error
 	Start(ctx context.Context) error
+	Health() error
 }
 
 // ProcessHandle abstracts over a long-running process with stdin/stdout streaming.
