@@ -30,6 +30,13 @@ type SandboxConfig struct {
 	DefaultResources  ResourceConfig `yaml:"default_resources"`
 	AutoStopMinutes   int            `yaml:"auto_stop_interval"`
 	AutoDeleteMinutes int            `yaml:"auto_delete_interval"`
+	Daytona           DaytonaConfig  `yaml:"daytona"`
+}
+
+type DaytonaConfig struct {
+	APIKey   string `yaml:"api_key"`
+	APIURL   string `yaml:"api_url"`
+	Snapshot string `yaml:"snapshot"`
 }
 
 type ResourceConfig struct {
@@ -39,11 +46,19 @@ type ResourceConfig struct {
 }
 
 type AgentsConfig struct {
-	Runtime            string `yaml:"runtime"`
-	MaxConcurrent      int    `yaml:"max_concurrent"`
-	MaxDepth           int    `yaml:"max_depth"`
-	StaggerDelayMs     int    `yaml:"stagger_delay_ms"`
-	IdleTimeoutMinutes int    `yaml:"idle_timeout_minutes"`
+	Runtime            string   `yaml:"runtime"`
+	MaxConcurrent      int      `yaml:"max_concurrent"`
+	MaxDepth           int      `yaml:"max_depth"`
+	StaggerDelayMs     int      `yaml:"stagger_delay_ms"`
+	IdleTimeoutMinutes int      `yaml:"idle_timeout_minutes"`
+	Pi                 PiConfig `yaml:"pi"`
+}
+
+type PiConfig struct {
+	Provider      string `yaml:"provider"`       // LLM provider (default: "anthropic")
+	Model         string `yaml:"model"`           // model override
+	ThinkingLevel string `yaml:"thinking_level"`  // default: "medium"
+	ExtensionPath string `yaml:"extension_path"`  // custom path (default: embedded)
 }
 
 type PlanningConfig struct {

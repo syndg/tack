@@ -1,9 +1,11 @@
 package local
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -226,6 +228,86 @@ func (s *LocalSandbox) Exec(ctx context.Context, cmdStr string, opts sandbox.Exe
 		Stdout:   strings.TrimRight(stdout.String(), "\n"),
 		Stderr:   strings.TrimRight(stderr.String(), "\n"),
 	}, nil
+}
+
+// ExecStreaming starts a long-running process and returns a ProcessHandle for
+// bidirectional stdin/stdout communication.
+func (s *LocalSandbox) ExecStreaming(ctx context.Context, cmdStr string, opts sandbox.ExecOpts) (sandbox.ProcessHandle, error) {
+	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
+
+	workDir := s.path
+	if opts.WorkDir != "" {
+		workDir = filepath.Join(s.path, opts.WorkDir)
+	}
+	cmd.Dir = workDir
+
+	env := os.Environ()
+	for k, v := range s.envVars {
+		env = append(env, k+"="+v)
+	}
+	for k, v := range opts.Env {
+		env = append(env, k+"="+v)
+	}
+	cmd.Env = env
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("creating stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("creating stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting process: %w", err)
+	}
+
+	return &localProcessHandle{
+		cmd:     cmd,
+		stdin:   stdin,
+		scanner: bufio.NewScanner(stdout),
+	}, nil
+}
+
+// localProcessHandle wraps exec.Command pipes to implement sandbox.ProcessHandle.
+type localProcessHandle struct {
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	scanner *bufio.Scanner
+}
+
+func (h *localProcessHandle) Write(data []byte) error {
+	_, err := h.stdin.Write(data)
+	return err
+}
+
+func (h *localProcessHandle) ReadLine() (string, error) {
+	if h.scanner.Scan() {
+		return h.scanner.Text(), nil
+	}
+	if err := h.scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", io.EOF
+}
+
+func (h *localProcessHandle) Wait() (int, error) {
+	err := h.cmd.Wait()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode(), nil
+		}
+		return -1, err
+	}
+	return 0, nil
+}
+
+func (h *localProcessHandle) Kill() error {
+	if h.cmd.Process != nil {
+		return h.cmd.Process.Kill()
+	}
+	return nil
 }
 
 // Upload writes content to a file within the worktree.

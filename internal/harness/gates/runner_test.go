@@ -25,6 +25,9 @@ func (m *mockSandbox) Start(ctx context.Context) error { return nil }
 func (m *mockSandbox) Exec(ctx context.Context, cmd string, opts sandbox.ExecOpts) (sandbox.ExecResult, error) {
 	return m.execFn(ctx, cmd, opts)
 }
+func (m *mockSandbox) ExecStreaming(_ context.Context, _ string, _ sandbox.ExecOpts) (sandbox.ProcessHandle, error) {
+	return nil, fmt.Errorf("ExecStreaming not implemented in mock")
+}
 
 func TestRunSingle_Success(t *testing.T) {
 	sb := &mockSandbox{

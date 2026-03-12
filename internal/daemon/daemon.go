@@ -19,7 +19,9 @@ import (
 	"github.com/syndg/deck/internal/harness/tools"
 	"github.com/syndg/deck/internal/runtime"
 	"github.com/syndg/deck/internal/runtime/claudecode"
+	"github.com/syndg/deck/internal/runtime/pi"
 	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/deck/internal/sandbox/daytona"
 	"github.com/syndg/deck/internal/sandbox/local"
 	"github.com/syndg/deck/internal/services/dispatch"
 	"github.com/syndg/deck/internal/services/events"
@@ -169,12 +171,52 @@ func New(cfg *config.Config) (*Daemon, error) {
 	// Create mail broker.
 	mailBroker := mail.New(mailStore, agentStore, eventBus, logger)
 
-	// Create sandbox provider (local git worktrees).
-	worktreeDir := filepath.Join(os.TempDir(), "deck-worktrees")
-	sandboxProv := local.New(projectRoot, worktreeDir, logger)
+	// Create sandbox provider based on config.
+	var sandboxProv sandbox.SandboxProvider
+	switch cfg.Sandbox.Provider {
+	case "daytona":
+		apiKey := cfg.Sandbox.Daytona.APIKey
+		if apiKey == "" {
+			apiKey = os.Getenv("DAYTONA_API_KEY")
+		}
+		if apiKey == "" {
+			// Fall back to local if no API key
+			logger.Warn("daytona provider configured but no API key found, falling back to local")
+			worktreeDir := filepath.Join(os.TempDir(), "deck-worktrees")
+			sandboxProv = local.New(projectRoot, worktreeDir, logger)
+		} else {
+			dp, err := daytona.New(daytona.Config{
+				APIKey:   apiKey,
+				APIURL:   cfg.Sandbox.Daytona.APIURL,
+				Snapshot: cfg.Sandbox.Daytona.Snapshot,
+			}, logger)
+			if err != nil {
+				database.Close()
+				return nil, fmt.Errorf("creating daytona provider: %w", err)
+			}
+			sandboxProv = dp
+		}
+	default: // "local"
+		worktreeDir := filepath.Join(os.TempDir(), "deck-worktrees")
+		sandboxProv = local.New(projectRoot, worktreeDir, logger)
+	}
 
-	// Create agent runtime (Claude Code).
-	agentRuntime := claudecode.New(cfg.Planning.Model, logger)
+	// Create agent runtime based on config.
+	var agentRuntime runtime.AgentRuntime
+	switch cfg.Agents.Runtime {
+	case "pi":
+		piModel := cfg.Agents.Pi.Model
+		if piModel == "" {
+			piModel = cfg.Planning.Model
+		}
+		agentRuntime = pi.New(pi.RuntimeConfig{
+			Model:         piModel,
+			Provider:      cfg.Agents.Pi.Provider,
+			ThinkingLevel: cfg.Agents.Pi.ThinkingLevel,
+		}, logger)
+	default: // "claude-code"
+		agentRuntime = claudecode.New(cfg.Planning.Model, logger)
+	}
 
 	// Create spawner.
 	spawner := dispatch.NewSpawner(agentStore, agentRuntime, sandboxProv, rulesEng, toolCur, eventBus, logger, daemonURL)

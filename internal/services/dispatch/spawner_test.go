@@ -81,6 +81,9 @@ func (m *mockSandboxEntry) Status() sandbox.SandboxStatus { return sandbox.Sandb
 func (m *mockSandboxEntry) Exec(_ context.Context, _ string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
 	return sandbox.ExecResult{}, nil
 }
+func (m *mockSandboxEntry) ExecStreaming(_ context.Context, _ string, _ sandbox.ExecOpts) (sandbox.ProcessHandle, error) {
+	return nil, fmt.Errorf("ExecStreaming not implemented in mock")
+}
 func (m *mockSandboxEntry) Upload(_ context.Context, _ []byte, _ string) error   { return nil }
 func (m *mockSandboxEntry) Download(_ context.Context, _ string) ([]byte, error) { return nil, nil }
 func (m *mockSandboxEntry) Stop(_ context.Context) error                         { return nil }
