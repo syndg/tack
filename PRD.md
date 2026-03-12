@@ -279,7 +279,7 @@ Implement the core git operations that perform branch merging with tiered confli
 
 The central merge processing loop. Consumes the merge queue FIFO, coordinates git merges, runs post-merge quality gates, handles failures, and publishes events.
 
-- [ ] **3.1** Create merge queue processor
+- [x] **3.1** Create merge queue processor
   Create `internal/services/merge/processor.go` with:
 
   ```go

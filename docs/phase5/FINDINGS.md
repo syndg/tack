@@ -56,3 +56,13 @@
 - `parsePatchOutput` (unexported) splits unified diff output on `"diff --git "` boundaries and keys by the `b/` path — handles renames correctly.
 - Added `strconv` import (beyond PRD's listed imports) for parsing insertion/deletion counts from the stat summary line.
 - `go build ./...` passes with no errors.
+
+## Task 3.1: Create merge queue processor
+
+- Created `internal/services/merge/processor.go` with full `Processor` implementation: `Start`, `Stop`, `ProcessNext`, `EnqueueStream`, plus internal helpers `processAll`, `processEntry`, `handleMergeSuccess`, `revertMerge`, `failEntry`, `checkDependencies`, `runPostMergeGates`, `checkObjectiveComplete`, `getMergerSandbox`, `getStreamBranch`.
+- **Branch discovery**: The `domain.Stream` struct has no `Branch` field (PRD step 1 says "look up the stream to get branch name"). Resolved by using `sandboxProv.List()` with `{"deck.stream": streamID}` labels to find the stream's sandbox, then exec'ing `git rev-parse --abbrev-ref HEAD` in it. This avoids modifying the Stream struct or Sandbox interface.
+- **Dependency ordering**: `ProcessNext` uses `ListPending()` instead of `Dequeue()` to iterate all pending entries and skip those with unsatisfied dependencies. `Dequeue()` only returns the oldest pending entry, which would cause an infinite loop if that entry's deps aren't met. `checkDependencies` treats a missing merge entry for a dependency stream (GetByStream error) as "not satisfied" rather than a hard error.
+- **Objective transition safety**: `checkObjectiveComplete` checks `obj.Status == ObjectiveStatusExecuting` before transitioning to "reviewing", since `mark_complete` (blueprint step) may fire before the async processor finishes. Publishes `EventObjectiveUpdated` manually since the processor doesn't depend on the lifecycle manager.
+- **Merger sandbox**: Uses `sandboxProv.List` with `{deck.role: merger, deck.objective: objectiveID}` to reuse an existing merger sandbox across multiple stream merges for the same objective. Creates one if none exists.
+- **Event flow**: `EnqueueStream` publishes `EventMergeQueued` (which the processor subscribes to). Note that `signalMergeReady` (handlers.go) also publishes `EventMergeQueued` before entries exist — the processor handles this gracefully by finding an empty queue.
+- `go build ./...` and `go vet ./...` pass with no errors.
