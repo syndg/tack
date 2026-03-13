@@ -28,10 +28,10 @@ func (s *ExecutionStore) Create(ctx context.Context, exec *blueprint.Execution) 
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO executions (id, blueprint_name, objective_id, current_step, step_states, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO executions (id, blueprint_name, objective_id, current_step, step_states, status, parent_id, stream_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		exec.ID, exec.BlueprintName, exec.ObjectiveID, exec.CurrentStep,
-		string(stepStatesJSON), exec.Status,
+		string(stepStatesJSON), exec.Status, exec.ParentID, exec.StreamID,
 		exec.CreatedAt.Unix(), exec.UpdatedAt.Unix(),
 	)
 	if err != nil {
@@ -43,19 +43,58 @@ func (s *ExecutionStore) Create(ctx context.Context, exec *blueprint.Execution) 
 // Get retrieves an execution by ID.
 func (s *ExecutionStore) Get(ctx context.Context, id string) (*blueprint.Execution, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, blueprint_name, objective_id, current_step, step_states, status, created_at, updated_at
+		`SELECT id, blueprint_name, objective_id, current_step, step_states, status, parent_id, stream_id, created_at, updated_at
 		 FROM executions WHERE id = ?`, id,
 	)
 	return s.scanExecution(row, id)
 }
 
-// GetByObjective retrieves the execution for a given objective.
+// GetByObjective retrieves the top-level execution for a given objective.
 func (s *ExecutionStore) GetByObjective(ctx context.Context, objectiveID string) (*blueprint.Execution, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, blueprint_name, objective_id, current_step, step_states, status, created_at, updated_at
-		 FROM executions WHERE objective_id = ?`, objectiveID,
+		`SELECT id, blueprint_name, objective_id, current_step, step_states, status, parent_id, stream_id, created_at, updated_at
+		 FROM executions WHERE objective_id = ? AND parent_id = '' LIMIT 1`, objectiveID,
 	)
 	return s.scanExecution(row, objectiveID)
+}
+
+// ListByParent returns all sub-executions for a parent execution, ordered by created_at asc.
+func (s *ExecutionStore) ListByParent(ctx context.Context, parentID string) ([]blueprint.Execution, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, blueprint_name, objective_id, current_step, step_states, status, parent_id, stream_id, created_at, updated_at
+		 FROM executions WHERE parent_id = ? ORDER BY created_at ASC`, parentID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing sub-executions for parent %s: %w", parentID, err)
+	}
+	defer rows.Close()
+
+	var executions []blueprint.Execution
+	for rows.Next() {
+		var exec blueprint.Execution
+		var stepStatesJSON string
+		var createdAt, updatedAt int64
+
+		if err := rows.Scan(
+			&exec.ID, &exec.BlueprintName, &exec.ObjectiveID, &exec.CurrentStep,
+			&stepStatesJSON, &exec.Status, &exec.ParentID, &exec.StreamID, &createdAt, &updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning sub-execution: %w", err)
+		}
+
+		if err := json.Unmarshal([]byte(stepStatesJSON), &exec.StepStates); err != nil {
+			return nil, fmt.Errorf("unmarshaling step states for execution %s: %w", exec.ID, err)
+		}
+
+		exec.CreatedAt = time.Unix(createdAt, 0)
+		exec.UpdatedAt = time.Unix(updatedAt, 0)
+		executions = append(executions, exec)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating sub-executions: %w", err)
+	}
+	return executions, nil
 }
 
 // scanExecution scans a single execution row.
@@ -66,7 +105,7 @@ func (s *ExecutionStore) scanExecution(row *sql.Row, ref string) (*blueprint.Exe
 
 	err := row.Scan(
 		&exec.ID, &exec.BlueprintName, &exec.ObjectiveID, &exec.CurrentStep,
-		&stepStatesJSON, &exec.Status, &createdAt, &updatedAt,
+		&stepStatesJSON, &exec.Status, &exec.ParentID, &exec.StreamID, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("getting execution %s: %w", ref, err)
@@ -113,7 +152,7 @@ func (s *ExecutionStore) Update(ctx context.Context, exec *blueprint.Execution) 
 // List returns all executions, ordered by created_at desc.
 func (s *ExecutionStore) List(ctx context.Context) ([]blueprint.Execution, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, blueprint_name, objective_id, current_step, step_states, status, created_at, updated_at
+		`SELECT id, blueprint_name, objective_id, current_step, step_states, status, parent_id, stream_id, created_at, updated_at
 		 FROM executions ORDER BY created_at DESC`,
 	)
 	if err != nil {
@@ -129,7 +168,7 @@ func (s *ExecutionStore) List(ctx context.Context) ([]blueprint.Execution, error
 
 		if err := rows.Scan(
 			&exec.ID, &exec.BlueprintName, &exec.ObjectiveID, &exec.CurrentStep,
-			&stepStatesJSON, &exec.Status, &createdAt, &updatedAt,
+			&stepStatesJSON, &exec.Status, &exec.ParentID, &exec.StreamID, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning execution: %w", err)
 		}

@@ -16,7 +16,9 @@ type Execution struct {
 	ObjectiveID   string                `json:"objective_id"`
 	CurrentStep   string                `json:"current_step"`
 	StepStates    map[string]*StepState `json:"step_states"`
-	Status        string                `json:"status"` // "running", "completed", "failed", "waiting_human"
+	Status        string                `json:"status"` // "running", "completed", "failed", "waiting_human", "awaiting_human"
+	ParentID      string                `json:"parent_id,omitempty"`  // parent execution ID (empty for top-level)
+	StreamID      string                `json:"stream_id,omitempty"` // stream this sub-execution drives (empty for top-level)
 	CreatedAt     time.Time             `json:"created_at"`
 	UpdatedAt     time.Time             `json:"updated_at"`
 }
@@ -195,18 +197,28 @@ func (e *Engine) Advance(ctx context.Context, exec *Execution) (*Execution, erro
 				maxIter = 3
 			}
 			if state.FixIterations < maxIter {
+				targetState := exec.StepStates[step.OnFail]
+				if targetState == nil {
+					e.logger.Error("on_fail target has no state entry",
+						"execution_id", exec.ID,
+						"step", step.ID,
+						"on_fail", step.OnFail,
+					)
+					state.Status = StepStatusFailed
+					exec.Status = "failed"
+					exec.UpdatedAt = time.Now()
+					return exec, nil
+				}
+
 				state.FixIterations++
 				state.RetryCount = 0
 				state.Status = StepStatusPending
 
 				// Reset the target agent step so it re-runs.
-				targetState := exec.StepStates[step.OnFail]
-				if targetState != nil {
-					targetState.Status = StepStatusPending
-					targetState.Error = ""
-					targetState.Metadata = map[string]string{
-						"fix_context": result.Error,
-					}
+				targetState.Status = StepStatusPending
+				targetState.Error = ""
+				targetState.Metadata = map[string]string{
+					"fix_context": result.Error,
 				}
 
 				exec.CurrentStep = step.OnFail

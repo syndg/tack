@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -18,19 +19,25 @@ import (
 	"github.com/syndg/deck/internal/services/lifecycle"
 )
 
+// MergeEnqueuer creates merge-queue entries for streams ready to merge.
+type MergeEnqueuer interface {
+	EnqueueStream(ctx context.Context, streamID string) error
+}
+
 // Coordinator orchestrates objective execution from plan approval to completion.
 // It subscribes to events and drives blueprint execution.
 type Coordinator struct {
-	engine     *blueprint.Engine
-	scheduler  *Scheduler
-	spawner    *Spawner
-	lifecycle  *lifecycle.Manager
-	executions *db.ExecutionStore
-	objectives *db.ObjectiveStore
-	plans      *db.PlanStore
-	streams    *db.StreamStore
-	eventBus   *events.PersistentBus
-	logger     *slog.Logger
+	engine        *blueprint.Engine
+	scheduler     *Scheduler
+	spawner       *Spawner
+	lifecycle     *lifecycle.Manager
+	mergeEnqueuer MergeEnqueuer
+	executions    *db.ExecutionStore
+	objectives    *db.ObjectiveStore
+	plans         *db.PlanStore
+	streams       *db.StreamStore
+	eventBus      *events.PersistentBus
+	logger        *slog.Logger
 
 	ctx         context.Context // set in Start(); used as parent for execution goroutines
 	mu          sync.Mutex
@@ -45,6 +52,7 @@ func NewCoordinator(
 	scheduler *Scheduler,
 	spawner *Spawner,
 	lc *lifecycle.Manager,
+	mergeEnqueuer MergeEnqueuer,
 	executions *db.ExecutionStore,
 	objectives *db.ObjectiveStore,
 	plans *db.PlanStore,
@@ -53,24 +61,21 @@ func NewCoordinator(
 	logger *slog.Logger,
 ) *Coordinator {
 	c := &Coordinator{
-		engine:      engine,
-		scheduler:   scheduler,
-		spawner:     spawner,
-		lifecycle:   lc,
-		executions:  executions,
-		objectives:  objectives,
-		plans:       plans,
-		streams:     streams,
-		eventBus:    eventBus,
-		logger:      logger,
-		activeExecs: make(map[string]context.CancelFunc),
-		agentMap:    make(map[string]*SpawnResult),
-		terminated:  make(map[string]bool),
+		engine:        engine,
+		scheduler:     scheduler,
+		spawner:       spawner,
+		lifecycle:     lc,
+		mergeEnqueuer: mergeEnqueuer,
+		executions:    executions,
+		objectives:    objectives,
+		plans:         plans,
+		streams:       streams,
+		eventBus:      eventBus,
+		logger:        logger,
+		activeExecs:   make(map[string]context.CancelFunc),
+		agentMap:      make(map[string]*SpawnResult),
+		terminated:    make(map[string]bool),
 	}
-
-	// Register step handlers with the engine.
-	engine.RegisterHandler(blueprint.StepTypeAgent, c.HandleAgentStep)
-	engine.RegisterHandler(blueprint.StepTypeBlueprintRef, c.HandleBlueprintRefStep)
 
 	return c
 }
@@ -95,13 +100,83 @@ func (c *Coordinator) Start(ctx context.Context) error {
 				switch event.Type {
 				case domain.EventObjectiveUpdated:
 					c.handleObjectiveUpdated(ctx, event)
+				case domain.EventMergeCompleted:
+					// After a merge completes, check if a partial objective
+					// can now be upgraded to completed (retry path).
+					if event.Objective != "" {
+						c.checkPartialToCompleted(ctx, event.Objective)
+					}
 				}
 			}
 		}
 	}()
 
+	go c.recoverExecutions(ctx)
+
 	c.logger.Info("coordinator started")
 	return nil
+}
+
+// recoverExecutions resumes in-flight executions after a daemon restart.
+// Only top-level executions (ParentID == "") are considered.
+func (c *Coordinator) recoverExecutions(ctx context.Context) {
+	allExecs, err := c.executions.List(ctx)
+	if err != nil {
+		c.logger.Error("execution recovery: failed to list executions", "error", err)
+		return
+	}
+
+	for i := range allExecs {
+		exec := &allExecs[i]
+
+		// Only recover top-level executions.
+		if exec.ParentID != "" {
+			continue
+		}
+
+		switch exec.Status {
+		case "running":
+			obj, err := c.objectives.Get(ctx, exec.ObjectiveID)
+			if err != nil {
+				c.logger.Error("execution recovery: failed to get objective",
+					"execution_id", exec.ID,
+					"objective_id", exec.ObjectiveID,
+					"error", err,
+				)
+				continue
+			}
+
+			if obj.Status != domain.ObjectiveStatusExecuting {
+				c.logger.Info("execution recovery: skipping, objective not in executing state",
+					"execution_id", exec.ID,
+					"objective_id", exec.ObjectiveID,
+					"objective_status", string(obj.Status),
+				)
+				continue
+			}
+
+			execCtx, cancel := context.WithCancel(ctx)
+
+			c.mu.Lock()
+			if existing, ok := c.activeExecs[exec.ObjectiveID]; ok {
+				existing()
+			}
+			c.activeExecs[exec.ObjectiveID] = cancel
+			c.mu.Unlock()
+
+			c.logger.Info("execution recovery: resuming running execution",
+				"execution_id", exec.ID,
+				"objective_id", exec.ObjectiveID,
+			)
+			go c.runExecution(execCtx, exec)
+
+		case "waiting_human":
+			c.logger.Info("execution recovery: execution awaiting human approval",
+				"execution_id", exec.ID,
+				"objective_id", exec.ObjectiveID,
+			)
+		}
+	}
 }
 
 // Stop cancels all active executions and cleans up.
@@ -339,12 +414,26 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		}, nil
 	}
 
-	stream, err := c.singleStreamForObjective(ctx, exec.ObjectiveID)
-	if err != nil {
-		return blueprint.StepResult{
-			Status: blueprint.StepStatusFailed,
-			Error:  fmt.Sprintf("getting stream context: %s", err),
-		}, nil
+	// In a sub-execution, the stream is identified by exec.StreamID.
+	// For top-level single-stream executions (e.g. hotfix), fall back to
+	// singleStreamForObjective.
+	var stream *domain.Stream
+	if exec.StreamID != "" {
+		stream, err = c.streams.Get(ctx, exec.StreamID)
+		if err != nil {
+			return blueprint.StepResult{
+				Status: blueprint.StepStatusFailed,
+				Error:  fmt.Sprintf("getting stream %s: %s", exec.StreamID, err),
+			}, nil
+		}
+	} else {
+		stream, err = c.singleStreamForObjective(ctx, exec.ObjectiveID)
+		if err != nil {
+			return blueprint.StepResult{
+				Status: blueprint.StepStatusFailed,
+				Error:  fmt.Sprintf("getting stream context: %s", err),
+			}, nil
+		}
 	}
 	if stream != nil && stream.Status == "pending" {
 		if err := c.scheduler.MarkExecuting(ctx, stream.ID); err != nil {
@@ -384,6 +473,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		Stream:         stream,
 		Role:           role,
 		TaskSpec:       taskSpec,
+		ExecutionID:    exec.ID,
 		CommitMode:     string(step.EffectiveCommitMode()),
 		Messages:       step.Messages,
 		FixContext:     fixContext,
@@ -473,17 +563,27 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 	}, nil
 }
 
+// streamResult reports the outcome of a stream's sub-execution.
+type streamResult struct {
+	StreamID string
+	Error    string // empty on success
+}
+
 // HandleBlueprintRefStep implements the StepHandler for blueprint_ref steps.
-// Registered with the engine as the StepTypeBlueprintRef handler.
-// For Phase 4, this handles per-stream execution without nested blueprints:
-//  1. Get the plan and all its streams
-//  2. Spawn lead agents for all ready streams (via spawner)
-//  3. Monitor agent completions via event subscription
-//  4. As leads complete: mark stream completed via scheduler, spawn newly ready leads
-//  5. Block until ALL streams are completed
-//  6. Return StepResult{Status: "completed"}
+// Creates a sub-execution of the referenced blueprint per stream and advances
+// them concurrently. Handles dependency cascade, failure escalation, and partial
+// completion.
 func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error) {
-	// 1. Get the plan and all its streams.
+	// 1. Resolve the referenced blueprint.
+	refBP := c.resolveBlueprint(step.Ref)
+	if refBP == nil {
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("referenced blueprint %q not found", step.Ref),
+		}, nil
+	}
+
+	// 2. Get the plan and all its streams.
 	plan, err := c.plans.GetByObjective(ctx, exec.ObjectiveID)
 	if err != nil {
 		return blueprint.StepResult{
@@ -510,7 +610,7 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 
 	totalStreams := len(allStreams)
 
-	// Build a set of stream IDs for event filtering and pre-count already completed.
+	// Build stream ID set and pre-count completed.
 	streamSet := make(map[string]bool, totalStreams)
 	completedCount := 0
 	for _, s := range allStreams {
@@ -519,24 +619,24 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 			completedCount++
 		}
 	}
-
 	if completedCount == totalStreams {
 		return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
 	}
 
-	obj, err := c.objectives.Get(ctx, exec.ObjectiveID)
-	if err != nil {
-		return blueprint.StepResult{
-			Status: blueprint.StepStatusFailed,
-			Error:  fmt.Sprintf("getting objective: %s", err),
-		}, nil
+	// Determine failure policy.
+	onStreamFailure := step.OnStreamFailure
+	if onStreamFailure == "" {
+		onStreamFailure = "escalate"
 	}
 
-	// Subscribe to events BEFORE spawning to avoid missing completions.
+	// 3. Subscribe to stream-ready events for cascade.
 	sub, unsub := c.eventBus.Subscribe(128)
 	defer unsub()
 
-	// 2. Spawn lead agents for all initially ready streams.
+	// Results channel collects sub-execution outcomes.
+	results := make(chan streamResult, totalStreams)
+
+	// 4. Start sub-executions for initially ready streams.
 	ready, err := c.scheduler.GetReadyStreams(ctx, plan.ID)
 	if err != nil {
 		return blueprint.StepResult{
@@ -547,28 +647,20 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 
 	for i := range ready {
 		stream := ready[i]
-		if err := c.scheduler.MarkExecuting(ctx, stream.ID); err != nil {
-			c.logger.Warn("failed to mark stream executing",
+		if err := c.startStreamSubExecution(ctx, exec, refBP, &stream, plan.ID, results); err != nil {
+			c.logger.Error("failed to start sub-execution for stream",
 				"stream_id", stream.ID,
 				"error", err,
 			)
-			continue
-		}
-		if _, err := c.spawnAndMonitor(ctx, SpawnRequest{
-			Objective: obj,
-			Stream:    &stream,
-			Role:      "lead",
-			TaskSpec:  stream.Description,
-		}); err != nil {
-			return blueprint.StepResult{
-				Status: blueprint.StepStatusFailed,
-				Error:  fmt.Sprintf("spawning lead for stream %s: %s", stream.ID, err),
-			}, nil
+			results <- streamResult{StreamID: stream.ID, Error: fmt.Sprintf("failed to start: %v", err)}
 		}
 	}
 
-	// 4. Wait for events until all streams complete or one fails.
-	for completedCount < totalStreams {
+	// 5. Collect results and handle cascade.
+	resolvedCount := completedCount
+	var failures []string
+
+	for resolvedCount < totalStreams {
 		select {
 		case <-ctx.Done():
 			return blueprint.StepResult{
@@ -576,95 +668,441 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 				Error:  "execution context cancelled",
 			}, nil
 
-		case event, ok := <-sub:
-			if !ok {
-				return blueprint.StepResult{
-					Status: blueprint.StepStatusFailed,
-					Error:  "event subscription closed unexpectedly",
-				}, nil
-			}
+		case res := <-results:
+			resolvedCount++
+			if res.Error != "" {
+				failures = append(failures, fmt.Sprintf("stream %s: %s", res.StreamID, res.Error))
 
-			switch event.Type {
-			case domain.EventAgentCompleted:
-				if !streamSet[event.Stream] {
-					continue // Not one of our streams.
+				if onStreamFailure == "escalate" {
+					c.escalateStreamFailure(ctx, exec, step, res.StreamID, res.Error)
 				}
-				if err := c.scheduler.MarkCompleted(ctx, event.Stream, plan.ID); err != nil {
-					c.logger.Error("failed to mark stream completed",
-						"stream_id", event.Stream,
-						"error", err,
-					)
-				}
-				completedCount++
-				c.logger.Info("stream agent completed",
-					"stream_id", event.Stream,
-					"completed", completedCount,
+
+				c.logger.Warn("stream sub-execution failed",
+					"stream_id", res.StreamID,
+					"error", res.Error,
+					"resolved", resolvedCount,
 					"total", totalStreams,
 				)
+			} else {
+				c.logger.Info("stream sub-execution completed",
+					"stream_id", res.StreamID,
+					"resolved", resolvedCount,
+					"total", totalStreams,
+				)
+			}
 
-			case domain.EventAgentFailed:
-				if !streamSet[event.Stream] {
-					continue
-				}
-				if err := c.scheduler.MarkFailed(ctx, event.Stream); err != nil {
-					c.logger.Error("failed to mark stream failed",
-						"stream_id", event.Stream,
-						"error", err,
-					)
-				}
-				var failPayload map[string]string
-				_ = json.Unmarshal([]byte(event.Payload), &failPayload)
-				return blueprint.StepResult{
-					Status: blueprint.StepStatusFailed,
-					Error:  fmt.Sprintf("stream %s agent failed: %s", event.Stream, failPayload["reason"]),
-				}, nil
-
-			case domain.EventStreamReady:
-				// A previously blocked stream is now ready — spawn a lead for it.
-				var readyPayload map[string]string
-				if err := json.Unmarshal([]byte(event.Payload), &readyPayload); err != nil {
-					continue
-				}
-				streamID := readyPayload["stream_id"]
-				if !streamSet[streamID] {
-					continue // Not our plan.
-				}
-
-				stream, err := c.streams.Get(ctx, streamID)
-				if err != nil {
-					c.logger.Error("failed to get cascade stream", "stream_id", streamID, "error", err)
-					continue
-				}
-
-				// Only spawn if pending; skip if already claimed by HandleBlueprintRefStep.
-				if stream.Status != "pending" {
-					continue
-				}
-
-				if err := c.scheduler.MarkExecuting(ctx, streamID); err != nil {
-					c.logger.Warn("failed to mark cascade stream executing",
-						"stream_id", streamID,
-						"error", err,
-					)
-					continue
-				}
-				if _, err := c.spawnAndMonitor(ctx, SpawnRequest{
-					Objective: obj,
-					Stream:    stream,
-					Role:      "lead",
-					TaskSpec:  stream.Description,
-				}); err != nil {
-					c.logger.Error("failed to spawn lead for cascade stream",
-						"stream_id", streamID,
-						"error", err,
-					)
-				}
+		case event, ok := <-sub:
+			if !ok {
+				continue
+			}
+			if event.Type != domain.EventStreamReady {
+				continue
+			}
+			var readyPayload map[string]string
+			if err := json.Unmarshal([]byte(event.Payload), &readyPayload); err != nil {
+				continue
+			}
+			streamID := readyPayload["stream_id"]
+			if !streamSet[streamID] {
+				continue
+			}
+			stream, err := c.streams.Get(ctx, streamID)
+			if err != nil || stream.Status != "pending" {
+				continue
+			}
+			if err := c.startStreamSubExecution(ctx, exec, refBP, stream, plan.ID, results); err != nil {
+				c.logger.Error("failed to start cascade sub-execution",
+					"stream_id", streamID,
+					"error", err,
+				)
+				results <- streamResult{StreamID: streamID, Error: fmt.Sprintf("failed to start: %v", err)}
 			}
 		}
 	}
 
-	// 6. All streams completed.
+	// 6. Determine final result.
+	if len(failures) > 0 {
+		return blueprint.StepResult{
+			Status:   blueprint.StepStatusCompleted,
+			Output:   fmt.Sprintf("partial: %d/%d streams completed; failures: %s", totalStreams-len(failures), totalStreams, strings.Join(failures, "; ")),
+			Metadata: map[string]string{"partial": "true", "failures": fmt.Sprintf("%d", len(failures))},
+		}, nil
+	}
+
 	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
+}
+
+// resolveBlueprint resolves a blueprint ref (e.g., ".deck/blueprints/stream.yaml")
+// to a loaded blueprint by trying the ref as-is and by base filename alias.
+func (c *Coordinator) resolveBlueprint(ref string) *blueprint.Blueprint {
+	if bp, ok := c.engine.GetBlueprint(ref); ok {
+		return bp
+	}
+	// Try base filename without extension: ".deck/blueprints/stream.yaml" → "stream"
+	base := strings.TrimSuffix(filepath.Base(ref), filepath.Ext(ref))
+	if bp, ok := c.engine.GetBlueprint(base); ok {
+		return bp
+	}
+	return nil
+}
+
+// startStreamSubExecution creates a sub-execution for a stream and launches
+// advanceSubExecution in a goroutine.
+func (c *Coordinator) startStreamSubExecution(
+	ctx context.Context,
+	parentExec *blueprint.Execution,
+	refBP *blueprint.Blueprint,
+	stream *domain.Stream,
+	planID string,
+	results chan<- streamResult,
+) error {
+	if err := c.scheduler.MarkExecuting(ctx, stream.ID); err != nil {
+		return fmt.Errorf("marking stream executing: %w", err)
+	}
+
+	// Create sub-execution.
+	subExec, err := c.engine.Start(ctx, refBP.Name, parentExec.ObjectiveID)
+	if err != nil {
+		_ = c.scheduler.MarkFailed(ctx, stream.ID)
+		return fmt.Errorf("starting sub-execution: %w", err)
+	}
+	subExec.ParentID = parentExec.ID
+	subExec.StreamID = stream.ID
+
+	if err := c.executions.Create(ctx, subExec); err != nil {
+		_ = c.scheduler.MarkFailed(ctx, stream.ID)
+		return fmt.Errorf("persisting sub-execution: %w", err)
+	}
+
+	// Link stream to sub-execution.
+	if err := c.streams.UpdateExecutionID(ctx, stream.ID, subExec.ID); err != nil {
+		c.logger.Warn("failed to link stream to sub-execution",
+			"stream_id", stream.ID,
+			"execution_id", subExec.ID,
+			"error", err,
+		)
+	}
+
+	c.logger.Info("started stream sub-execution",
+		"stream_id", stream.ID,
+		"sub_execution_id", subExec.ID,
+		"blueprint", refBP.Name,
+		"parent_execution_id", parentExec.ID,
+	)
+
+	go c.advanceSubExecution(ctx, subExec, stream, planID, results)
+	return nil
+}
+
+// advanceSubExecution drives a stream's sub-execution to completion in a goroutine.
+// Reports the result via the results channel.
+func (c *Coordinator) advanceSubExecution(
+	ctx context.Context,
+	subExec *blueprint.Execution,
+	stream *domain.Stream,
+	planID string,
+	results chan<- streamResult,
+) {
+	for {
+		if ctx.Err() != nil {
+			results <- streamResult{StreamID: stream.ID, Error: "context cancelled"}
+			return
+		}
+
+		updated, err := c.engine.Advance(ctx, subExec)
+		if err != nil {
+			if ctx.Err() != nil {
+				results <- streamResult{StreamID: stream.ID, Error: "context cancelled"}
+				return
+			}
+			_ = c.scheduler.MarkFailed(ctx, stream.ID)
+			results <- streamResult{StreamID: stream.ID, Error: fmt.Sprintf("advance failed: %v", err)}
+			return
+		}
+		subExec = updated
+
+		// Persist state after each advance.
+		if err := c.executions.Update(ctx, subExec); err != nil {
+			c.logger.Error("failed to persist sub-execution state",
+				"execution_id", subExec.ID,
+				"stream_id", stream.ID,
+				"error", err,
+			)
+		}
+
+		switch subExec.Status {
+		case "completed":
+			if err := c.scheduler.MarkCompleted(ctx, stream.ID, planID); err != nil {
+				c.logger.Error("failed to mark stream completed",
+					"stream_id", stream.ID,
+					"error", err,
+				)
+			}
+			results <- streamResult{StreamID: stream.ID}
+			return
+		case "failed":
+			_ = c.scheduler.MarkFailed(ctx, stream.ID)
+			failErr := "sub-execution failed"
+			if subExec.CurrentStep != "" {
+				if state := subExec.StepStates[subExec.CurrentStep]; state != nil && state.Error != "" {
+					failErr = state.Error
+				}
+			}
+			// Find the last failed step's error from step states.
+			for _, state := range subExec.StepStates {
+				if state.Status == blueprint.StepStatusFailed && state.Error != "" {
+					failErr = state.Error
+					break
+				}
+			}
+			results <- streamResult{StreamID: stream.ID, Error: failErr}
+			return
+		case "waiting_human":
+			results <- streamResult{StreamID: stream.ID, Error: "human step in sub-execution not yet supported"}
+			return
+		}
+		// "running" — loop continues; Advance blocks internally for agent steps.
+	}
+}
+
+// escalateStreamFailure publishes an EventEscalation with structured context
+// about a stream failure so that @human can review and potentially retry.
+func (c *Coordinator) escalateStreamFailure(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step, streamID, errMsg string) {
+	stream, err := c.streams.Get(ctx, streamID)
+	if err != nil {
+		c.logger.Error("failed to load stream for escalation",
+			"stream_id", streamID,
+			"error", err,
+		)
+		return
+	}
+
+	// Determine context level from escalation config.
+	contextLevel := "full"
+	prompt := "How should the agent resolve this?"
+	if step.Escalation != nil {
+		contextLevel = step.Escalation.EffectiveContext()
+		prompt = step.Escalation.EffectivePrompt()
+	}
+
+	payload := map[string]string{
+		"stream_id":     streamID,
+		"stream_title":  stream.Title,
+		"execution_id":  exec.ID,
+		"error":         errMsg,
+		"context_level": contextLevel,
+		"prompt":        prompt,
+	}
+	if stream.ExecutionID != "" {
+		payload["sub_execution_id"] = stream.ExecutionID
+	}
+	payloadJSON, _ := json.Marshal(payload)
+
+	c.eventBus.Publish(domain.Event{
+		Type:      domain.EventEscalation,
+		Objective: exec.ObjectiveID,
+		Stream:    streamID,
+		Payload:   string(payloadJSON),
+		CreatedAt: time.Now(),
+	})
+
+	c.logger.Info("stream failure escalated to human",
+		"stream_id", streamID,
+		"stream_title", stream.Title,
+		"context_level", contextLevel,
+		"execution_id", exec.ID,
+	)
+}
+
+// RetryStreamExecution retries a failed stream's sub-execution with optional
+// human guidance. Creates a fresh sub-execution of the same blueprint and
+// injects the previous error + guidance as fix_context on the first agent step.
+func (c *Coordinator) RetryStreamExecution(ctx context.Context, failedExecID string, guidance string) error {
+	// 1. Get the failed sub-execution.
+	failedExec, err := c.executions.Get(ctx, failedExecID)
+	if err != nil {
+		return fmt.Errorf("getting execution %s: %w", failedExecID, err)
+	}
+	if failedExec.Status != "failed" {
+		return fmt.Errorf("execution %s is not failed (status: %s)", failedExecID, failedExec.Status)
+	}
+	if failedExec.StreamID == "" {
+		return fmt.Errorf("execution %s is not a stream sub-execution", failedExecID)
+	}
+
+	// 2. Get the stream and verify it's failed.
+	stream, err := c.streams.Get(ctx, failedExec.StreamID)
+	if err != nil {
+		return fmt.Errorf("getting stream %s: %w", failedExec.StreamID, err)
+	}
+	if stream.Status != "failed" {
+		return fmt.Errorf("stream %s is not failed (status: %s)", stream.ID, stream.Status)
+	}
+
+	// 3. Resolve the blueprint used by the failed sub-execution.
+	refBP, ok := c.engine.GetBlueprint(failedExec.BlueprintName)
+	if !ok {
+		return fmt.Errorf("blueprint %q not found", failedExec.BlueprintName)
+	}
+
+	// 4. Collect the last error from the failed execution for fix context.
+	var lastError string
+	for _, state := range failedExec.StepStates {
+		if state.Status == blueprint.StepStatusFailed && state.Error != "" {
+			lastError = state.Error
+			break
+		}
+	}
+
+	// 5. Build combined fix context from error + human guidance.
+	var fixContext strings.Builder
+	if lastError != "" {
+		fmt.Fprintf(&fixContext, "Previous error:\n%s\n", lastError)
+	}
+	if guidance != "" {
+		fmt.Fprintf(&fixContext, "\nHuman guidance:\n%s\n", guidance)
+	}
+
+	// 6. Reset stream to pending.
+	if err := c.streams.UpdateStatus(ctx, stream.ID, "pending"); err != nil {
+		return fmt.Errorf("resetting stream %s to pending: %w", stream.ID, err)
+	}
+	if err := c.scheduler.MarkExecuting(ctx, stream.ID); err != nil {
+		return fmt.Errorf("marking stream %s executing: %w", stream.ID, err)
+	}
+
+	// 7. Create a new sub-execution.
+	subExec, err := c.engine.Start(ctx, refBP.Name, failedExec.ObjectiveID)
+	if err != nil {
+		_ = c.scheduler.MarkFailed(ctx, stream.ID)
+		return fmt.Errorf("starting retry sub-execution: %w", err)
+	}
+	subExec.ParentID = failedExec.ParentID
+	subExec.StreamID = stream.ID
+
+	// 8. Inject fix context on the first agent step.
+	if fixCtx := fixContext.String(); fixCtx != "" {
+		for _, step := range refBP.Steps {
+			if step.Type == blueprint.StepTypeAgent {
+				if state := subExec.StepStates[step.ID]; state != nil {
+					state.Metadata = map[string]string{
+						"fix_context": fixCtx,
+					}
+				}
+				break
+			}
+		}
+	}
+
+	if err := c.executions.Create(ctx, subExec); err != nil {
+		_ = c.scheduler.MarkFailed(ctx, stream.ID)
+		return fmt.Errorf("persisting retry sub-execution: %w", err)
+	}
+
+	// Link stream to new sub-execution.
+	if err := c.streams.UpdateExecutionID(ctx, stream.ID, subExec.ID); err != nil {
+		c.logger.Warn("failed to link stream to retry sub-execution",
+			"stream_id", stream.ID,
+			"execution_id", subExec.ID,
+			"error", err,
+		)
+	}
+
+	c.logger.Info("retrying stream sub-execution",
+		"stream_id", stream.ID,
+		"failed_execution_id", failedExecID,
+		"new_execution_id", subExec.ID,
+		"has_guidance", guidance != "",
+	)
+
+	// 9. Get the plan ID for MarkCompleted cascade.
+	plan, err := c.plans.GetByObjective(ctx, failedExec.ObjectiveID)
+	if err != nil {
+		_ = c.scheduler.MarkFailed(ctx, stream.ID)
+		return fmt.Errorf("getting plan for objective: %w", err)
+	}
+
+	// 10. Launch the sub-execution in a goroutine and handle completion.
+	baseCtx := c.ctx
+	if baseCtx == nil {
+		baseCtx = ctx
+	}
+	execCtx, cancel := context.WithCancel(baseCtx)
+
+	go func() {
+		defer cancel()
+
+		results := make(chan streamResult, 1)
+		c.advanceSubExecution(execCtx, subExec, stream, plan.ID, results)
+		res := <-results
+
+		if res.Error != "" {
+			c.logger.Warn("retry sub-execution failed",
+				"stream_id", stream.ID,
+				"execution_id", subExec.ID,
+				"error", res.Error,
+			)
+			return
+		}
+
+		c.logger.Info("retry sub-execution completed",
+			"stream_id", stream.ID,
+			"execution_id", subExec.ID,
+		)
+
+		// Enqueue the retried stream for merge (the parent merge step already ran).
+		if c.mergeEnqueuer != nil {
+			if err := c.mergeEnqueuer.EnqueueStream(execCtx, stream.ID); err != nil {
+				c.logger.Warn("failed to enqueue retried stream for merge",
+					"stream_id", stream.ID,
+					"error", err,
+				)
+			}
+		}
+
+		// Check if all streams are now completed — upgrade objective from partial to completed.
+		c.checkPartialToCompleted(execCtx, failedExec.ObjectiveID)
+	}()
+
+	return nil
+}
+
+// checkPartialToCompleted checks if an objective in "partial" status can be
+// upgraded to "completed" (all streams now completed).
+func (c *Coordinator) checkPartialToCompleted(ctx context.Context, objectiveID string) {
+	obj, err := c.objectives.Get(ctx, objectiveID)
+	if err != nil || obj.Status != domain.ObjectiveStatusPartial {
+		return
+	}
+
+	plan, err := c.plans.GetByObjective(ctx, objectiveID)
+	if err != nil {
+		return
+	}
+	streams, err := c.streams.ListByPlan(ctx, plan.ID)
+	if err != nil {
+		return
+	}
+
+	for _, s := range streams {
+		if s.Status != "completed" && s.Status != domain.StreamStatusMerged {
+			return // still have non-terminal streams (merge_ready/merging not final)
+		}
+	}
+
+	// All streams are fully merged or completed — upgrade to completed.
+	if lifecycle.IsValidTransition(obj.Status, domain.ObjectiveStatusCompleted) {
+		if err := c.lifecycle.Transition(ctx, objectiveID, domain.ObjectiveStatusCompleted); err != nil {
+			c.logger.Warn("failed to upgrade objective from partial to completed",
+				"objective_id", objectiveID,
+				"error", err,
+			)
+		} else {
+			c.logger.Info("objective upgraded from partial to completed",
+				"objective_id", objectiveID,
+			)
+		}
+	}
 }
 
 // spawnAndMonitor spawns an agent and launches a background goroutine that waits
@@ -865,18 +1303,60 @@ func (c *Coordinator) completeExecution(ctx context.Context, objectiveID string)
 		c.logger.Error("failed to load plan on execution completion", "objective_id", objectiveID, "error", err)
 		return
 	}
-	if err := c.plans.UpdateStatus(ctx, plan.ID, domain.PlanStatusCompleted); err != nil {
+
+	// Check stream statuses to determine if the outcome is partial.
+	streams, err := c.streams.ListByPlan(ctx, plan.ID)
+	if err != nil {
+		c.logger.Error("failed to list streams on execution completion", "objective_id", objectiveID, "error", err)
+	}
+
+	hasFailedStreams := false
+	for _, s := range streams {
+		if s.Status == "failed" {
+			hasFailedStreams = true
+			break
+		}
+	}
+
+	// For single-stream executions, mark the stream completed if still active.
+	if len(streams) == 1 {
+		s := streams[0]
+		if s.Status == "pending" || s.Status == "executing" {
+			if err := c.scheduler.MarkCompleted(ctx, s.ID, plan.ID); err != nil {
+				c.logger.Error("failed to mark single stream completed", "stream_id", s.ID, "error", err)
+			}
+		}
+	}
+
+	// Determine target status: partial if some streams failed, completed otherwise.
+	targetStatus := domain.ObjectiveStatusCompleted
+	planStatus := domain.PlanStatusCompleted
+	if hasFailedStreams {
+		targetStatus = domain.ObjectiveStatusPartial
+		// Plan is still "completed" — the execution finished, some streams just failed.
+	}
+
+	if err := c.plans.UpdateStatus(ctx, plan.ID, planStatus); err != nil {
 		c.logger.Error("failed to mark plan completed", "plan_id", plan.ID, "error", err)
 	}
 
-	stream, err := c.singleStreamForObjective(ctx, objectiveID)
+	// Safety net: ensure the objective reaches the right terminal state even if
+	// mark_complete already handled it (Transition is a no-op if status is already terminal).
+	obj, err := c.objectives.Get(ctx, objectiveID)
 	if err != nil {
-		c.logger.Error("failed to load single stream on execution completion", "objective_id", objectiveID, "error", err)
+		c.logger.Error("failed to load objective on execution completion", "objective_id", objectiveID, "error", err)
 		return
 	}
-	if stream != nil && (stream.Status == "pending" || stream.Status == "executing") {
-		if err := c.scheduler.MarkCompleted(ctx, stream.ID, plan.ID); err != nil {
-			c.logger.Error("failed to mark single stream completed", "stream_id", stream.ID, "error", err)
+	if obj.Status != domain.ObjectiveStatusCompleted && obj.Status != domain.ObjectiveStatusFailed && obj.Status != domain.ObjectiveStatusPartial {
+		if lifecycle.IsValidTransition(obj.Status, targetStatus) {
+			if err := c.lifecycle.Transition(ctx, objectiveID, targetStatus); err != nil {
+				c.logger.Warn("safety-net objective completion transition failed",
+					"objective_id", objectiveID,
+					"current_status", obj.Status,
+					"target_status", targetStatus,
+					"error", err,
+				)
+			}
 		}
 	}
 }

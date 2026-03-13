@@ -138,6 +138,15 @@ func Validate(bp *Blueprint) error {
 			if step.OnFail != "" {
 				errs = append(errs, fmt.Sprintf("blueprint_ref step %q cannot use on_fail (only deterministic steps can)", step.ID))
 			}
+			if step.OnStreamFailure != "" && step.OnStreamFailure != "escalate" && step.OnStreamFailure != "fail" {
+				errs = append(errs, fmt.Sprintf("blueprint_ref step %q has invalid on_stream_failure %q (must be escalate or fail)", step.ID, step.OnStreamFailure))
+			}
+			if step.Escalation != nil {
+				ctx := step.Escalation.Context
+				if ctx != "" && ctx != "full" && ctx != "minimal" && ctx != "error_only" {
+					errs = append(errs, fmt.Sprintf("blueprint_ref step %q has invalid escalation.context %q (must be full, minimal, or error_only)", step.ID, ctx))
+				}
+			}
 		case StepTypeHuman:
 			if step.Messages != nil {
 				errs = append(errs, fmt.Sprintf("human step %q cannot declare agent messages", step.ID))

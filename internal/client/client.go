@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/deck/internal/harness/blueprint"
 	"github.com/syndg/deck/internal/services/merge"
 )
 
@@ -277,6 +278,25 @@ func (c *Client) ApproveExecution(ctx context.Context, executionID string) error
 	return nil
 }
 
+// RetryExecution retries a failed stream sub-execution with optional human guidance.
+func (c *Client) RetryExecution(ctx context.Context, executionID string, guidance string) error {
+	body := struct {
+		Guidance string `json:"guidance,omitempty"`
+	}{Guidance: guidance}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshaling retry request: %w", err)
+	}
+
+	resp, err := c.do(ctx, http.MethodPost, "/executions/"+executionID+"/retry", bytes.NewReader(jsonBody))
+	if err != nil {
+		return fmt.Errorf("retrying execution: %w", err)
+	}
+	closeBody(resp)
+	return nil
+}
+
 // ListMail returns unread messages for an agent.
 func (c *Client) ListMail(ctx context.Context, agentName string) ([]domain.MailMessage, error) {
 	resp, err := c.do(ctx, http.MethodGet, "/mail/"+agentName+"/unread", nil)
@@ -380,6 +400,66 @@ func (c *Client) GetStreamDiff(ctx context.Context, streamID string) (*merge.Dif
 		return nil, fmt.Errorf("decoding stream diff response: %w", err)
 	}
 	return &diff, nil
+}
+
+// ListExecutions returns all blueprint executions.
+func (c *Client) ListExecutions(ctx context.Context) ([]blueprint.Execution, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/executions", nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing executions: %w", err)
+	}
+	defer closeBody(resp)
+
+	var executions []blueprint.Execution
+	if err := json.NewDecoder(resp.Body).Decode(&executions); err != nil {
+		return nil, fmt.Errorf("decoding executions response: %w", err)
+	}
+	return executions, nil
+}
+
+// GetExecution returns a single blueprint execution by ID.
+func (c *Client) GetExecution(ctx context.Context, id string) (*blueprint.Execution, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/executions/"+id, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting execution: %w", err)
+	}
+	defer closeBody(resp)
+
+	var execution blueprint.Execution
+	if err := json.NewDecoder(resp.Body).Decode(&execution); err != nil {
+		return nil, fmt.Errorf("decoding execution response: %w", err)
+	}
+	return &execution, nil
+}
+
+// ListBlueprints returns all available blueprints.
+func (c *Client) ListBlueprints(ctx context.Context) ([]blueprint.Blueprint, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/blueprints", nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing blueprints: %w", err)
+	}
+	defer closeBody(resp)
+
+	var blueprints []blueprint.Blueprint
+	if err := json.NewDecoder(resp.Body).Decode(&blueprints); err != nil {
+		return nil, fmt.Errorf("decoding blueprints response: %w", err)
+	}
+	return blueprints, nil
+}
+
+// GetBlueprint returns a single blueprint by name.
+func (c *Client) GetBlueprint(ctx context.Context, name string) (*blueprint.Blueprint, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/blueprints/"+name, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting blueprint: %w", err)
+	}
+	defer closeBody(resp)
+
+	var bp blueprint.Blueprint
+	if err := json.NewDecoder(resp.Body).Decode(&bp); err != nil {
+		return nil, fmt.Errorf("decoding blueprint response: %w", err)
+	}
+	return &bp, nil
 }
 
 // do executes an HTTP request and returns the response. It returns an error

@@ -29,6 +29,7 @@ type SpawnRequest struct {
 	Guidance       string                     // project-level guidance from config
 	CommitMode     string                     // "auto", "agent", "none" — controls commit behavior
 	Messages       *blueprint.MessageRequests // delivery messages the agent should generate
+	ExecutionID    string                     // sub-execution ID (used to label sandbox for branch lookup)
 	ReuseSandboxID string                     // if set, reuse this sandbox instead of creating a new one
 	FixContext     string                     // quality gate errors from a previous fix-loop iteration
 }
@@ -139,6 +140,9 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 		if req.Stream != nil {
 			labels["deck.stream"] = req.Stream.ID
 		}
+		if req.ExecutionID != "" {
+			labels["deck.execution"] = req.ExecutionID
+		}
 		sb, err = s.sp.Create(ctx, sandbox.CreateOpts{
 			Name:      sandboxName,
 			Labels:    labels,
@@ -207,6 +211,10 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	}
 	if req.Stream != nil {
 		envVars["DECK_STREAM_ID"] = req.Stream.ID
+		envVars["DECK_STREAM_TITLE"] = req.Stream.Title
+	}
+	if req.TaskSpec != "" {
+		envVars["DECK_TASK_SPEC"] = req.TaskSpec
 	}
 
 	process, err := s.rt.Spawn(ctx, sb, runtime.AgentOpts{

@@ -43,10 +43,10 @@ func (s *StreamStore) Create(ctx context.Context, stream *domain.Stream) error {
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO streams (id, plan_id, title, description, file_scope, dependencies, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO streams (id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		stream.ID, stream.PlanID, stream.Title, stream.Description,
-		string(fileScope), string(dependencies), stream.Status, now.Unix(),
+		string(fileScope), string(dependencies), stream.Status, stream.ExecutionID, now.Unix(),
 	)
 	if err != nil {
 		return fmt.Errorf("inserting stream: %w", err)
@@ -57,7 +57,7 @@ func (s *StreamStore) Create(ctx context.Context, stream *domain.Stream) error {
 // Get retrieves a stream by ID.
 func (s *StreamStore) Get(ctx context.Context, id string) (*domain.Stream, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, plan_id, title, description, file_scope, dependencies, status, created_at
+		`SELECT id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at
 		 FROM streams WHERE id = ?`, id,
 	)
 
@@ -67,7 +67,7 @@ func (s *StreamStore) Get(ctx context.Context, id string) (*domain.Stream, error
 
 	err := row.Scan(
 		&stream.ID, &stream.PlanID, &stream.Title, &stream.Description,
-		&fileScope, &dependencies, &stream.Status, &createdAt,
+		&fileScope, &dependencies, &stream.Status, &stream.ExecutionID, &createdAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -89,7 +89,7 @@ func (s *StreamStore) Get(ctx context.Context, id string) (*domain.Stream, error
 // ListByPlan returns all streams for a plan, ordered by created_at asc.
 func (s *StreamStore) ListByPlan(ctx context.Context, planID string) ([]domain.Stream, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, plan_id, title, description, file_scope, dependencies, status, created_at
+		`SELECT id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at
 		 FROM streams WHERE plan_id = ? ORDER BY created_at ASC`, planID,
 	)
 	if err != nil {
@@ -105,7 +105,7 @@ func (s *StreamStore) ListByPlan(ctx context.Context, planID string) ([]domain.S
 
 		if err := rows.Scan(
 			&stream.ID, &stream.PlanID, &stream.Title, &stream.Description,
-			&fileScope, &dependencies, &stream.Status, &createdAt,
+			&fileScope, &dependencies, &stream.Status, &stream.ExecutionID, &createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning stream: %w", err)
 		}
@@ -176,6 +176,25 @@ func (s *StreamStore) Update(ctx context.Context, stream *domain.Stream) error {
 	return nil
 }
 
+// UpdateExecutionID sets the sub-execution ID for a stream.
+func (s *StreamStore) UpdateExecutionID(ctx context.Context, id string, executionID string) error {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE streams SET execution_id = ? WHERE id = ?`,
+		executionID, id,
+	)
+	if err != nil {
+		return fmt.Errorf("updating stream execution_id: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("stream not found: %s", id)
+	}
+	return nil
+}
+
 // ListReady returns streams whose dependencies are all completed.
 // A stream is ready if its status is "pending" and all stream IDs in its
 // dependencies list have status "completed".
@@ -197,7 +216,8 @@ func (s *StreamStore) ListReady(ctx context.Context, planID string) ([]domain.St
 		}
 		allDone := true
 		for _, depID := range st.Dependencies {
-			if statusByID[depID] != "completed" {
+			depStatus := statusByID[depID]
+			if depStatus != "completed" && depStatus != "merge_ready" && depStatus != "merged" {
 				allDone = false
 				break
 			}

@@ -96,7 +96,7 @@ func setupProcessor(t *testing.T) *processorFixture {
 	gateRunner := gates.NewRunner(logger)
 
 	processor := NewProcessor(
-		queueStore, streamStore, planStore, objStore,
+		queueStore, streamStore, planStore,
 		merger, differ, gateRunner, sbProvider,
 		bus, logger,
 	)
@@ -392,31 +392,18 @@ func TestCheckObjectiveComplete(t *testing.T) {
 	f.streams.Create(ctx, s2)
 	f.streams.UpdateStatus(ctx, s2.ID, domain.StreamStatusMerged)
 
-	// Subscribe to events.
-	sub, unsub := f.bus.Subscribe(10)
-	defer unsub()
-
 	if err := f.processor.checkObjectiveComplete(ctx, obj.ID); err != nil {
 		t.Fatalf("checkObjectiveComplete: %v", err)
 	}
 
-	// Verify objective transitioned to reviewing.
+	// Verify objective status is unchanged — the merge processor no longer
+	// transitions objectives; the blueprint engine (mark_complete) does that.
 	got, err := f.objectives.Get(ctx, obj.ID)
 	if err != nil {
 		t.Fatalf("Get objective: %v", err)
 	}
-	if got.Status != domain.ObjectiveStatusReviewing {
-		t.Errorf("objective status = %q, want %q", got.Status, domain.ObjectiveStatusReviewing)
-	}
-
-	// Verify event was published.
-	select {
-	case ev := <-sub:
-		if ev.Type != domain.EventObjectiveUpdated {
-			t.Errorf("event type = %q, want %q", ev.Type, domain.EventObjectiveUpdated)
-		}
-	default:
-		t.Error("expected EventObjectiveUpdated to be published")
+	if got.Status != domain.ObjectiveStatusExecuting {
+		t.Errorf("objective status = %q, want %q (unchanged)", got.Status, domain.ObjectiveStatusExecuting)
 	}
 }
 

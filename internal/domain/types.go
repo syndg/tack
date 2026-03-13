@@ -10,8 +10,8 @@ const (
 	ObjectiveStatusPlanning  ObjectiveStatus = "planning"
 	ObjectiveStatusApproved  ObjectiveStatus = "approved"
 	ObjectiveStatusExecuting ObjectiveStatus = "executing"
-	ObjectiveStatusReviewing ObjectiveStatus = "reviewing"
 	ObjectiveStatusCompleted ObjectiveStatus = "completed"
+	ObjectiveStatusPartial   ObjectiveStatus = "partial"
 	ObjectiveStatusFailed    ObjectiveStatus = "failed"
 )
 
@@ -55,6 +55,7 @@ type Stream struct {
 	FileScope    []string  `json:"file_scope"`
 	Dependencies []string  `json:"dependencies"`
 	Status       string    `json:"status"`
+	ExecutionID  string    `json:"execution_id,omitempty"` // sub-execution driving this stream
 	CreatedAt    time.Time `json:"created_at"`
 }
 

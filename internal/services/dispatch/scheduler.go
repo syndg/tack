@@ -91,13 +91,18 @@ func (s *Scheduler) MarkExecuting(ctx context.Context, streamID string) error {
 }
 
 // MarkCompleted marks a stream as completed and removes from active set.
-// 1. Update stream status to "completed"
+// 1. Update stream status to "completed" (unless already merge_ready)
 // 2. Remove from activeStreams map
 // 3. Check for newly unblocked streams in the same plan
 // 4. Publish EventStreamReady for each newly ready stream
 func (s *Scheduler) MarkCompleted(ctx context.Context, streamID string, planID string) error {
-	if err := s.streams.UpdateStatus(ctx, streamID, "completed"); err != nil {
-		return fmt.Errorf("updating stream %s to completed: %w", streamID, err)
+	// Don't downgrade merge_ready back to completed — the stream was already
+	// signaled for merge by signal_merge_ready inside its sub-execution.
+	current, err := s.streams.Get(ctx, streamID)
+	if err != nil || (current.Status != "merge_ready" && current.Status != "merged") {
+		if err := s.streams.UpdateStatus(ctx, streamID, "completed"); err != nil {
+			return fmt.Errorf("updating stream %s to completed: %w", streamID, err)
+		}
 	}
 
 	s.mu.Lock()

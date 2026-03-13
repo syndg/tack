@@ -44,6 +44,7 @@ func (d *Daemon) registerRoutes() {
 	d.mux.HandleFunc("POST /mail/{agentName}/read-all", d.handleMarkAllMailRead)
 
 	d.mux.HandleFunc("POST /executions/{id}/approve", d.handleApproveExecution)
+	d.mux.HandleFunc("POST /executions/{id}/retry", d.handleRetryExecution)
 	d.mux.HandleFunc("GET /agents", d.handleListAgents)
 	d.mux.HandleFunc("GET /agents/{id}", d.handleGetAgent)
 	d.mux.HandleFunc("POST /agents/{id}/kill", d.handleKillAgent)
@@ -630,6 +631,40 @@ func (d *Daemon) handleApproveExecution(w http.ResponseWriter, r *http.Request) 
 
 	d.coordinator.ResumeExecution(exec)
 	writeJSON(w, http.StatusOK, exec)
+}
+
+// handleRetryExecution retries a failed stream sub-execution with optional human guidance.
+// Body: {"guidance": "..."}  (optional)
+func (d *Daemon) handleRetryExecution(w http.ResponseWriter, r *http.Request) {
+	if d.coordinator == nil {
+		writeError(w, http.StatusServiceUnavailable, "coordinator not available")
+		return
+	}
+
+	id := r.PathValue("id")
+
+	var req struct {
+		Guidance string `json:"guidance"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	if err := d.coordinator.RetryStreamExecution(r.Context(), id, req.Guidance); err != nil {
+		if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "not failed") || strings.Contains(err.Error(), "not a stream") {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		d.logger.Error("retrying stream execution", "execution_id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to retry execution")
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "retrying", "execution_id": id})
 }
 
 // handleListAgents returns all agent sessions as a JSON array.

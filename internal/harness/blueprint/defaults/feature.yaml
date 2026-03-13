@@ -24,6 +24,10 @@ steps:
   - id: per_stream
     type: blueprint_ref
     ref: ".deck/blueprints/stream.yaml"
+    on_stream_failure: escalate
+    escalation:
+      context: full
+      include_agent_history: true
     next: merge
 
   - id: merge

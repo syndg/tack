@@ -39,10 +39,10 @@ func TestIsValidTransition_ValidPaths(t *testing.T) {
 		{domain.ObjectiveStatusPlanning, domain.ObjectiveStatusFailed},
 		{domain.ObjectiveStatusApproved, domain.ObjectiveStatusExecuting},
 		{domain.ObjectiveStatusApproved, domain.ObjectiveStatusFailed},
-		{domain.ObjectiveStatusExecuting, domain.ObjectiveStatusReviewing},
+		{domain.ObjectiveStatusExecuting, domain.ObjectiveStatusCompleted},
+		{domain.ObjectiveStatusExecuting, domain.ObjectiveStatusPartial},
 		{domain.ObjectiveStatusExecuting, domain.ObjectiveStatusFailed},
-		{domain.ObjectiveStatusReviewing, domain.ObjectiveStatusCompleted},
-		{domain.ObjectiveStatusReviewing, domain.ObjectiveStatusFailed},
+		{domain.ObjectiveStatusPartial, domain.ObjectiveStatusCompleted},
 		{domain.ObjectiveStatusFailed, domain.ObjectiveStatusPlanning},
 	}
 	for _, tt := range valid {

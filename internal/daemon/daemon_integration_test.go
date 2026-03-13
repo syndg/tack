@@ -14,6 +14,7 @@ import (
 
 	"github.com/syndg/deck/internal/client"
 	"github.com/syndg/deck/internal/config"
+	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
 )
 
@@ -500,7 +501,7 @@ func TestSimpleHotfixExecution_CompletesWithNormalizedBlueprintAndQualityGates(t
 
 	waitForCondition(t, 10*time.Second, func() bool {
 		obj, err := c.GetObjective(context.Background(), resp.Objective.ID)
-		return err == nil && obj.Status == "reviewing"
+		return err == nil && obj.Status == "completed"
 	})
 
 	executions := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
@@ -558,28 +559,51 @@ quality_gates: []
 
 	waitForCondition(t, 10*time.Second, func() bool {
 		got, err := c.GetObjective(context.Background(), obj.ID)
-		return err == nil && got.Status == "reviewing"
+		return err == nil && got.Status == "completed"
 	})
 
+	// Parent execution + one sub-execution per stream.
 	executions := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
-	if len(executions) != 1 || executions[0]["status"] != "completed" {
-		t.Fatalf("executions = %#v, want one completed execution", executions)
+	if len(executions) != 2 {
+		t.Fatalf("executions len = %d, want 2 (parent + sub)", len(executions))
+	}
+	var parentExec, subExec map[string]any
+	for _, e := range executions {
+		if e["parent_id"] == nil || e["parent_id"] == "" {
+			parentExec = e
+		} else {
+			subExec = e
+		}
+	}
+	if parentExec == nil || parentExec["status"] != "completed" {
+		t.Fatalf("parent execution = %#v, want completed", parentExec)
+	}
+	if subExec == nil || subExec["status"] != "completed" {
+		t.Fatalf("sub execution = %#v, want completed", subExec)
 	}
 
+	// Sub-execution spawns scout, builder, reviewer agents.
 	agents := mustGetJSON[[]map[string]any](t, baseURL+"/agents")
-	if len(agents) != 1 {
-		t.Fatalf("agents len = %d, want 1", len(agents))
+	if len(agents) < 2 {
+		t.Fatalf("agents len = %d, want >= 2 (scout + builder + reviewer)", len(agents))
 	}
-	if agents[0]["role"] != "lead" {
-		t.Fatalf("agent role = %v, want lead", agents[0]["role"])
+	agentRoles := make(map[string]bool)
+	for _, a := range agents {
+		if role, ok := a["role"].(string); ok {
+			agentRoles[role] = true
+		}
+	}
+	if !agentRoles["builder"] {
+		t.Fatalf("expected builder agent, got roles: %v", agentRoles)
 	}
 
 	plan = mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+obj.ID+"/plan")
 	if plan.Plan.Status != "completed" {
 		t.Fatalf("plan status = %q, want completed", plan.Plan.Status)
 	}
-	if len(plan.Streams) != 1 || plan.Streams[0].Status != "completed" {
-		t.Fatalf("streams = %#v, want one completed stream", plan.Streams)
+	ss := plan.Streams[0].Status
+	if len(plan.Streams) != 1 || (ss != "completed" && ss != "merge_ready" && ss != "merged") {
+		t.Fatalf("streams = %#v, want one completed/merge_ready/merged stream", plan.Streams)
 	}
 }
 
@@ -662,6 +686,213 @@ func TestKillAgent_StopsExecutionAndMarksFailure(t *testing.T) {
 	}
 }
 
+func TestMultiStreamExecution_DependencyCascadeAndPartialCompletion(t *testing.T) {
+	restoreRepo := setupGitRepo(t)
+	defer restoreRepo()
+	// Agent script: scout and reviewer always succeed; builder fails for stream with "fail-stream" in title.
+	installFakeClaude(t, `#!/bin/sh
+if [ "$DECK_AGENT_ROLE" = "builder" ] && echo "$DECK_STREAM_TITLE" | grep -q "fail-stream"; then
+  echo "build failed"
+  exit 1
+fi
+echo "done role=$DECK_AGENT_ROLE"
+exit 0
+`)
+
+	baseURL, d, shutdown := startExecutionDaemonWithInstance(t, "127.0.0.1:19809", nil)
+	defer shutdown()
+
+	c := client.New(baseURL)
+	obj, err := c.CreateObjectiveWithOptions(context.Background(), "multi-stream feature", client.CreateObjectiveOptions{Blueprint: "Feature Implementation"})
+	if err != nil {
+		t.Fatalf("CreateObjectiveWithOptions: %v", err)
+	}
+
+	// Create plan with 3 streams: s1 (independent), s2-fail (independent, will fail), s3 (depends on s1).
+	postJSON(t, baseURL+"/plans", map[string]any{
+		"objective_id": obj.ID,
+		"output": `streams:
+  - title: "stream one"
+    description: "succeed-stream one"
+    file_scope:
+      - "README.md"
+    dependencies: []
+  - title: "fail-stream two"
+    description: "fail-stream should fail"
+    file_scope:
+      - "README.md"
+    dependencies: []
+  - title: "stream three"
+    description: "succeed-stream three depends on one"
+    file_scope:
+      - "README.md"
+    dependencies:
+      - "stream one"
+quality_gates: []
+`,
+	}, http.StatusCreated, nil)
+
+	plan := mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+obj.ID+"/plan")
+	if err := c.ApprovePlan(context.Background(), plan.Plan.ID); err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+
+	// Wait for objective to reach "partial" (stream two fails, one and three complete).
+	waitForCondition(t, 30*time.Second, func() bool {
+		got, err := c.GetObjective(context.Background(), obj.ID)
+		return err == nil && got.Status == "partial"
+	})
+
+	// Verify stream statuses.
+	plan = mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+obj.ID+"/plan")
+	statusByTitle := make(map[string]string)
+	for _, s := range plan.Streams {
+		statusByTitle[s.Title] = s.Status
+	}
+
+	// Successful streams may be "completed", "merge_ready", or "merged" depending on
+	// how far the merge queue got before the assertion runs.
+	isSuccess := func(status string) bool {
+		return status == "completed" || status == "merge_ready" || status == "merged"
+	}
+	if !isSuccess(statusByTitle["stream one"]) {
+		t.Fatalf("stream one status = %q, want completed/merge_ready/merged", statusByTitle["stream one"])
+	}
+	if statusByTitle["fail-stream two"] != "failed" {
+		t.Fatalf("fail-stream two status = %q, want failed", statusByTitle["fail-stream two"])
+	}
+	if !isSuccess(statusByTitle["stream three"]) {
+		t.Fatalf("stream three status = %q, want completed/merge_ready/merged", statusByTitle["stream three"])
+	}
+
+	// Verify we have parent + 3 sub-executions.
+	executions := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
+	if len(executions) != 4 {
+		t.Fatalf("executions len = %d, want 4 (parent + 3 sub)", len(executions))
+	}
+
+	// Find the failed sub-execution.
+	var failedExecID string
+	for _, e := range executions {
+		if e["status"] == "failed" {
+			failedExecID, _ = e["id"].(string)
+		}
+	}
+	if failedExecID == "" {
+		t.Fatal("expected one failed sub-execution")
+	}
+
+	// Check that escalation event was persisted (default on_stream_failure = escalate).
+	eventStore := db.NewEventStore(d.db.Conn())
+	events, err := eventStore.ListByObjective(context.Background(), obj.ID, 50)
+	if err != nil {
+		t.Fatalf("ListByObjective: %v", err)
+	}
+	hasEscalation := false
+	for _, ev := range events {
+		if ev.Type == domain.EventEscalation {
+			hasEscalation = true
+			break
+		}
+	}
+	if !hasEscalation {
+		t.Fatalf("expected escalation event, got %+v", events)
+	}
+
+	// Verify objective is partial (not failed or completed).
+	got, err := c.GetObjective(context.Background(), obj.ID)
+	if err != nil {
+		t.Fatalf("GetObjective: %v", err)
+	}
+	if got.Status != "partial" {
+		t.Fatalf("objective status = %q, want partial", got.Status)
+	}
+}
+
+func TestRetryExecution_RetriesFailedStreamWithGuidance(t *testing.T) {
+	restoreRepo := setupGitRepo(t)
+	defer restoreRepo()
+
+	// Track retry attempts via a temp file. First builder call for "retry-stream" fails,
+	// subsequent calls succeed.
+	attemptFile := filepath.Join(t.TempDir(), "attempts")
+	installFakeClaude(t, `#!/bin/sh
+if [ "$DECK_AGENT_ROLE" = "builder" ] && echo "$DECK_STREAM_TITLE" | grep -q "retry-stream"; then
+  count=$(cat "`+attemptFile+`" 2>/dev/null || echo 0)
+  count=$((count + 1))
+  echo $count > "`+attemptFile+`"
+  if [ "$count" -le 1 ]; then
+    echo "build failed on first attempt"
+    exit 1
+  fi
+fi
+echo "done role=$DECK_AGENT_ROLE"
+exit 0
+`)
+
+	baseURL, shutdown := startExecutionDaemon(t, "127.0.0.1:19810", nil)
+	defer shutdown()
+
+	c := client.New(baseURL)
+	obj, err := c.CreateObjectiveWithOptions(context.Background(), "retry feature", client.CreateObjectiveOptions{Blueprint: "Feature Implementation"})
+	if err != nil {
+		t.Fatalf("CreateObjectiveWithOptions: %v", err)
+	}
+
+	postJSON(t, baseURL+"/plans", map[string]any{
+		"objective_id": obj.ID,
+		"output": `streams:
+  - title: "retry-stream"
+    description: "retry-stream will fail then succeed"
+    file_scope:
+      - "README.md"
+    dependencies: []
+quality_gates: []
+`,
+	}, http.StatusCreated, nil)
+
+	plan := mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+obj.ID+"/plan")
+	if err := c.ApprovePlan(context.Background(), plan.Plan.ID); err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+
+	// Wait for objective to reach "partial" (stream fails on first attempt).
+	waitForCondition(t, 30*time.Second, func() bool {
+		got, err := c.GetObjective(context.Background(), obj.ID)
+		return err == nil && got.Status == "partial"
+	})
+
+	// Find the failed sub-execution.
+	executions := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
+	var failedExecID string
+	for _, e := range executions {
+		if e["status"] == "failed" {
+			failedExecID, _ = e["id"].(string)
+		}
+	}
+	if failedExecID == "" {
+		t.Fatal("expected one failed sub-execution")
+	}
+
+	// Retry with guidance.
+	if err := c.RetryExecution(context.Background(), failedExecID, "fix the build"); err != nil {
+		t.Fatalf("RetryExecution: %v", err)
+	}
+
+	// Wait for stream to reach "merged" — proves merge actually completed,
+	// not just enqueued. The objective should follow (partial -> completed).
+	waitForCondition(t, 30*time.Second, func() bool {
+		p := mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+obj.ID+"/plan")
+		return len(p.Streams) == 1 && p.Streams[0].Status == "merged"
+	})
+
+	// Objective must also be completed now that the stream is fully merged.
+	waitForCondition(t, 5*time.Second, func() bool {
+		got, err := c.GetObjective(context.Background(), obj.ID)
+		return err == nil && got.Status == "completed"
+	})
+}
+
 func setupGitRepo(t *testing.T) func() {
 	t.Helper()
 	repo := t.TempDir()
@@ -708,6 +939,12 @@ func installFakeClaude(t *testing.T, script string) {
 
 func startExecutionDaemon(t *testing.T, listen string, qualityGates []string) (string, func()) {
 	t.Helper()
+	baseURL, _, shutdown := startExecutionDaemonWithInstance(t, listen, qualityGates)
+	return baseURL, shutdown
+}
+
+func startExecutionDaemonWithInstance(t *testing.T, listen string, qualityGates []string) (string, *Daemon, func()) {
+	t.Helper()
 	cfg := config.Default()
 	cfg.Daemon.Listen = listen
 	cfg.Daemon.DataDir = t.TempDir()
@@ -726,7 +963,7 @@ func startExecutionDaemon(t *testing.T, listen string, qualityGates []string) (s
 	baseURL := "http://" + cfg.Daemon.Listen
 	waitForHTTP(t, baseURL+"/health")
 
-	return baseURL, func() {
+	return baseURL, d, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = d.Shutdown(ctx)

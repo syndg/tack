@@ -72,8 +72,8 @@ func NewHandlers(
 //   - "dispatch_streams"   → dispatches lead agents for ready streams
 //   - "run_quality_gates"  → runs quality gates in sandbox
 //   - "signal_merge_ready" → marks streams as merge-ready and publishes EventMergeQueued
-//   - "mark_complete"      → transitions objective to reviewing
-//   - "merge_queue"        → enqueues merge_ready streams into the merge processor
+//   - "mark_complete"      → transitions objective to completed
+//   - "merge_queue"        → enqueues merge_ready streams and blocks until all resolve
 //   - "create_pr"          → pushes branch and creates a GitHub PR
 func (h *Handlers) HandleDeterministic(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error) {
 	switch step.Action {
@@ -181,8 +181,9 @@ func (h *Handlers) runQualityGates(ctx context.Context, exec *blueprint.Executio
 		}
 	}
 
-	// Prefer a lead agent sandbox for the objective, but fall back to any agent
-	// sandbox. Hotfix/single-agent flows only have a builder sandbox.
+	// Find the right sandbox for quality gates:
+	// - Sub-execution (StreamID set): use the builder sandbox for THIS stream
+	// - Top-level: prefer lead, then builder, then any
 	sessions, err := h.agents.ListByObjective(ctx, exec.ObjectiveID)
 	if err != nil {
 		return blueprint.StepResult{
@@ -191,9 +192,12 @@ func (h *Handlers) runQualityGates(ctx context.Context, exec *blueprint.Executio
 		}, nil
 	}
 
-	findSandbox := func(preferredRole domain.AgentRole) sandbox.Sandbox {
+	findSandbox := func(streamID string, preferredRole domain.AgentRole) sandbox.Sandbox {
 		for _, session := range sessions {
 			if session.SandboxID == "" {
+				continue
+			}
+			if streamID != "" && session.StreamID != streamID {
 				continue
 			}
 			if preferredRole != "" && session.Role != preferredRole {
@@ -201,12 +205,6 @@ func (h *Handlers) runQualityGates(ctx context.Context, exec *blueprint.Executio
 			}
 			found, err := h.sandboxProvider.Get(ctx, session.SandboxID)
 			if err != nil {
-				h.logger.Warn("could not retrieve sandbox for agent",
-					"sandbox_id", session.SandboxID,
-					"session_id", session.ID,
-					"role", session.Role,
-					"error", err,
-				)
 				continue
 			}
 			return found
@@ -215,9 +213,21 @@ func (h *Handlers) runQualityGates(ctx context.Context, exec *blueprint.Executio
 	}
 
 	var sb sandbox.Sandbox
-	sb = findSandbox(domain.AgentRoleLead)
-	if sb == nil {
-		sb = findSandbox("")
+	if exec.StreamID != "" {
+		// Sub-execution: prefer builder for this stream, fall back to any for this stream.
+		sb = findSandbox(exec.StreamID, domain.AgentRoleBuilder)
+		if sb == nil {
+			sb = findSandbox(exec.StreamID, "")
+		}
+	} else {
+		// Top-level: prefer lead, then builder, then any.
+		sb = findSandbox("", domain.AgentRoleLead)
+		if sb == nil {
+			sb = findSandbox("", domain.AgentRoleBuilder)
+		}
+		if sb == nil {
+			sb = findSandbox("", "")
+		}
 	}
 	if sb == nil {
 		return blueprint.StepResult{
@@ -252,8 +262,8 @@ func (h *Handlers) runQualityGates(ctx context.Context, exec *blueprint.Executio
 }
 
 // signalMergeReady implements the "signal_merge_ready" deterministic action.
-// Updates all completed streams for the objective's plan to "merge_ready" status
-// and publishes EventMergeQueued for each.
+// In a sub-execution (exec.StreamID set), marks the current stream as merge_ready.
+// In a top-level execution, upgrades all completed streams to merge_ready.
 func (h *Handlers) signalMergeReady(ctx context.Context, exec *blueprint.Execution) (blueprint.StepResult, error) {
 	plan, err := h.plans.GetByObjective(ctx, exec.ObjectiveID)
 	if err != nil {
@@ -263,6 +273,13 @@ func (h *Handlers) signalMergeReady(ctx context.Context, exec *blueprint.Executi
 		}, nil
 	}
 
+	// In a sub-execution, only signal the current stream — it's still "executing"
+	// at this point (advanceSubExecution marks it completed after we return).
+	if exec.StreamID != "" {
+		return h.signalStreamMergeReady(ctx, exec.StreamID, plan.ID, exec.ObjectiveID)
+	}
+
+	// Top-level execution: scan all completed streams.
 	streamList, err := h.streams.ListByPlan(ctx, plan.ID)
 	if err != nil {
 		return blueprint.StepResult{
@@ -275,50 +292,77 @@ func (h *Handlers) signalMergeReady(ctx context.Context, exec *blueprint.Executi
 		if stream.Status != "completed" {
 			continue
 		}
-
-		if err := h.streams.UpdateStatus(ctx, stream.ID, "merge_ready"); err != nil {
+		if _, err := h.signalStreamMergeReady(ctx, stream.ID, plan.ID, exec.ObjectiveID); err != nil {
 			return blueprint.StepResult{
 				Status: blueprint.StepStatusFailed,
-				Error:  fmt.Sprintf("updating stream %s to merge_ready: %s", stream.ID, err),
+				Error:  fmt.Sprintf("signaling stream %s merge_ready: %s", stream.ID, err),
 			}, nil
 		}
-
-		payload, _ := json.Marshal(map[string]string{
-			"stream_id":    stream.ID,
-			"plan_id":      plan.ID,
-			"objective_id": exec.ObjectiveID,
-		})
-		h.eventBus.Publish(domain.Event{
-			Type:      domain.EventMergeQueued,
-			Objective: exec.ObjectiveID,
-			Stream:    stream.ID,
-			Payload:   string(payload),
-			CreatedAt: time.Now(),
-		})
-
-		h.logger.Info("stream signaled for merge",
-			"stream_id", stream.ID,
-			"stream_title", stream.Title,
-		)
 	}
 
 	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
 }
 
-// markComplete implements the "mark_complete" deterministic action.
-// Transitions the objective to "reviewing" (human sign-off required by default).
-// Autonomy-based direct completion (→ "completed") is deferred to a later phase.
-func (h *Handlers) markComplete(ctx context.Context, exec *blueprint.Execution) (blueprint.StepResult, error) {
-	if err := h.lifecycle.Transition(ctx, exec.ObjectiveID, domain.ObjectiveStatusReviewing); err != nil {
+// signalStreamMergeReady marks a single stream as merge_ready and publishes EventMergeQueued.
+func (h *Handlers) signalStreamMergeReady(ctx context.Context, streamID, planID, objectiveID string) (blueprint.StepResult, error) {
+	if err := h.streams.UpdateStatus(ctx, streamID, "merge_ready"); err != nil {
 		return blueprint.StepResult{
 			Status: blueprint.StepStatusFailed,
-			Error:  fmt.Sprintf("transitioning objective to reviewing: %s", err),
+			Error:  fmt.Sprintf("updating stream %s to merge_ready: %s", streamID, err),
 		}, nil
 	}
 
-	h.logger.Info("objective marked for review",
+	payload, _ := json.Marshal(map[string]string{
+		"stream_id":    streamID,
+		"plan_id":      planID,
+		"objective_id": objectiveID,
+	})
+	h.eventBus.Publish(domain.Event{
+		Type:      domain.EventMergeQueued,
+		Objective: objectiveID,
+		Stream:    streamID,
+		Payload:   string(payload),
+		CreatedAt: time.Now(),
+	})
+
+	h.logger.Info("stream signaled for merge",
+		"stream_id", streamID,
+	)
+
+	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
+}
+
+// markComplete implements the "mark_complete" deterministic action.
+// Checks stream statuses: if any streams failed, transitions to "partial" instead
+// of "completed" so failed streams can be retried.
+func (h *Handlers) markComplete(ctx context.Context, exec *blueprint.Execution) (blueprint.StepResult, error) {
+	// Determine target status by checking stream outcomes.
+	targetStatus := domain.ObjectiveStatusCompleted
+
+	plan, err := h.plans.GetByObjective(ctx, exec.ObjectiveID)
+	if err == nil {
+		streams, err := h.streams.ListByPlan(ctx, plan.ID)
+		if err == nil {
+			for _, s := range streams {
+				if s.Status == "failed" {
+					targetStatus = domain.ObjectiveStatusPartial
+					break
+				}
+			}
+		}
+	}
+
+	if err := h.lifecycle.Transition(ctx, exec.ObjectiveID, targetStatus); err != nil {
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("transitioning objective to %s: %s", targetStatus, err),
+		}, nil
+	}
+
+	h.logger.Info("objective completed",
 		"execution_id", exec.ID,
 		"objective_id", exec.ObjectiveID,
+		"status", targetStatus,
 	)
 
 	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
@@ -335,7 +379,7 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 		}, nil
 	}
 
-	sb, err := h.findSandboxForObjective(ctx, exec.ObjectiveID)
+	sb, err := h.findMergerSandbox(ctx, exec.ObjectiveID)
 	if err != nil {
 		return blueprint.StepResult{
 			Status: blueprint.StepStatusFailed,
@@ -445,6 +489,31 @@ func (h *Handlers) findSandboxForObjective(ctx context.Context, objectiveID stri
 	return sb, nil
 }
 
+// findMergerSandbox locates the merger sandbox for creating a PR.
+// After multi-stream blueprints, the merger sandbox contains the final merged code.
+// Falls back to findSandboxForObjective for single-stream/hotfix blueprints
+// where no merger agent exists.
+func (h *Handlers) findMergerSandbox(ctx context.Context, objectiveID string) (sandbox.Sandbox, error) {
+	sessions, err := h.agents.ListByObjective(ctx, objectiveID)
+	if err != nil {
+		return nil, fmt.Errorf("listing agents for objective: %s", err)
+	}
+
+	for _, session := range sessions {
+		if session.SandboxID == "" || session.Role != domain.AgentRoleMerger {
+			continue
+		}
+		found, err := h.sandboxProvider.Get(ctx, session.SandboxID)
+		if err != nil {
+			continue
+		}
+		return found, nil
+	}
+
+	// No merger sandbox found — fall back for hotfix-style single-stream blueprints.
+	return h.findSandboxForObjective(ctx, objectiveID)
+}
+
 func generatedMessagesFromSource(exec *blueprint.Execution, sourceStepID string) agents.GeneratedMessages {
 	if sourceStepID == "" || exec == nil || exec.StepStates == nil {
 		return agents.GeneratedMessages{}
@@ -492,9 +561,8 @@ func escapeShellSingleQuote(s string) string {
 }
 
 // mergeQueue implements the "merge_queue" deterministic action.
-// Enqueues all merge_ready streams for the objective into the merge processor.
-// The merge processor runs asynchronously — this handler completes immediately
-// and the processor transitions the objective to "reviewing" when all merges finish.
+// Enqueues all merge_ready streams and blocks until every merge resolves
+// (completed or failed). If any merge fails, the step fails.
 func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (blueprint.StepResult, error) {
 	if h.mergeProcessor == nil {
 		h.logger.Warn("merge processor not configured, skipping merge queue",
@@ -504,28 +572,89 @@ func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (b
 		return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
 	}
 
-	// Get the plan for this objective.
 	plan, err := h.plans.GetByObjective(ctx, exec.ObjectiveID)
 	if err != nil {
-		return blueprint.StepResult{Status: blueprint.StepStatusFailed}, fmt.Errorf("getting plan: %w", err)
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("getting plan: %s", err),
+		}, nil
 	}
 
-	// Get all streams for the plan.
-	streams, err := h.streams.ListByPlan(ctx, plan.ID)
+	allStreams, err := h.streams.ListByPlan(ctx, plan.ID)
 	if err != nil {
-		return blueprint.StepResult{Status: blueprint.StepStatusFailed}, fmt.Errorf("listing streams: %w", err)
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("listing streams: %s", err),
+		}, nil
 	}
 
-	// Enqueue all merge_ready streams.
-	for _, stream := range streams {
-		if stream.Status == domain.StreamStatusMergeReady {
-			if err := h.mergeProcessor.EnqueueStream(ctx, stream.ID); err != nil {
-				h.logger.Error("failed to enqueue stream for merge",
-					"stream_id", stream.ID,
-					"error", err,
-				)
+	// Collect streams that need merging.
+	var toMerge []string
+	for _, s := range allStreams {
+		if s.Status == domain.StreamStatusMergeReady {
+			toMerge = append(toMerge, s.ID)
+		}
+	}
+
+	if len(toMerge) == 0 {
+		return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
+	}
+
+	// Subscribe to merge events BEFORE enqueuing so we don't miss any.
+	sub, unsub := h.eventBus.Subscribe(64)
+	defer unsub()
+
+	// Enqueue — fail the step if any enqueue errors.
+	for _, streamID := range toMerge {
+		if err := h.mergeProcessor.EnqueueStream(ctx, streamID); err != nil {
+			return blueprint.StepResult{
+				Status: blueprint.StepStatusFailed,
+				Error:  fmt.Sprintf("enqueuing stream %s: %s", streamID, err),
+			}, nil
+		}
+	}
+
+	// Block until all enqueued merges resolve.
+	pending := make(map[string]bool, len(toMerge))
+	for _, id := range toMerge {
+		pending[id] = true
+	}
+
+	var failures []string
+	for len(pending) > 0 {
+		select {
+		case <-ctx.Done():
+			return blueprint.StepResult{
+				Status: blueprint.StepStatusFailed,
+				Error:  "context cancelled while waiting for merges",
+			}, nil
+		case event, ok := <-sub:
+			if !ok {
+				return blueprint.StepResult{
+					Status: blueprint.StepStatusFailed,
+					Error:  "event subscription closed while waiting for merges",
+				}, nil
+			}
+			if !pending[event.Stream] {
+				continue
+			}
+			switch event.Type {
+			case domain.EventMergeCompleted:
+				delete(pending, event.Stream)
+			case domain.EventMergeFailed:
+				delete(pending, event.Stream)
+				var payload map[string]string
+				_ = json.Unmarshal([]byte(event.Payload), &payload)
+				failures = append(failures, fmt.Sprintf("stream %s: %s", event.Stream, payload["error"]))
 			}
 		}
+	}
+
+	if len(failures) > 0 {
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("merge failures: %s", strings.Join(failures, "; ")),
+		}, nil
 	}
 
 	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil

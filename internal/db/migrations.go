@@ -114,6 +114,19 @@ func RunMigrations(db *sql.DB) error {
 	if _, err := db.ExecContext(context.Background(), `UPDATE agent_sessions SET role = 'builder' WHERE role = 'worker'`); err != nil {
 		return fmt.Errorf("normalizing agent session roles: %w", err)
 	}
+	// Ensure execution columns for nested sub-executions
+	for _, col := range []struct{ name, def string }{
+		{"parent_id", "TEXT NOT NULL DEFAULT ''"},
+		{"stream_id", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureColumnExists(db, "executions", col.name, col.def); err != nil {
+			return fmt.Errorf("ensuring executions.%s: %w", col.name, err)
+		}
+	}
+	// Ensure stream.execution_id for sub-execution linkage
+	if err := ensureColumnExists(db, "streams", "execution_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("ensuring streams.execution_id: %w", err)
+	}
 	// Ensure merge_queue columns added in Phase 5
 	for _, col := range []struct{ name, def string }{
 		{"plan_id", "TEXT NOT NULL DEFAULT ''"},

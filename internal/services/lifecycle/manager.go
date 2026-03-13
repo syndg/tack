@@ -16,8 +16,8 @@ import (
 var validTransitions = map[domain.ObjectiveStatus][]domain.ObjectiveStatus{
 	domain.ObjectiveStatusPlanning:  {domain.ObjectiveStatusApproved, domain.ObjectiveStatusFailed},
 	domain.ObjectiveStatusApproved:  {domain.ObjectiveStatusExecuting, domain.ObjectiveStatusFailed},
-	domain.ObjectiveStatusExecuting: {domain.ObjectiveStatusReviewing, domain.ObjectiveStatusFailed},
-	domain.ObjectiveStatusReviewing: {domain.ObjectiveStatusCompleted, domain.ObjectiveStatusFailed},
+	domain.ObjectiveStatusExecuting: {domain.ObjectiveStatusCompleted, domain.ObjectiveStatusPartial, domain.ObjectiveStatusFailed},
+	domain.ObjectiveStatusPartial:   {domain.ObjectiveStatusCompleted}, // after retrying failed streams
 	domain.ObjectiveStatusFailed:    {domain.ObjectiveStatusPlanning},
 }
 
@@ -70,8 +70,8 @@ func IsValidTransition(from, to domain.ObjectiveStatus) bool {
 //
 //	planning  → approved, failed
 //	approved  → executing, failed
-//	executing → reviewing, failed
-//	reviewing → completed, failed
+//	executing → completed, partial, failed
+//	partial   → completed
 //	failed    → planning (retry)
 //
 // Publishes an EventObjectiveUpdated on success.
@@ -175,38 +175,5 @@ func (m *Manager) MarkPlanReady(ctx context.Context, planID string) error {
 	})
 
 	m.logger.Info("plan ready for approval", "plan_id", planID, "objective_id", plan.ObjectiveID)
-	return nil
-}
-
-// CheckObjectiveCompletion checks if all streams in the objective's plan
-// are completed, and if so, transitions the objective to "reviewing" or
-// "completed" based on autonomy level.
-func (m *Manager) CheckObjectiveCompletion(ctx context.Context, objectiveID string) error {
-	plan, err := m.plans.GetByObjective(ctx, objectiveID)
-	if err != nil {
-		return fmt.Errorf("getting plan for objective: %w", err)
-	}
-
-	streams, err := m.streams.ListByPlan(ctx, plan.ID)
-	if err != nil {
-		return fmt.Errorf("listing streams for plan: %w", err)
-	}
-
-	if len(streams) == 0 {
-		return nil
-	}
-
-	for _, s := range streams {
-		if s.Status != "completed" {
-			return nil
-		}
-	}
-
-	// All streams completed — transition to reviewing for human sign-off.
-	// Autonomy-based direct completion (→ "completed") is deferred to a later phase.
-	if err := m.Transition(ctx, objectiveID, domain.ObjectiveStatusReviewing); err != nil {
-		return fmt.Errorf("transitioning objective to reviewing: %w", err)
-	}
-
 	return nil
 }

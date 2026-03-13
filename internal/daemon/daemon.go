@@ -233,7 +233,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 	gitMerger := merge.NewGitMerger(logger)
 	diffExtractor := merge.NewDiffExtractor(logger)
 	mergeProcessor := merge.NewProcessor(
-		mergeQueueStore, streamStore, planStore, objectiveStore,
+		mergeQueueStore, streamStore, planStore,
 		gitMerger, diffExtractor, gateRun, sandboxProv,
 		eventBus, logger,
 	)
@@ -243,8 +243,8 @@ func New(cfg *config.Config) (*Daemon, error) {
 	bpEngine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
 	bpEngine.RegisterHandler(blueprint.StepTypeHuman, handlers.HandleHuman)
 
-	// Create coordinator (also self-registers agent + blueprint_ref handlers).
-	coordinator := dispatch.NewCoordinator(bpEngine, scheduler, spawner, lifecycleMgr, executionStore, objectiveStore, planStore, streamStore, eventBus, logger)
+	// Create coordinator.
+	coordinator := dispatch.NewCoordinator(bpEngine, scheduler, spawner, lifecycleMgr, mergeProcessor, executionStore, objectiveStore, planStore, streamStore, eventBus, logger)
 	bpEngine.RegisterHandler(blueprint.StepTypeAgent, coordinator.HandleAgentStep)
 	bpEngine.RegisterHandler(blueprint.StepTypeBlueprintRef, coordinator.HandleBlueprintRefStep)
 

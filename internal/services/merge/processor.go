@@ -21,7 +21,6 @@ type Processor struct {
 	queue       *db.MergeQueueStore
 	streams     *db.StreamStore
 	plans       *db.PlanStore
-	objectives  *db.ObjectiveStore
 	merger      *GitMerger
 	differ      *DiffExtractor
 	gateRunner  *gates.Runner
@@ -39,7 +38,6 @@ func NewProcessor(
 	queue *db.MergeQueueStore,
 	streams *db.StreamStore,
 	plans *db.PlanStore,
-	objectives *db.ObjectiveStore,
 	merger *GitMerger,
 	differ *DiffExtractor,
 	gateRunner *gates.Runner,
@@ -51,7 +49,6 @@ func NewProcessor(
 		queue:       queue,
 		streams:     streams,
 		plans:       plans,
-		objectives:  objectives,
 		merger:      merger,
 		differ:      differ,
 		gateRunner:  gateRunner,
@@ -153,7 +150,8 @@ func (p *Processor) EnqueueStream(ctx context.Context, streamID string) error {
 	}
 
 	// 3. Determine branch name from the stream's sandbox.
-	branch, err := p.getStreamBranch(ctx, streamID)
+	// Pass execution ID so we pick the correct builder sandbox on retry.
+	branch, err := p.getStreamBranch(ctx, streamID, stream.ExecutionID)
 	if err != nil {
 		return fmt.Errorf("getting stream branch: %w", err)
 	}
@@ -383,7 +381,45 @@ func (p *Processor) failEntry(ctx context.Context, entry *domain.MergeEntry, tie
 }
 
 // getStreamBranch determines the git branch name for a stream by querying its sandbox.
-func (p *Processor) getStreamBranch(ctx context.Context, streamID string) (string, error) {
+// When executionID is provided (retry path), it filters for the sandbox belonging to
+// that specific execution to avoid picking a stale sandbox from a failed attempt.
+func (p *Processor) getStreamBranch(ctx context.Context, streamID, executionID string) (string, error) {
+	// If we know which execution we need, filter builder sandboxes by execution ID.
+	if executionID != "" {
+		execSandboxes, err := p.sandboxProv.List(ctx, map[string]string{
+			"deck.stream":    streamID,
+			"deck.role":      "builder",
+			"deck.execution": executionID,
+		})
+		if err == nil && len(execSandboxes) > 0 {
+			sb := execSandboxes[0]
+			res, err := sb.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
+			if err == nil && res.ExitCode == 0 {
+				branch := strings.TrimSpace(res.Stdout)
+				if branch != "" {
+					return branch, nil
+				}
+			}
+		}
+	}
+
+	// Try any builder sandbox for this stream (works when there's only one).
+	builderSandboxes, err := p.sandboxProv.List(ctx, map[string]string{
+		"deck.stream": streamID,
+		"deck.role":   "builder",
+	})
+	if err == nil && len(builderSandboxes) > 0 {
+		sb := builderSandboxes[0]
+		res, err := sb.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
+		if err == nil && res.ExitCode == 0 {
+			branch := strings.TrimSpace(res.Stdout)
+			if branch != "" {
+				return branch, nil
+			}
+		}
+	}
+
+	// Fall back to any sandbox for this stream.
 	sandboxes, err := p.sandboxProv.List(ctx, map[string]string{
 		"deck.stream": streamID,
 	})
@@ -490,8 +526,9 @@ func (p *Processor) runPostMergeGates(ctx context.Context, sb sandbox.Sandbox, p
 	return p.gateRunner.Run(ctx, sb, gateList, false)
 }
 
-// checkObjectiveComplete checks if all streams for an objective have been merged.
-// If so, transitions the objective to "reviewing" status.
+// checkObjectiveComplete logs when all streams for an objective have been merged.
+// Objective status transitions are driven by the blueprint engine (mark_complete),
+// not by the merge processor, to avoid races.
 func (p *Processor) checkObjectiveComplete(ctx context.Context, objectiveID string) error {
 	plan, err := p.plans.GetByObjective(ctx, objectiveID)
 	if err != nil {
@@ -503,46 +540,15 @@ func (p *Processor) checkObjectiveComplete(ctx context.Context, objectiveID stri
 		return fmt.Errorf("listing streams for plan: %w", err)
 	}
 
-	if len(streams) == 0 {
-		return nil
-	}
-
 	for _, s := range streams {
 		if s.Status != domain.StreamStatusMerged {
 			return nil
 		}
 	}
 
-	// All streams merged — check if objective still needs transitioning.
-	obj, err := p.objectives.Get(ctx, objectiveID)
-	if err != nil {
-		return fmt.Errorf("getting objective: %w", err)
-	}
-
-	// Only transition from executing → reviewing.
-	if obj.Status != domain.ObjectiveStatusExecuting {
-		return nil
-	}
-
-	if err := p.objectives.UpdateStatus(ctx, objectiveID, domain.ObjectiveStatusReviewing); err != nil {
-		return fmt.Errorf("updating objective to reviewing: %w", err)
-	}
-
-	payload, _ := json.Marshal(map[string]string{
-		"from": string(domain.ObjectiveStatusExecuting),
-		"to":   string(domain.ObjectiveStatusReviewing),
-	})
-	p.eventBus.Publish(domain.Event{
-		Type:      domain.EventObjectiveUpdated,
-		Objective: objectiveID,
-		Payload:   string(payload),
-		CreatedAt: time.Now(),
-	})
-
-	p.logger.Info("all streams merged, objective transitioned to reviewing",
+	p.logger.Info("all streams merged for objective",
 		"objective_id", objectiveID,
 	)
-
 	return nil
 }
 

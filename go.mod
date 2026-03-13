@@ -3,6 +3,7 @@ module github.com/syndg/deck
 go 1.25.4
 
 require (
+	github.com/daytonaio/daytona/libs/sdk-go v0.150.0
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1
@@ -25,7 +26,6 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/daytonaio/daytona/libs/api-client-go v0.150.0 // indirect
-	github.com/daytonaio/daytona/libs/sdk-go v0.150.0 // indirect
 	github.com/daytonaio/daytona/libs/toolbox-api-client-go v0.150.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect

@@ -1757,7 +1757,9 @@ Everything in `.deck/` is version-controlled. Rules and blueprints are shared ac
 - Blueprint execution (step-by-step state machine with gates)
 - Agent role definitions and overlay generation (with rules + tools injection)
 - Deck Pi extension (mail injection hooks, tools, scope enforcement)
-- Lead → Builder / Reviewer / Scout spawning
+- Nested sub-execution: coordinator drives stream blueprint per stream (see [2026-03-13-nested-sub-execution-design.md](2026-03-13-nested-sub-execution-design.md))
+- Stream failure escalation with human retry + guidance
+- `partial` objective status for mixed success/failure outcomes
 - Mail broker (send, receive, broadcast, inject)
 - Dependency-aware stream scheduling
 
