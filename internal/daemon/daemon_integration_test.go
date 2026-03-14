@@ -70,8 +70,11 @@ func TestDaemonIntegration(t *testing.T) {
 	if status.Status != "ok" {
 		t.Fatalf("unexpected status: %q", status.Status)
 	}
-	if status.Objectives["planning"] != 1 {
-		t.Fatalf("expected planning count 1, got %d", status.Objectives["planning"])
+	// The objective may have already transitioned from "planning" to "executing"
+	// by the time we check (race with coordinator auto-start).
+	inProgress := status.Objectives["planning"] + status.Objectives["executing"]
+	if inProgress != 1 {
+		t.Fatalf("expected 1 in-progress objective (planning+executing), got %d: %v", inProgress, status.Objectives)
 	}
 }
 
@@ -206,7 +209,7 @@ func TestBlueprintEndpoints(t *testing.T) {
 	}
 }
 
-func TestCreateObjectiveWithOptionsPersistsBlueprintAndPlanningMode(t *testing.T) {
+func TestCreateObjectiveWithOptionsPersistsBlueprint(t *testing.T) {
 	cfg := config.Default()
 	cfg.Daemon.Listen = "127.0.0.1:19803"
 	cfg.Daemon.DataDir = t.TempDir()
@@ -231,9 +234,8 @@ func TestCreateObjectiveWithOptionsPersistsBlueprintAndPlanningMode(t *testing.T
 	waitForHTTP(t, baseURL+"/health")
 
 	c := client.New(baseURL)
-	obj, err := c.CreateObjectiveWithOptions(context.Background(), "batch objective", client.CreateObjectiveOptions{
+	obj, err := c.CreateObjectiveWithOptions(context.Background(), "build feature X", client.CreateObjectiveOptions{
 		Blueprint: "hotfix",
-		Auto:      true,
 	})
 	if err != nil {
 		t.Fatalf("CreateObjectiveWithOptions: %v", err)
@@ -241,16 +243,13 @@ func TestCreateObjectiveWithOptionsPersistsBlueprintAndPlanningMode(t *testing.T
 	if obj.Blueprint != "hotfix" {
 		t.Fatalf("blueprint = %q, want hotfix", obj.Blueprint)
 	}
-	if obj.PlanningMode != "batch" {
-		t.Fatalf("planning_mode = %q, want batch", obj.PlanningMode)
-	}
 
 	got, err := c.GetObjective(context.Background(), obj.ID)
 	if err != nil {
 		t.Fatalf("GetObjective: %v", err)
 	}
-	if got.PlanningMode != "batch" {
-		t.Fatalf("persisted planning_mode = %q, want batch", got.PlanningMode)
+	if got.Blueprint != "hotfix" {
+		t.Fatalf("persisted blueprint = %q, want hotfix", got.Blueprint)
 	}
 }
 
@@ -526,10 +525,26 @@ func TestSimpleHotfixExecution_CompletesWithNormalizedBlueprintAndQualityGates(t
 	}
 }
 
-func TestFeatureExecution_ApprovedPlanStartsAtDispatchAndCompletes(t *testing.T) {
+func TestFeatureExecution_PlannerRunsThenApproveAndComplete(t *testing.T) {
 	restoreRepo := setupGitRepo(t)
 	defer restoreRepo()
-	installFakeClaude(t, "#!/bin/sh\necho \"done role=$DECK_AGENT_ROLE\"\nexit 0\n")
+	// Planner outputs valid plan YAML; other roles succeed with simple output.
+	installFakeClaude(t, `#!/bin/sh
+if [ "$DECK_AGENT_ROLE" = "planner" ]; then
+cat <<'PLAN'
+streams:
+  - title: "stream one"
+    description: "do the work"
+    file_scope:
+      - "README.md"
+    dependencies: []
+quality_gates: []
+PLAN
+exit 0
+fi
+echo "done role=$DECK_AGENT_ROLE"
+exit 0
+`)
 
 	baseURL, shutdown := startExecutionDaemon(t, "127.0.0.1:19806", nil)
 	defer shutdown()
@@ -540,19 +555,17 @@ func TestFeatureExecution_ApprovedPlanStartsAtDispatchAndCompletes(t *testing.T)
 		t.Fatalf("CreateObjectiveWithOptions: %v", err)
 	}
 
-	postJSON(t, baseURL+"/plans", map[string]any{
-		"objective_id": obj.ID,
-		"output": `streams:
-  - title: "stream one"
-    description: "do the work"
-    file_scope:
-      - "README.md"
-    dependencies: []
-quality_gates: []
-`,
-	}, http.StatusCreated, nil)
+	// Wait for planner agent to create the plan and execution to pause at approve step.
+	var plan planWithStreams
+	waitForCondition(t, 10*time.Second, func() bool {
+		resp, err := http.Get(baseURL + "/objectives/" + obj.ID + "/plan")
+		if err != nil || resp.StatusCode != 200 {
+			return false
+		}
+		defer resp.Body.Close()
+		return json.NewDecoder(resp.Body).Decode(&plan) == nil && plan.Plan.ID != ""
+	})
 
-	plan := mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+obj.ID+"/plan")
 	if err := c.ApprovePlan(context.Background(), plan.Plan.ID); err != nil {
 		t.Fatalf("ApprovePlan: %v", err)
 	}
@@ -582,16 +595,16 @@ quality_gates: []
 		t.Fatalf("sub execution = %#v, want completed", subExec)
 	}
 
-	// Sub-execution spawns scout, builder, reviewer agents.
+	// Sub-execution spawns scout, builder, reviewer agents. Plus the planner.
 	agents := mustGetJSON[[]map[string]any](t, baseURL+"/agents")
-	if len(agents) < 2 {
-		t.Fatalf("agents len = %d, want >= 2 (scout + builder + reviewer)", len(agents))
-	}
 	agentRoles := make(map[string]bool)
 	for _, a := range agents {
 		if role, ok := a["role"].(string); ok {
 			agentRoles[role] = true
 		}
+	}
+	if !agentRoles["planner"] {
+		t.Fatalf("expected planner agent, got roles: %v", agentRoles)
 	}
 	if !agentRoles["builder"] {
 		t.Fatalf("expected builder agent, got roles: %v", agentRoles)
@@ -689,29 +702,11 @@ func TestKillAgent_StopsExecutionAndMarksFailure(t *testing.T) {
 func TestMultiStreamExecution_DependencyCascadeAndPartialCompletion(t *testing.T) {
 	restoreRepo := setupGitRepo(t)
 	defer restoreRepo()
-	// Agent script: scout and reviewer always succeed; builder fails for stream with "fail-stream" in title.
+	// Planner outputs 3-stream plan; builder fails for "fail-stream" title.
 	installFakeClaude(t, `#!/bin/sh
-if [ "$DECK_AGENT_ROLE" = "builder" ] && echo "$DECK_STREAM_TITLE" | grep -q "fail-stream"; then
-  echo "build failed"
-  exit 1
-fi
-echo "done role=$DECK_AGENT_ROLE"
-exit 0
-`)
-
-	baseURL, d, shutdown := startExecutionDaemonWithInstance(t, "127.0.0.1:19809", nil)
-	defer shutdown()
-
-	c := client.New(baseURL)
-	obj, err := c.CreateObjectiveWithOptions(context.Background(), "multi-stream feature", client.CreateObjectiveOptions{Blueprint: "Feature Implementation"})
-	if err != nil {
-		t.Fatalf("CreateObjectiveWithOptions: %v", err)
-	}
-
-	// Create plan with 3 streams: s1 (independent), s2-fail (independent, will fail), s3 (depends on s1).
-	postJSON(t, baseURL+"/plans", map[string]any{
-		"objective_id": obj.ID,
-		"output": `streams:
+if [ "$DECK_AGENT_ROLE" = "planner" ]; then
+cat <<'PLAN'
+streams:
   - title: "stream one"
     description: "succeed-stream one"
     file_scope:
@@ -729,10 +724,37 @@ exit 0
     dependencies:
       - "stream one"
 quality_gates: []
-`,
-	}, http.StatusCreated, nil)
+PLAN
+exit 0
+fi
+if [ "$DECK_AGENT_ROLE" = "builder" ] && echo "$DECK_STREAM_TITLE" | grep -q "fail-stream"; then
+  echo "build failed"
+  exit 1
+fi
+echo "done role=$DECK_AGENT_ROLE"
+exit 0
+`)
 
-	plan := mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+obj.ID+"/plan")
+	baseURL, d, shutdown := startExecutionDaemonWithInstance(t, "127.0.0.1:19809", nil)
+	defer shutdown()
+
+	c := client.New(baseURL)
+	obj, err := c.CreateObjectiveWithOptions(context.Background(), "multi-stream feature", client.CreateObjectiveOptions{Blueprint: "Feature Implementation"})
+	if err != nil {
+		t.Fatalf("CreateObjectiveWithOptions: %v", err)
+	}
+
+	// Wait for planner agent to create the plan.
+	var plan planWithStreams
+	waitForCondition(t, 10*time.Second, func() bool {
+		resp, err := http.Get(baseURL + "/objectives/" + obj.ID + "/plan")
+		if err != nil || resp.StatusCode != 200 {
+			return false
+		}
+		defer resp.Body.Close()
+		return json.NewDecoder(resp.Body).Decode(&plan) == nil && plan.Plan.ID != ""
+	})
+
 	if err := c.ApprovePlan(context.Background(), plan.Plan.ID); err != nil {
 		t.Fatalf("ApprovePlan: %v", err)
 	}
@@ -814,9 +836,21 @@ func TestRetryExecution_RetriesFailedStreamWithGuidance(t *testing.T) {
 	defer restoreRepo()
 
 	// Track retry attempts via a temp file. First builder call for "retry-stream" fails,
-	// subsequent calls succeed.
+	// subsequent calls succeed. Planner outputs valid plan YAML.
 	attemptFile := filepath.Join(t.TempDir(), "attempts")
 	installFakeClaude(t, `#!/bin/sh
+if [ "$DECK_AGENT_ROLE" = "planner" ]; then
+cat <<'PLAN'
+streams:
+  - title: "retry-stream"
+    description: "retry-stream will fail then succeed"
+    file_scope:
+      - "README.md"
+    dependencies: []
+quality_gates: []
+PLAN
+exit 0
+fi
 if [ "$DECK_AGENT_ROLE" = "builder" ] && echo "$DECK_STREAM_TITLE" | grep -q "retry-stream"; then
   count=$(cat "`+attemptFile+`" 2>/dev/null || echo 0)
   count=$((count + 1))
@@ -839,19 +873,17 @@ exit 0
 		t.Fatalf("CreateObjectiveWithOptions: %v", err)
 	}
 
-	postJSON(t, baseURL+"/plans", map[string]any{
-		"objective_id": obj.ID,
-		"output": `streams:
-  - title: "retry-stream"
-    description: "retry-stream will fail then succeed"
-    file_scope:
-      - "README.md"
-    dependencies: []
-quality_gates: []
-`,
-	}, http.StatusCreated, nil)
+	// Wait for planner agent to create the plan.
+	var plan planWithStreams
+	waitForCondition(t, 10*time.Second, func() bool {
+		resp, err := http.Get(baseURL + "/objectives/" + obj.ID + "/plan")
+		if err != nil || resp.StatusCode != 200 {
+			return false
+		}
+		defer resp.Body.Close()
+		return json.NewDecoder(resp.Body).Decode(&plan) == nil && plan.Plan.ID != ""
+	})
 
-	plan := mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+obj.ID+"/plan")
 	if err := c.ApprovePlan(context.Background(), plan.Plan.ID); err != nil {
 		t.Fatalf("ApprovePlan: %v", err)
 	}
