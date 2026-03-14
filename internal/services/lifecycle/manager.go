@@ -14,7 +14,7 @@ import (
 
 // validTransitions maps each objective status to the statuses it may transition to.
 var validTransitions = map[domain.ObjectiveStatus][]domain.ObjectiveStatus{
-	domain.ObjectiveStatusPlanning:  {domain.ObjectiveStatusApproved, domain.ObjectiveStatusFailed},
+	domain.ObjectiveStatusPlanning:  {domain.ObjectiveStatusApproved, domain.ObjectiveStatusExecuting, domain.ObjectiveStatusFailed},
 	domain.ObjectiveStatusApproved:  {domain.ObjectiveStatusExecuting, domain.ObjectiveStatusFailed},
 	domain.ObjectiveStatusExecuting: {domain.ObjectiveStatusCompleted, domain.ObjectiveStatusPartial, domain.ObjectiveStatusFailed},
 	domain.ObjectiveStatusPartial:   {domain.ObjectiveStatusCompleted}, // after retrying failed streams
@@ -122,8 +122,17 @@ func (m *Manager) ApprovePlan(ctx context.Context, planID string) error {
 		return fmt.Errorf("updating plan status to approved: %w", err)
 	}
 
-	if err := m.Transition(ctx, plan.ObjectiveID, domain.ObjectiveStatusApproved); err != nil {
-		return fmt.Errorf("transitioning objective to approved: %w", err)
+	// In auto mode the objective is already "executing" (planner ran inside the
+	// blueprint execution), so a transition to "approved" would be invalid.
+	// Only transition when the objective is still in "planning".
+	obj, err := m.objectives.Get(ctx, plan.ObjectiveID)
+	if err != nil {
+		return fmt.Errorf("getting objective for plan approval: %w", err)
+	}
+	if obj.Status == domain.ObjectiveStatusPlanning {
+		if err := m.Transition(ctx, plan.ObjectiveID, domain.ObjectiveStatusApproved); err != nil {
+			return fmt.Errorf("transitioning objective to approved: %w", err)
+		}
 	}
 
 	m.logger.Info("plan approved", "plan_id", planID, "objective_id", plan.ObjectiveID)

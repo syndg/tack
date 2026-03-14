@@ -27,46 +27,77 @@ type RawStream struct {
 }
 
 // ParsePlan extracts a RawPlan from agent output text.
-// Looks for a YAML block delimited by ```yaml ... ``` markers.
-// Falls back to trying the entire output as YAML.
+// Tries multiple strategies in order:
+// 1. Fenced ```yaml ... ``` code blocks (tries all blocks found)
+// 2. Inline YAML starting from "streams:" marker
+// 3. Entire output as raw YAML
 func ParsePlan(agentOutput string) (*RawPlan, error) {
-	if block, ok := extractYAMLBlock(agentOutput); ok {
+	// Strategy 1: Try all fenced YAML code blocks
+	for _, block := range extractAllYAMLBlocks(agentOutput) {
 		var plan RawPlan
-		if err := yaml.Unmarshal([]byte(block), &plan); err == nil {
+		if err := yaml.Unmarshal([]byte(block), &plan); err == nil && len(plan.Streams) > 0 {
 			return &plan, nil
 		}
 	}
 
-	// Fallback: try entire output as YAML.
+	// Strategy 2: Find "streams:" marker and try from there
+	if idx := strings.Index(agentOutput, "\nstreams:"); idx >= 0 {
+		candidate := agentOutput[idx+1:]
+		var plan RawPlan
+		if err := yaml.Unmarshal([]byte(candidate), &plan); err == nil && len(plan.Streams) > 0 {
+			return &plan, nil
+		}
+	}
+	// Also try if the output starts with "streams:"
+	if strings.HasPrefix(strings.TrimSpace(agentOutput), "streams:") {
+		trimmed := strings.TrimSpace(agentOutput)
+		var plan RawPlan
+		if err := yaml.Unmarshal([]byte(trimmed), &plan); err == nil && len(plan.Streams) > 0 {
+			return &plan, nil
+		}
+	}
+
+	// Strategy 3: Try entire output as YAML
 	var plan RawPlan
 	if err := yaml.Unmarshal([]byte(agentOutput), &plan); err != nil {
 		return nil, fmt.Errorf("parsing plan: %w", err)
 	}
+	if len(plan.Streams) == 0 {
+		return nil, fmt.Errorf("parsing plan: no streams found in output")
+	}
 	return &plan, nil
 }
 
-// extractYAMLBlock scans for a ```yaml ... ``` fenced code block.
-// Returns the content inside (without the fences) and true if found.
-func extractYAMLBlock(s string) (string, bool) {
+// extractAllYAMLBlocks finds all ```yaml ... ``` fenced code blocks in the text.
+// Returns the content inside each block (without the fences).
+func extractAllYAMLBlocks(s string) []string {
 	const openFence = "```yaml"
 	const closeFence = "```"
 
-	start := strings.Index(s, openFence)
-	if start == -1 {
-		return "", false
-	}
-	// Skip past the opening fence and optional newline.
-	contentStart := start + len(openFence)
-	if contentStart < len(s) && s[contentStart] == '\n' {
-		contentStart++
+	var blocks []string
+	remaining := s
+
+	for {
+		start := strings.Index(remaining, openFence)
+		if start == -1 {
+			break
+		}
+
+		contentStart := start + len(openFence)
+		if contentStart < len(remaining) && remaining[contentStart] == '\n' {
+			contentStart++
+		}
+
+		end := strings.Index(remaining[contentStart:], closeFence)
+		if end == -1 {
+			break
+		}
+
+		blocks = append(blocks, remaining[contentStart:contentStart+end])
+		remaining = remaining[contentStart+end+len(closeFence):]
 	}
 
-	end := strings.Index(s[contentStart:], closeFence)
-	if end == -1 {
-		return "", false
-	}
-
-	return s[contentStart : contentStart+end], true
+	return blocks
 }
 
 // ValidatePlan checks a raw plan for structural correctness:

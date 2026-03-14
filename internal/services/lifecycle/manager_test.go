@@ -55,7 +55,6 @@ func TestIsValidTransition_ValidPaths(t *testing.T) {
 func TestIsValidTransition_InvalidPaths(t *testing.T) {
 	invalid := []struct{ from, to domain.ObjectiveStatus }{
 		{domain.ObjectiveStatusPlanning, domain.ObjectiveStatusCompleted},
-		{domain.ObjectiveStatusPlanning, domain.ObjectiveStatusExecuting},
 		{domain.ObjectiveStatusApproved, domain.ObjectiveStatusCompleted},
 		{domain.ObjectiveStatusCompleted, domain.ObjectiveStatusPlanning},
 		{domain.ObjectiveStatusCompleted, domain.ObjectiveStatusFailed},

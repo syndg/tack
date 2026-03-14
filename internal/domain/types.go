@@ -85,17 +85,44 @@ type AgentSession struct {
 
 // Mail messages
 
+type MailType string
+
+const (
+	MailTypeMessage    MailType = "message"
+	MailTypeStatus     MailType = "status"
+	MailTypeDispatch   MailType = "dispatch"
+	MailTypeWorkerDone MailType = "worker_done"
+	MailTypeMergeReady MailType = "merge_ready"
+	MailTypeEscalation MailType = "escalation"
+	MailTypeQuestion   MailType = "question"
+)
+
+type MailPriority string
+
+const (
+	MailPriorityLow    MailPriority = "low"
+	MailPriorityNormal MailPriority = "normal"
+	MailPriorityHigh   MailPriority = "high"
+	MailPriorityUrgent MailPriority = "urgent"
+)
+
 type MailMessage struct {
 	ID        int64     `json:"id"`
 	From      string    `json:"from"`
 	To        string    `json:"to"`
+	Subject   string    `json:"subject"`
+	Body      string    `json:"body"`
 	Type      string    `json:"type"`
-	Payload   string    `json:"payload"`
+	Priority  string    `json:"priority"`
+	ThreadID  string    `json:"thread_id,omitempty"`
+	Payload   string    `json:"payload,omitempty"`
+	DedupKey  string    `json:"dedup_key,omitempty"`
 	Objective string    `json:"objective"`
 	Stream    string    `json:"stream"`
 	Read      bool      `json:"read"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
 
 // Stream statuses for merge lifecycle
 
@@ -153,6 +180,7 @@ const (
 	EventEscalation       EventType = "escalation"
 	EventStreamReady      EventType = "stream.ready"
 	EventExecutionStarted EventType = "execution.started"
+	EventAgentActivity    EventType = "agent.activity"
 )
 
 type Event struct {

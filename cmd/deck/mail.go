@@ -28,16 +28,29 @@ var mailCmd = &cobra.Command{
 
 		fmt.Printf("Unread mail for agent %q:\n\n", args[0])
 		for i, msg := range msgs {
-			fmt.Printf("#%-3d FROM: %-20s TYPE: %-12s TIME: %s\n",
-				i+1, msg.From, msg.Type, timeAgo(msg.CreatedAt))
-			fmt.Printf("    %s\n\n", msg.Payload)
+			priorityTag := ""
+			if msg.Priority != "" && msg.Priority != "normal" {
+				priorityTag = fmt.Sprintf(" [%s]", msg.Priority)
+			}
+			fmt.Printf("#%-3d FROM: %-20s TYPE: %-12s%s  %s\n",
+				i+1, msg.From, msg.Type, priorityTag, timeAgo(msg.CreatedAt))
+			if msg.Subject != "" {
+				fmt.Printf("     Subject: %s\n", msg.Subject)
+			}
+			if msg.Body != "" {
+				fmt.Printf("     %s\n", msg.Body)
+			}
+			if msg.Payload != "" {
+				fmt.Printf("     Payload: %s\n", msg.Payload)
+			}
+			fmt.Println()
 		}
 		return nil
 	},
 }
 
 var sendMailCmd = &cobra.Command{
-	Use:   "send [to] [type] [payload]",
+	Use:   "send [to] [subject] [body]",
 	Short: "Send mail to an agent or broadcast group",
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -45,8 +58,10 @@ var sendMailCmd = &cobra.Command{
 		msg := &domain.MailMessage{
 			From:      "@human",
 			To:        args[0],
-			Type:      args[1],
-			Payload:   args[2],
+			Subject:   args[1],
+			Body:      args[2],
+			Type:      "message",
+			Priority:  "normal",
 			Objective: mailObjective,
 		}
 		err := c.SendMail(cmd.Context(), msg)

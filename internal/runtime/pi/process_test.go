@@ -11,70 +11,12 @@ import (
 )
 
 func TestPiProcess_OutputEvent(t *testing.T) {
+	// message_update deltas accumulate text; agent_end emits it as one output event.
 	handle := &mockProcessHandle{
 		lines: []string{
-			`{"type":"output","content":"hello world"}`,
-			`{"type":"done","success":true,"summary":"completed"}`,
-		},
-	}
-
-	proc := newPiProcess(handle, slog.Default())
-	var events []runtime.AgentEvent
-	for ev := range proc.Output() {
-		events = append(events, ev)
-	}
-
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(events))
-	}
-	if events[0].Type != "output" || events[0].Content != "hello world" {
-		t.Errorf("event[0] = %+v, want output/hello world", events[0])
-	}
-	if events[1].Type != "output" || events[1].Content != "completed" {
-		t.Errorf("event[1] = %+v, want output/completed", events[1])
-	}
-
-	result, err := proc.Wait()
-	if err != nil {
-		t.Fatalf("Wait: %v", err)
-	}
-	if !result.Success {
-		t.Errorf("expected success, got: %+v", result)
-	}
-	if result.Summary != "completed" {
-		t.Errorf("summary = %q, want completed", result.Summary)
-	}
-}
-
-func TestPiProcess_ToolCallEvent(t *testing.T) {
-	handle := &mockProcessHandle{
-		lines: []string{
-			`{"type":"tool_call","tool":"deck_mail_send","args":"{\"to\":\"@human\",\"content\":\"status\"}"}`,
-			`{"type":"done","success":true,"summary":"done"}`,
-		},
-	}
-
-	proc := newPiProcess(handle, slog.Default())
-	var events []runtime.AgentEvent
-	for ev := range proc.Output() {
-		events = append(events, ev)
-	}
-
-	if len(events) < 1 {
-		t.Fatal("expected at least 1 event")
-	}
-	if events[0].Type != "tool_call" {
-		t.Errorf("event[0].Type = %q, want tool_call", events[0].Type)
-	}
-	if events[0].Content != `deck_mail_send: {"to":"@human","content":"status"}` {
-		t.Errorf("event[0].Content = %q", events[0].Content)
-	}
-}
-
-func TestPiProcess_ErrorEvent(t *testing.T) {
-	handle := &mockProcessHandle{
-		lines: []string{
-			`{"type":"error","content":"something went wrong"}`,
+			`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"hello "}}`,
+			`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"world"}}`,
+			`{"type":"agent_end"}`,
 		},
 	}
 
@@ -85,20 +27,84 @@ func TestPiProcess_ErrorEvent(t *testing.T) {
 	}
 
 	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
+		t.Fatalf("expected 1 event, got %d: %+v", len(events), events)
 	}
+	if events[0].Type != "output" || events[0].Content != "hello world" {
+		t.Errorf("event[0] = %+v, want output/'hello world'", events[0])
+	}
+
+	result, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if !result.Success {
+		t.Errorf("expected success, got: %+v", result)
+	}
+	if result.Summary != "hello world" {
+		t.Errorf("summary = %q, want 'hello world'", result.Summary)
+	}
+}
+
+func TestPiProcess_ToolCallEvent(t *testing.T) {
+	handle := &mockProcessHandle{
+		lines: []string{
+			`{"type":"tool_execution_start","toolName":"deck_mail_send","args":{"to":"@human","body":"status"}}`,
+			`{"type":"tool_execution_end","toolName":"deck_mail_send"}`,
+			`{"type":"agent_end"}`,
+		},
+	}
+
+	proc := newPiProcess(handle, slog.Default())
+	var events []runtime.AgentEvent
+	for ev := range proc.Output() {
+		events = append(events, ev)
+	}
+
+	// Should get tool_call + output (from agent_end)
+	if len(events) < 1 {
+		t.Fatal("expected at least 1 event")
+	}
+	if events[0].Type != "tool_call" {
+		t.Errorf("event[0].Type = %q, want tool_call", events[0].Type)
+	}
+	if events[0].Content != `deck_mail_send: {"to":"@human","body":"status"}` {
+		t.Errorf("event[0].Content = %q", events[0].Content)
+	}
+}
+
+func TestPiProcess_ErrorEvent(t *testing.T) {
+	// A failed Pi RPC response emits an error event.
+	handle := &mockProcessHandle{
+		lines: []string{
+			`{"type":"response","success":false,"command":"prompt","error":"something went wrong"}`,
+			`{"type":"agent_end"}`,
+		},
+	}
+
+	proc := newPiProcess(handle, slog.Default())
+	var events []runtime.AgentEvent
+	for ev := range proc.Output() {
+		events = append(events, ev)
+	}
+
+	if len(events) < 1 {
+		t.Fatalf("expected at least 1 event, got %d", len(events))
+	}
+	// First event should be the error from the failed response
 	if events[0].Type != "error" {
 		t.Errorf("event type = %q, want error", events[0].Type)
 	}
-	if events[0].Content != "something went wrong" {
+	if events[0].Content != "command prompt failed: something went wrong" {
 		t.Errorf("content = %q", events[0].Content)
 	}
 }
 
 func TestPiProcess_DeckDoneSignal(t *testing.T) {
+	// DECK_DONE: prefix in accumulated text overrides the result summary.
 	handle := &mockProcessHandle{
 		lines: []string{
-			`{"type":"done","success":true,"content":"DECK_DONE:all tasks completed","summary":"partial"}`,
+			`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Some output\nDECK_DONE:all tasks completed\nMore text"}}`,
+			`{"type":"agent_end"}`,
 		},
 	}
 
@@ -118,8 +124,8 @@ func TestPiProcess_SkipInvalidJSON(t *testing.T) {
 		lines: []string{
 			"not json at all",
 			"",
-			`{"type":"output","content":"valid line"}`,
-			`{"type":"done","success":true,"summary":"ok"}`,
+			`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"valid line"}}`,
+			`{"type":"agent_end"}`,
 		},
 	}
 
@@ -129,19 +135,22 @@ func TestPiProcess_SkipInvalidJSON(t *testing.T) {
 		events = append(events, ev)
 	}
 
-	// Should only get 2 events (output + done summary), skipping invalid lines
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events, got %d: %+v", len(events), events)
+	// Should get 1 event: the output from agent_end with accumulated text.
+	// Invalid JSON and empty lines are skipped.
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d: %+v", len(events), events)
 	}
 	if events[0].Content != "valid line" {
 		t.Errorf("events[0].Content = %q, want 'valid line'", events[0].Content)
 	}
 }
 
-func TestPiProcess_DoneFailure(t *testing.T) {
+func TestPiProcess_ProcessExitWithoutAgentEnd(t *testing.T) {
+	// Process EOF without agent_end — finalize() provides default result.
 	handle := &mockProcessHandle{
 		lines: []string{
-			`{"type":"done","success":false,"content":"task failed","summary":"error occurred"}`,
+			`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"partial output"}}`,
+			// No agent_end — process exits (EOF)
 		},
 	}
 
@@ -151,17 +160,17 @@ func TestPiProcess_DoneFailure(t *testing.T) {
 	}
 
 	result, _ := proc.Wait()
-	if result.Success {
-		t.Error("expected failure")
+	if !result.Success {
+		t.Error("expected success from finalize default")
 	}
-	if result.Error != "task failed" {
-		t.Errorf("error = %q, want 'task failed'", result.Error)
+	if result.Summary != "partial output" {
+		t.Errorf("summary = %q, want 'partial output'", result.Summary)
 	}
 }
 
 func TestPiProcess_Send(t *testing.T) {
 	handle := &mockProcessHandle{
-		lines: []string{`{"type":"done","success":true,"summary":"ok"}`},
+		lines: []string{`{"type":"agent_end"}`},
 	}
 
 	proc := newPiProcess(handle, slog.Default())
@@ -232,11 +241,14 @@ func TestPiProcess_ReadError(t *testing.T) {
 	}
 }
 
-func TestPiProcess_StatusEvent(t *testing.T) {
+func TestPiProcess_TurnEventsNotEmitted(t *testing.T) {
+	// Internal lifecycle events (turn_start, turn_end) should not produce output events.
 	handle := &mockProcessHandle{
 		lines: []string{
-			`{"type":"status","content":"thinking..."}`,
-			`{"type":"done","success":true,"summary":"ok"}`,
+			`{"type":"turn_start"}`,
+			`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"thinking"}}`,
+			`{"type":"turn_end"}`,
+			`{"type":"agent_end"}`,
 		},
 	}
 
@@ -255,9 +267,12 @@ func TestPiProcess_StatusEvent(t *testing.T) {
 		}
 	}
 done:
-	// Status events are logged, not emitted — only done's summary is emitted
+	// Only the agent_end output event should be emitted
 	if len(events) != 1 {
-		t.Errorf("expected 1 event (done output), got %d: %+v", len(events), events)
+		t.Errorf("expected 1 event (agent_end output), got %d: %+v", len(events), events)
+	}
+	if len(events) > 0 && events[0].Content != "thinking" {
+		t.Errorf("content = %q, want 'thinking'", events[0].Content)
 	}
 }
 

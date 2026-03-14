@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
@@ -97,7 +98,7 @@ func TestRuntime_Spawn_UploadsExtension(t *testing.T) {
 	sb := newMockSandbox()
 
 	handle := &mockProcessHandle{
-		lines: []string{`{"type":"done","success":true,"summary":"ok"}`},
+		lines: []string{`{"type":"agent_end"}`},
 	}
 	sb.streamFn = func(_ context.Context, _ string, _ sandbox.ExecOpts) (sandbox.ProcessHandle, error) {
 		return handle, nil
@@ -111,20 +112,20 @@ func TestRuntime_Spawn_UploadsExtension(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	// Extension files should have been uploaded
-	if len(sb.uploaded) == 0 {
-		t.Error("expected extension files to be uploaded")
+	// Extension is written to a temp dir (not uploaded to sandbox) for local use.
+	// The --extension flag in the command should point to a temp dir with index.ts.
+	if !strings.Contains(sb.streamCmd, "--extension") {
+		t.Fatalf("command %q should contain --extension flag", sb.streamCmd)
 	}
-
-	// Check that index.ts was uploaded
-	foundIndex := false
-	for path := range sb.uploaded {
-		if strings.Contains(path, "index.ts") {
-			foundIndex = true
-		}
+	// Extract the extension dir from the command
+	parts := strings.Split(sb.streamCmd, "--extension ")
+	if len(parts) < 2 {
+		t.Fatal("could not parse --extension path from command")
 	}
-	if !foundIndex {
-		t.Error("expected index.ts to be uploaded")
+	extDir := strings.Fields(parts[1])[0]
+	// Verify index.ts exists in the temp dir
+	if _, err := os.Stat(extDir + "/index.ts"); err != nil {
+		t.Errorf("expected index.ts in temp extension dir %s: %v", extDir, err)
 	}
 
 	// Check command contains pi --mode rpc
@@ -161,7 +162,7 @@ func TestRuntime_Spawn_ModelOverride(t *testing.T) {
 	sb := newMockSandbox()
 
 	handle := &mockProcessHandle{
-		lines: []string{`{"type":"done","success":true,"summary":"ok"}`},
+		lines: []string{`{"type":"agent_end"}`},
 	}
 	sb.streamFn = func(_ context.Context, _ string, _ sandbox.ExecOpts) (sandbox.ProcessHandle, error) {
 		return handle, nil
@@ -185,7 +186,7 @@ func TestRuntime_Spawn_EnvVarsPassedThrough(t *testing.T) {
 	sb := newMockSandbox()
 
 	handle := &mockProcessHandle{
-		lines: []string{`{"type":"done","success":true,"summary":"ok"}`},
+		lines: []string{`{"type":"agent_end"}`},
 	}
 	sb.streamFn = func(_ context.Context, _ string, _ sandbox.ExecOpts) (sandbox.ProcessHandle, error) {
 		return handle, nil

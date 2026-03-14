@@ -22,12 +22,18 @@ type PiProcess struct {
 	mu       sync.Mutex
 	killed   bool
 	logger   *slog.Logger
+
+	// Accumulate assistant text output across streaming deltas
+	textBuf strings.Builder
+
+	// cleanup is called when the process finishes (e.g., remove temp extension dir)
+	cleanup func()
 }
 
 func newPiProcess(handle sandbox.ProcessHandle, logger *slog.Logger) *PiProcess {
 	p := &PiProcess{
 		handle:   handle,
-		outputCh: make(chan runtime.AgentEvent, 16),
+		outputCh: make(chan runtime.AgentEvent, 64),
 		doneCh:   make(chan struct{}),
 		logger:   logger,
 	}
@@ -44,14 +50,7 @@ func (p *PiProcess) readLoop() {
 		line, err := p.handle.ReadLine()
 		if err != nil {
 			if err == io.EOF {
-				p.mu.Lock()
-				if !p.result.Success && p.result.Error == "" {
-					p.result = runtime.AgentResult{
-						Success: true,
-						Summary: "process ended",
-					}
-				}
-				p.mu.Unlock()
+				p.finalize()
 				return
 			}
 			p.mu.Lock()
@@ -71,7 +70,7 @@ func (p *PiProcess) readLoop() {
 
 		var event PiEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			p.logger.Warn("skipping non-JSON line from pi", "line", line)
+			p.logger.Warn("skipping non-JSON line from pi", "line", line[:min(len(line), 200)])
 			continue
 		}
 
@@ -79,46 +78,120 @@ func (p *PiProcess) readLoop() {
 	}
 }
 
-// handleEvent maps a PiEvent to a runtime.AgentEvent and updates result state.
+// finalize sets a success result if nothing else was set, and runs cleanup.
+func (p *PiProcess) finalize() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.result.Success && p.result.Error == "" {
+		summary := strings.TrimSpace(p.textBuf.String())
+		if summary == "" {
+			summary = "process ended"
+		}
+		p.result = runtime.AgentResult{
+			Success: true,
+			Summary: summary,
+		}
+	}
+	if p.cleanup != nil {
+		p.cleanup()
+		p.cleanup = nil
+	}
+}
+
+// handleEvent maps a PiEvent to runtime.AgentEvent(s) and updates result state.
 func (p *PiProcess) handleEvent(event PiEvent) {
 	switch event.Type {
-	case PiEventOutput:
-		p.emit(runtime.AgentEvent{Type: "output", Content: event.Content})
+	case PiEventResponse:
+		// Command acknowledgement from Pi (e.g., prompt accepted)
+		if !event.Success {
+			p.logger.Error("pi command failed", "command", event.Command, "error", event.Error)
+			p.emit(runtime.AgentEvent{Type: "error", Content: fmt.Sprintf("command %s failed: %s", event.Command, event.Error)})
+		} else {
+			p.logger.Debug("pi command accepted", "command", event.Command)
+		}
 
-	case PiEventToolCall:
-		content := event.Tool
-		if event.Args != "" {
-			content += ": " + event.Args
+	case PiEventAgentStart:
+		p.logger.Info("pi agent started")
+
+	case PiEventMessageUpdate:
+		// Streaming text delta from assistant — accumulate silently.
+		// We don't emit individual deltas to avoid flooding the output channel.
+		// The full text is available in the result when the agent ends.
+		var ame AssistantMessageEvent
+		if event.AssistantMessageEvent != nil {
+			_ = json.Unmarshal(event.AssistantMessageEvent, &ame)
+		}
+		if ame.Type == "text_delta" && ame.Delta != "" {
+			p.textBuf.WriteString(ame.Delta)
+		}
+
+	case PiEventMessageStart, PiEventMessageEnd:
+		// We only care about the streaming deltas, not start/end markers.
+
+	case PiEventToolExecStart:
+		content := event.ToolName
+		if event.Args != nil {
+			content += ": " + string(event.Args)
 		}
 		p.emit(runtime.AgentEvent{Type: "tool_call", Content: content})
 
-	case PiEventError:
-		p.emit(runtime.AgentEvent{Type: "error", Content: event.Content})
+	case PiEventToolExecUpdate:
+		// Streaming tool output — log but don't emit to coordinator
 
-	case PiEventDone:
+	case PiEventToolExecEnd:
+		content := event.ToolName
+		if event.IsError {
+			content += " (failed)"
+			p.logger.Warn("pi tool execution failed", "tool", event.ToolName, "id", event.ToolCallID)
+		}
+		p.emit(runtime.AgentEvent{Type: "tool_end", Content: content, IsError: event.IsError})
+
+	case PiEventAgentEnd:
+		// Agent finished — extract the final assistant text from accumulated output
+		summary := strings.TrimSpace(p.textBuf.String())
+
 		p.mu.Lock()
 		p.result = runtime.AgentResult{
-			Success: event.Success,
-			Summary: event.Summary,
+			Success: true,
+			Summary: summary,
 		}
-		if !event.Success && event.Content != "" {
-			p.result.Error = event.Content
+
+		// Check for DECK_DONE signal in accumulated text
+		if idx := strings.Index(summary, "DECK_DONE:"); idx >= 0 {
+			doneSummary := summary[idx+len("DECK_DONE:"):]
+			if nlIdx := strings.IndexByte(doneSummary, '\n'); nlIdx >= 0 {
+				doneSummary = doneSummary[:nlIdx]
+			}
+			p.result.Summary = strings.TrimSpace(doneSummary)
 		}
 		p.mu.Unlock()
 
-		// Check for DECK_DONE signal in content or summary
-		summary := event.Summary
-		if strings.HasPrefix(event.Content, "DECK_DONE:") {
-			summary = strings.TrimPrefix(event.Content, "DECK_DONE:")
-			p.mu.Lock()
-			p.result.Summary = summary
-			p.mu.Unlock()
-		}
-
 		p.emit(runtime.AgentEvent{Type: "output", Content: summary})
 
-	case PiEventStatus:
-		p.logger.Info("pi status", "content", event.Content)
+		// Pi in RPC mode stays alive after agent_end, waiting for more commands.
+		// Deck only needs one prompt-response cycle per agent, so kill the process
+		// to trigger EOF → readLoop exit → doneCh close → Wait() unblocks.
+		p.logger.Info("pi agent ended, killing process")
+		go p.Kill()
+
+	case PiEventExtensionError:
+		p.logger.Error("pi extension error",
+			"extension", event.ExtensionPath,
+			"hook", event.Event,
+			"error", event.Error,
+		)
+
+	case PiEventTurnStart, PiEventTurnEnd:
+		// Internal turn lifecycle — no action needed
+
+	case PiEventAutoCompactionStart, PiEventAutoCompactionEnd:
+		p.logger.Info("pi auto-compaction", "type", event.Type, "reason", event.Reason)
+
+	case PiEventAutoRetryStart, PiEventAutoRetryEnd:
+		p.logger.Info("pi auto-retry", "type", event.Type)
+
+	default:
+		p.logger.Debug("unhandled pi event", "type", event.Type)
 	}
 }
 
@@ -134,7 +207,7 @@ func (p *PiProcess) emit(event runtime.AgentEvent) {
 func (p *PiProcess) Send(_ context.Context, msg runtime.AgentMessage) error {
 	cmd := PiCommand{
 		Type:    msg.Type,
-		Content: msg.Content,
+		Message: msg.Content,
 	}
 
 	data, err := json.Marshal(cmd)

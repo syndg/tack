@@ -34,6 +34,12 @@ steps:
     type: deterministic
     action: merge_queue
     description: "Merge all stream branches, run quality gates"
+    next: create_pr
+
+  - id: create_pr
+    type: deterministic
+    action: create_pr
+    description: "Push merger branch and create GitHub PR"
     next: complete
 
   - id: complete

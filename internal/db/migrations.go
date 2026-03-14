@@ -127,6 +127,21 @@ func RunMigrations(db *sql.DB) error {
 	if err := ensureColumnExists(db, "streams", "execution_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("ensuring streams.execution_id: %w", err)
 	}
+	// Ensure mail table has new communication protocol columns
+	for _, col := range []struct{ name, def string }{
+		{"subject", "TEXT NOT NULL DEFAULT ''"},
+		{"body", "TEXT NOT NULL DEFAULT ''"},
+		{"priority", "TEXT NOT NULL DEFAULT 'normal'"},
+		{"thread_id", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureColumnExists(db, "mail", col.name, col.def); err != nil {
+			return fmt.Errorf("ensuring mail.%s: %w", col.name, err)
+		}
+	}
+	// Ensure mail dedup_key column for escalation dedup
+	if err := ensureColumnExists(db, "mail", "dedup_key", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("ensuring mail.dedup_key: %w", err)
+	}
 	// Ensure merge_queue columns added in Phase 5
 	for _, col := range []struct{ name, def string }{
 		{"plan_id", "TEXT NOT NULL DEFAULT ''"},

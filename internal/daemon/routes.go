@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
 	"github.com/syndg/deck/internal/harness/blueprint"
 	"github.com/syndg/deck/internal/services/planner"
@@ -39,6 +40,7 @@ func (d *Daemon) registerRoutes() {
 	d.mux.HandleFunc("GET /streams/{id}", d.handleGetStream)
 
 	d.mux.HandleFunc("POST /mail", d.handleSendMail)
+	d.mux.HandleFunc("GET /mail", d.handleListMail)
 	d.mux.HandleFunc("GET /mail/{agentName}/unread", d.handleGetUnreadMail)
 	d.mux.HandleFunc("POST /mail/{id}/read", d.handleMarkMailRead)
 	d.mux.HandleFunc("POST /mail/{agentName}/read-all", d.handleMarkAllMailRead)
@@ -61,7 +63,6 @@ type CreateObjectiveRequest struct {
 	Description string `json:"description"`
 	Blueprint   string `json:"blueprint,omitempty"`
 	Simple      bool   `json:"simple,omitempty"` // single-agent mode: creates and auto-approves a plan
-	Auto        bool   `json:"auto,omitempty"`   // batch planning mode: planner runs autonomously
 }
 
 // createObjectiveSimpleResponse is the response for POST /objectives when simple=true.
@@ -76,8 +77,9 @@ type createObjectiveSimpleResponse struct {
 // When simple=true: calls planningService.StartSimple to create and auto-approve
 // a single-stream plan, returning {"objective": {...}, "plan": {...}}.
 //
-// When auto=true: creates the objective normally; batch planning mode is recorded
-// and a planner agent will be spawned asynchronously (Phase 4).
+// Default: creates the objective and publishes EventObjectiveCreated. The
+// coordinator picks it up and starts blueprint execution — which includes
+// the planner agent and human approval steps as defined in the blueprint.
 func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 	var req CreateObjectiveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -107,15 +109,9 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	planningMode := ""
-	if req.Auto {
-		planningMode = "batch"
-	}
-
 	obj := &domain.Objective{
-		Description:  req.Description,
-		Blueprint:    req.Blueprint,
-		PlanningMode: planningMode,
+		Description: req.Description,
+		Blueprint:   req.Blueprint,
 	}
 	if err := d.objectives.Create(r.Context(), obj); err != nil {
 		d.logger.Error("creating objective", "error", err)
@@ -385,6 +381,9 @@ func (d *Daemon) handleGetPlan(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleApprovePlan approves a plan for execution via the lifecycle manager.
+// In auto mode, the objective is already executing and a blueprint execution
+// is paused at the human approval step. This handler detects that case and
+// resumes the execution automatically after approving the plan.
 func (d *Daemon) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -403,6 +402,22 @@ func (d *Daemon) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 		d.logger.Error("refreshing plan after approve", "id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to refresh plan")
 		return
+	}
+
+	// Auto-resume: if there's a paused execution waiting for plan approval, resume it.
+	if d.coordinator != nil {
+		exec, err := d.executions.GetByObjective(r.Context(), plan.ObjectiveID)
+		if err == nil && exec.Status == "waiting_human" {
+			exec, err = d.blueprintEngine.ApproveHuman(r.Context(), exec)
+			if err == nil {
+				_ = d.executions.Update(r.Context(), exec)
+				d.coordinator.ResumeExecution(exec)
+				d.logger.Info("auto-resumed execution after plan approval",
+					"execution_id", exec.ID,
+					"plan_id", id,
+				)
+			}
+		}
 	}
 
 	writeJSON(w, http.StatusOK, plan)
@@ -507,8 +522,7 @@ func (d *Daemon) handleGetStream(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSendMail sends a mail message (used by agent extensions).
-// Body: {"from": "...", "to": "...", "type": "...", "payload": "...", "objective": "...", "stream": "..."}
-// If "to" starts with "@", broker.Send delegates to SendBroadcast internally.
+// Body: {"from", "to", "subject", "body", "type", "priority?", "thread_id?", "payload?", "objective", "stream?"}
 func (d *Daemon) handleSendMail(w http.ResponseWriter, r *http.Request) {
 	if d.mailBroker == nil {
 		writeError(w, http.StatusServiceUnavailable, "mail broker not available")
@@ -527,10 +541,41 @@ func (d *Daemon) handleSendMail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": msg.ID})
 }
 
-// handleGetUnreadMail returns unread messages for an agent as a JSON array.
+// handleListMail returns messages matching query params (debug/dashboard).
+// GET /mail?objective={id}&from={name}&to={name}&type={type}&unread=true
+func (d *Daemon) handleListMail(w http.ResponseWriter, r *http.Request) {
+	if d.mailBroker == nil {
+		writeError(w, http.StatusServiceUnavailable, "mail broker not available")
+		return
+	}
+
+	q := r.URL.Query()
+	filters := db.MailFilters{
+		Objective:  q.Get("objective"),
+		From:       q.Get("from"),
+		To:         q.Get("to"),
+		Type:       q.Get("type"),
+		UnreadOnly: q.Get("unread") == "true",
+	}
+
+	messages, err := d.mailBroker.List(r.Context(), filters)
+	if err != nil {
+		d.logger.Error("listing mail", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list mail")
+		return
+	}
+
+	if messages == nil {
+		messages = []domain.MailMessage{}
+	}
+
+	writeJSON(w, http.StatusOK, messages)
+}
+
+// handleGetUnreadMail returns unread messages for an agent.
 func (d *Daemon) handleGetUnreadMail(w http.ResponseWriter, r *http.Request) {
 	if d.mailBroker == nil {
 		writeError(w, http.StatusServiceUnavailable, "mail broker not available")
@@ -575,6 +620,7 @@ func (d *Daemon) handleMarkMailRead(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
+
 
 // handleMarkAllMailRead marks all unread messages for an agent as read.
 func (d *Daemon) handleMarkAllMailRead(w http.ResponseWriter, r *http.Request) {

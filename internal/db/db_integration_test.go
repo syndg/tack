@@ -60,7 +60,7 @@ func TestStoresIntegration(t *testing.T) {
 		t.Fatalf("unexpected agent role: %q", gotAgent.Role)
 	}
 
-	msg := &domain.MailMessage{From: "planner", To: "builder", Type: "note", Payload: "hello", Objective: obj.ID}
+	msg := &domain.MailMessage{From: "planner", To: "builder", Subject: "test", Body: "hello", Type: "message", Objective: obj.ID}
 	if err := mail.Send(ctx, msg); err != nil {
 		t.Fatalf("Send mail: %v", err)
 	}

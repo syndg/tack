@@ -10,7 +10,6 @@ import (
 var (
 	planSimple    bool
 	planBlueprint string
-	planAuto      bool
 )
 
 var planCmd = &cobra.Command{
@@ -30,17 +29,12 @@ var planCmd = &cobra.Command{
 		} else {
 			obj, err := c.CreateObjectiveWithOptions(cmd.Context(), args[0], client.CreateObjectiveOptions{
 				Blueprint: planBlueprint,
-				Auto:      planAuto,
 			})
 			if err != nil {
 				return err
 			}
 			fmt.Printf("Created objective %s: %s\n", obj.ID, obj.Description)
-			if planAuto {
-				fmt.Println("Planner will run in batch mode.")
-			} else {
-				fmt.Println("Planner will start an interactive session.")
-			}
+			fmt.Println("Planner agent will decompose the objective.")
 		}
 		return nil
 	},
@@ -49,6 +43,5 @@ var planCmd = &cobra.Command{
 func init() {
 	planCmd.Flags().BoolVar(&planSimple, "simple", false, "single-agent mode (no decomposition)")
 	planCmd.Flags().StringVar(&planBlueprint, "blueprint", "", "blueprint to use (default: auto-detect)")
-	planCmd.Flags().BoolVar(&planAuto, "auto", false, "batch mode (planner runs autonomously)")
 	rootCmd.AddCommand(planCmd)
 }
