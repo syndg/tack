@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,6 +17,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/syndg/deck/internal/sandbox"
 )
+
+const sandboxMetaFile = ".deck-sandbox.json"
 
 // Provider creates sandboxes as local git worktrees.
 // Each sandbox is an isolated worktree with its own branch.
@@ -35,6 +38,116 @@ func New(repoRoot string, worktreeDir string, logger *slog.Logger) *Provider {
 		sandboxes:   make(map[string]*LocalSandbox),
 		logger:      logger,
 	}
+}
+
+// Rediscover scans existing git worktrees and repopulates the in-memory
+// sandbox map. Labels are read from a .deck-sandbox.json metadata file
+// persisted inside each worktree at creation time, so full (un-truncated)
+// label values survive daemon restarts.
+func (p *Provider) Rediscover(ctx context.Context) {
+	cmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
+	cmd.Dir = p.repoRoot
+	out, err := cmd.Output()
+	if err != nil {
+		p.logger.Error("rediscover: git worktree list failed", "error", err)
+		return
+	}
+
+	// Resolve symlinks so path comparison works on systems where the temp
+	// directory is behind a symlink (e.g., macOS /var → /private/var).
+	canonicalWorktreeDir := p.worktreeDir
+	if resolved, err := filepath.EvalSymlinks(p.worktreeDir); err == nil {
+		canonicalWorktreeDir = resolved
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	var curPath, curBranch string
+	recovered := 0
+
+	for _, line := range strings.Split(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			curPath = strings.TrimPrefix(line, "worktree ")
+		case strings.HasPrefix(line, "branch "):
+			curBranch = strings.TrimPrefix(line, "branch refs/heads/")
+		case line == "": // end of entry
+			if curPath != "" && curBranch != "" && strings.HasPrefix(curBranch, "deck/") {
+				// Only recover worktrees that live under our worktreeDir.
+				rel, relErr := filepath.Rel(canonicalWorktreeDir, curPath)
+				if relErr != nil || strings.HasPrefix(rel, "..") {
+					curPath, curBranch = "", ""
+					continue
+				}
+				// The sandbox ID is the directory name (UUID).
+				id := filepath.Base(curPath)
+				if _, exists := p.sandboxes[id]; exists {
+					curPath, curBranch = "", ""
+					continue
+				}
+
+				// Read full labels from persisted metadata file.
+				labels := loadMeta(curPath)
+
+				p.sandboxes[id] = &LocalSandbox{
+					id:     id,
+					path:   curPath,
+					branch: curBranch,
+					labels: labels,
+					status: sandbox.SandboxStatusRunning,
+				}
+				recovered++
+			}
+			curPath, curBranch = "", ""
+		}
+	}
+
+	if recovered > 0 {
+		p.logger.Info("rediscovered sandbox worktrees", "count", recovered)
+	}
+}
+
+// metaPath returns the path to the sandbox metadata file. The file is stored
+// inside the worktree's private git directory (not the working tree) so it
+// can never be staged or committed by agents, and won't cause merge conflicts.
+func metaPath(worktreePath string) string {
+	gitDirFile := filepath.Join(worktreePath, ".git")
+	data, err := os.ReadFile(gitDirFile)
+	if err != nil {
+		// Fall back to the working tree if .git isn't a file (shouldn't happen for worktrees).
+		return filepath.Join(worktreePath, sandboxMetaFile)
+	}
+	gitDir := strings.TrimSpace(strings.TrimPrefix(string(data), "gitdir: "))
+	return filepath.Join(gitDir, sandboxMetaFile)
+}
+
+// persistMeta writes sandbox labels to a JSON file inside the worktree's
+// private git directory so they can be recovered after a daemon restart.
+func persistMeta(worktreePath string, labels map[string]string) error {
+	data, err := json.Marshal(labels)
+	if err != nil {
+		return err
+	}
+	path := metaPath(worktreePath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+// loadMeta reads sandbox labels from the metadata file. Returns an empty map
+// on any error (best-effort recovery).
+func loadMeta(worktreePath string) map[string]string {
+	data, err := os.ReadFile(metaPath(worktreePath))
+	if err != nil {
+		return make(map[string]string)
+	}
+	var labels map[string]string
+	if err := json.Unmarshal(data, &labels); err != nil {
+		return make(map[string]string)
+	}
+	return labels
 }
 
 // SetPostCreate sets commands to run after worktree creation (e.g., "bun install").
@@ -73,6 +186,11 @@ func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("creating git worktree: %w (stderr: %s)", err, stderr.String())
+	}
+
+	// Persist sandbox metadata for rediscovery after daemon restart.
+	if err := persistMeta(worktreePath, opts.Labels); err != nil {
+		p.logger.Warn("failed to persist sandbox metadata", "error", err)
 	}
 
 	// Copy gitignored files (node_modules, build caches, .env) from main repo.

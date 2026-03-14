@@ -28,6 +28,7 @@ type DaemonConfig struct {
 
 type SandboxConfig struct {
 	Provider          string         `yaml:"provider"`
+	WorktreeDir       string         `yaml:"worktree_dir"` // override for local worktree directory (default: $TMPDIR/deck-worktrees)
 	DefaultResources  ResourceConfig `yaml:"default_resources"`
 	AutoStopMinutes   int            `yaml:"auto_stop_interval"`
 	AutoDeleteMinutes int            `yaml:"auto_delete_interval"`

@@ -644,16 +644,31 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 
 	totalStreams := len(allStreams)
 
-	// Build stream ID set and pre-count completed.
+	// Build stream ID set and pre-count already-resolved streams.
+	// After a daemon restart, streams may sit in terminal states (merge_ready,
+	// merged, failed) that will never emit a new result. Count them as resolved
+	// so the collection loop doesn't block forever.
 	streamSet := make(map[string]bool, totalStreams)
-	completedCount := 0
+	resolvedCount := 0
+	var failures []string
 	for _, s := range allStreams {
 		streamSet[s.ID] = true
-		if s.Status == "completed" {
-			completedCount++
+		switch s.Status {
+		case "completed", domain.StreamStatusMergeReady, domain.StreamStatusMerged:
+			resolvedCount++
+		case "failed":
+			resolvedCount++
+			failures = append(failures, fmt.Sprintf("stream %s: previously failed", s.ID))
 		}
 	}
-	if completedCount == totalStreams {
+	if resolvedCount == totalStreams {
+		if len(failures) > 0 {
+			return blueprint.StepResult{
+				Status:   blueprint.StepStatusCompleted,
+				Output:   fmt.Sprintf("partial: %d/%d streams completed; failures: %s", totalStreams-len(failures), totalStreams, strings.Join(failures, "; ")),
+				Metadata: map[string]string{"partial": "true", "failures": fmt.Sprintf("%d", len(failures))},
+			}, nil
+		}
 		return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
 	}
 
@@ -689,10 +704,6 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 			results <- streamResult{StreamID: stream.ID, Error: fmt.Sprintf("failed to start: %v", err)}
 		}
 	}
-
-	// 5. Collect results and handle cascade.
-	resolvedCount := completedCount
-	var failures []string
 
 	for resolvedCount < totalStreams {
 		select {

@@ -687,6 +687,14 @@ func formatGateErrorsScoped(result *gates.RunResult, fileScope []string) string 
 	return strings.TrimSpace(b.String())
 }
 
+// resetMergingEntry resets a stuck "merging" merge entry back to "pending"
+// so the processor will pick it up again after a daemon restart.
+func (h *Handlers) resetMergingEntry(ctx context.Context, streamID string) {
+	if h.mergeProcessor != nil {
+		h.mergeProcessor.ResetMergingEntries(ctx, streamID)
+	}
+}
+
 func escapeShellSingleQuote(s string) string {
 	return strings.Replace(s, "'", `'\''`, -1)
 }
@@ -729,10 +737,26 @@ func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (b
 		switch s.Status {
 		case domain.StreamStatusMergeReady:
 			toMerge = append(toMerge, s.ID)
+		case domain.StreamStatusMerging:
+			// After a daemon restart, a stream stuck in "merging" has no
+			// goroutine driving it to completion. Reset it to merge_ready
+			// so it gets re-enqueued and the merge processor retries.
+			h.logger.Info("reclaiming stuck merging stream",
+				"stream_id", s.ID, "execution_id", exec.ID)
+			if err := h.streams.UpdateStatus(ctx, s.ID, domain.StreamStatusMergeReady); err != nil {
+				h.logger.Error("failed to reset merging stream", "stream_id", s.ID, "error", err)
+				failed = append(failed, s.ID)
+				continue
+			}
+			// Also reset the merge entry back to pending so the processor picks it up.
+			h.resetMergingEntry(ctx, s.ID)
+			toMerge = append(toMerge, s.ID)
 		case "failed":
 			failed = append(failed, s.ID)
 		case "executing", "pending":
 			active = append(active, s.ID)
+		case domain.StreamStatusMerged, "completed":
+			// Already merged or completed — nothing to do.
 		}
 	}
 

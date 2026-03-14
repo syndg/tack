@@ -187,9 +187,9 @@ func New(cfg *config.Config) (*Daemon, error) {
 		if apiKey == "" {
 			// Fall back to local if no API key
 			logger.Warn("daytona provider configured but no API key found, falling back to local")
-			worktreeDir := filepath.Join(os.TempDir(), "deck-worktrees")
-			lp := local.New(projectRoot, worktreeDir, logger)
+			lp := local.New(projectRoot, localWorktreeDir(cfg), logger)
 			lp.SetPostCreate(cfg.Sandbox.PostCreate)
+			lp.Rediscover(context.Background())
 			sandboxProv = lp
 		} else {
 			dp, err := daytona.New(daytona.Config{
@@ -204,9 +204,9 @@ func New(cfg *config.Config) (*Daemon, error) {
 			sandboxProv = dp
 		}
 	default: // "local"
-		worktreeDir := filepath.Join(os.TempDir(), "deck-worktrees")
-		lp := local.New(projectRoot, worktreeDir, logger)
+		lp := local.New(projectRoot, localWorktreeDir(cfg), logger)
 		lp.SetPostCreate(cfg.Sandbox.PostCreate)
+		lp.Rediscover(context.Background())
 		sandboxProv = lp
 	}
 
@@ -332,6 +332,14 @@ func (d *Daemon) Start() error {
 		return nil
 	}
 	return err
+}
+
+// localWorktreeDir returns the worktree directory for the local sandbox provider.
+func localWorktreeDir(cfg *config.Config) string {
+	if cfg.Sandbox.WorktreeDir != "" {
+		return cfg.Sandbox.WorktreeDir
+	}
+	return filepath.Join(os.TempDir(), "deck-worktrees")
 }
 
 // Shutdown gracefully shuts down the coordinator, HTTP server, and database.

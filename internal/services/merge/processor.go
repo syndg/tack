@@ -193,6 +193,25 @@ func (p *Processor) EnqueueStream(ctx context.Context, streamID string) error {
 	return nil
 }
 
+// ResetMergingEntries resets all "merging" entries for a given stream back to
+// "pending" so the processor will retry them. Called after a daemon restart
+// when a merge was interrupted mid-flight.
+func (p *Processor) ResetMergingEntries(ctx context.Context, streamID string) {
+	entry, err := p.queue.GetByStream(ctx, streamID)
+	if err != nil {
+		p.logger.Warn("reset-merging: no merge entry found", "stream_id", streamID, "error", err)
+		return
+	}
+	if entry.Status != domain.MergeStatusMerging {
+		return
+	}
+	if err := p.queue.UpdateStatus(ctx, entry.ID, domain.MergeStatusPending, 0, "", ""); err != nil {
+		p.logger.Error("reset-merging: failed to reset entry", "entry_id", entry.ID, "error", err)
+	} else {
+		p.logger.Info("reset stuck merging entry to pending", "entry_id", entry.ID, "stream_id", streamID)
+	}
+}
+
 // processAll drains the pending queue, processing entries one at a time.
 // Uses a mutex to prevent concurrent processing runs.
 func (p *Processor) processAll(ctx context.Context) {
@@ -271,6 +290,10 @@ func (p *Processor) processEntry(ctx context.Context, entry *domain.MergeEntry) 
 		// All tiers exhausted — mark as conflict.
 		if err := p.queue.UpdateStatus(ctx, entry.ID, domain.MergeStatusConflict, result.Tier, result.Error, ""); err != nil {
 			p.logger.Error("updating entry to conflict", "entry", entry.ID, "error", err)
+		}
+		// Move stream out of "merging" so it doesn't orphan in status APIs.
+		if err := p.streams.UpdateStatus(ctx, entry.StreamID, "failed"); err != nil {
+			p.logger.Error("updating stream to failed after conflict", "stream", entry.StreamID, "error", err)
 		}
 		p.publishMergeFailed(entry, result.Error)
 		p.logger.Warn("merge conflict, all tiers exhausted",
@@ -372,10 +395,14 @@ func (p *Processor) revertMerge(ctx context.Context, sb sandbox.Sandbox, entry *
 	p.logger.Error("reverting merge", "entry", entry.ID, "error", lastErr)
 }
 
-// failEntry marks a merge entry as failed and publishes the failure event.
+// failEntry marks a merge entry as failed, transitions the stream out of
+// "merging", and publishes the failure event.
 func (p *Processor) failEntry(ctx context.Context, entry *domain.MergeEntry, tier int, errMsg string) {
 	if err := p.queue.UpdateStatus(ctx, entry.ID, domain.MergeStatusFailed, tier, errMsg, ""); err != nil {
 		p.logger.Error("updating entry to failed", "entry", entry.ID, "error", err)
+	}
+	if err := p.streams.UpdateStatus(ctx, entry.StreamID, "failed"); err != nil {
+		p.logger.Error("updating stream to failed after merge failure", "stream", entry.StreamID, "error", err)
 	}
 	p.publishMergeFailed(entry, errMsg)
 }

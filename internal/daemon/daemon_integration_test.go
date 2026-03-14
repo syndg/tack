@@ -1058,3 +1058,145 @@ func mustGetJSON[T any](t *testing.T, url string) T {
 	}
 	return out
 }
+
+// TestDaemonRestart_RediscoversLocalSandboxesAndCompletesObjective exercises the
+// full restart path: daemon 1 creates an objective that spawns sandboxes, then
+// shuts down mid-execution. Daemon 2 boots with the same database and worktree
+// directory, calls Rediscover to repopulate sandboxes, recovers the running
+// execution, and drives it to completion. Without working rediscovery the
+// cleanup path would leak worktrees (CleanupObjective uses List by label).
+func TestDaemonRestart_RediscoversLocalSandboxesAndCompletesObjective(t *testing.T) {
+	restoreRepo := setupGitRepo(t)
+	defer restoreRepo()
+
+	// Shared state: both daemon instances use the same database and worktree dir.
+	sharedDataDir := t.TempDir()
+	sharedWorktreeDir := t.TempDir()
+
+	// --- Daemon 1: slow agent, create objective, wait for agent, shut down ---
+	slowBinDir := t.TempDir()
+	slowClaude := filepath.Join(slowBinDir, "claude")
+	if err := os.WriteFile(slowClaude, []byte("#!/bin/sh\nsleep 30\necho done\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile slow claude: %v", err)
+	}
+	t.Setenv("PATH", slowBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cfg1 := config.Default()
+	cfg1.Daemon.Listen = "127.0.0.1:19810"
+	cfg1.Daemon.DataDir = sharedDataDir
+	cfg1.Sandbox.WorktreeDir = sharedWorktreeDir
+	cfg1.QualityGates = []string{"true"} // trivial gate for test repo
+
+	d1, err := New(cfg1)
+	if err != nil {
+		t.Fatalf("New daemon 1: %v", err)
+	}
+	errCh1 := make(chan error, 1)
+	go func() { errCh1 <- d1.Start() }()
+
+	baseURL1 := "http://" + cfg1.Daemon.Listen
+	waitForHTTP(t, baseURL1+"/health")
+
+	c1 := client.New(baseURL1)
+	resp, err := c1.CreateObjectiveSimple(context.Background(), "restart test", "hotfix")
+	if err != nil {
+		t.Fatalf("CreateObjectiveSimple: %v", err)
+	}
+	objectiveID := resp.Objective.ID
+
+	// Wait for builder agent to reach "running" — this confirms a sandbox exists.
+	waitForCondition(t, 10*time.Second, func() bool {
+		agents := mustGetJSON[[]map[string]any](t, baseURL1+"/agents")
+		for _, a := range agents {
+			if a["status"] == "running" && a["role"] == "builder" {
+				return true
+			}
+		}
+		return false
+	})
+
+	// Verify sandbox worktrees were created (at least one for builder).
+	entries, _ := os.ReadDir(sharedWorktreeDir)
+	if len(entries) == 0 {
+		t.Fatal("expected worktree directories to exist after agent spawn")
+	}
+	d1WorktreeCount := len(entries)
+	t.Logf("daemon 1 created %d worktree(s)", d1WorktreeCount)
+
+	// Shut down daemon 1. The slow agent process is killed by context cancellation.
+	shutCtx1, cancel1 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel1()
+	_ = d1.Shutdown(shutCtx1)
+	<-errCh1
+
+	// Worktrees should still exist on disk after daemon shutdown.
+	entriesAfterShutdown, _ := os.ReadDir(sharedWorktreeDir)
+	if len(entriesAfterShutdown) < d1WorktreeCount {
+		t.Fatalf("worktrees disappeared after shutdown: had %d, now %d", d1WorktreeCount, len(entriesAfterShutdown))
+	}
+
+	// --- Daemon 2: fast agent, same DataDir, recovery ---
+	fastBinDir := t.TempDir()
+	fastClaude := filepath.Join(fastBinDir, "claude")
+	if err := os.WriteFile(fastClaude, []byte("#!/bin/sh\necho \"done role=$DECK_AGENT_ROLE\"\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile fast claude: %v", err)
+	}
+	t.Setenv("PATH", fastBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cfg2 := config.Default()
+	cfg2.Daemon.Listen = "127.0.0.1:19811"
+	cfg2.Daemon.DataDir = sharedDataDir
+	cfg2.Sandbox.WorktreeDir = sharedWorktreeDir
+	cfg2.QualityGates = []string{"true"}
+
+	d2, err := New(cfg2)
+	if err != nil {
+		t.Fatalf("New daemon 2: %v", err)
+	}
+	errCh2 := make(chan error, 1)
+	go func() { errCh2 <- d2.Start() }()
+
+	baseURL2 := "http://" + cfg2.Daemon.Listen
+	waitForHTTP(t, baseURL2+"/health")
+
+	// The objective should eventually reach a terminal state via recovery.
+	// With the fast agent + trivial gates, execution should complete.
+	c2 := client.New(baseURL2)
+	waitForCondition(t, 15*time.Second, func() bool {
+		obj, err := c2.GetObjective(context.Background(), objectiveID)
+		if err != nil {
+			return false
+		}
+		return obj.Status == "completed" || obj.Status == "failed"
+	})
+
+	obj, err := c2.GetObjective(context.Background(), objectiveID)
+	if err != nil {
+		t.Fatalf("GetObjective after restart: %v", err)
+	}
+	t.Logf("objective status after restart: %s", obj.Status)
+
+	if obj.Status != "completed" {
+		t.Errorf("expected objective completed after restart, got %q", obj.Status)
+	}
+
+	// Give cleanup goroutine time to run.
+	time.Sleep(500 * time.Millisecond)
+
+	// After completion, CleanupObjective should have removed ALL worktrees
+	// (including those created by daemon 1). This only works if Rediscover
+	// repopulated the sandbox map so List() returns daemon 1's sandboxes.
+	entriesAfterCleanup, _ := os.ReadDir(sharedWorktreeDir)
+	if len(entriesAfterCleanup) > 0 {
+		var remaining []string
+		for _, e := range entriesAfterCleanup {
+			remaining = append(remaining, e.Name())
+		}
+		t.Errorf("expected all worktrees cleaned up after completion, %d remain: %v", len(entriesAfterCleanup), remaining)
+	}
+
+	shutCtx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel2()
+	_ = d2.Shutdown(shutCtx2)
+	<-errCh2
+}

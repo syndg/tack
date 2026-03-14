@@ -199,3 +199,115 @@ func TestGet_ReturnsErrorForNonExistentSandbox(t *testing.T) {
 		t.Error("expected error for nonexistent sandbox, got nil")
 	}
 }
+
+// TestRediscover_RestoresFullLabelsAfterRestart simulates a daemon restart by
+// creating sandboxes with one provider instance, then constructing a fresh
+// provider (empty in-memory map) and calling Rediscover. Verifies that Get and
+// List return sandboxes with full (un-truncated) label values, which is the
+// scenario that broke when labels were parsed from the truncated branch name.
+func TestRediscover_RestoresFullLabelsAfterRestart(t *testing.T) {
+	repoDir := initTestRepo(t)
+	ctx := context.Background()
+
+	// --- Phase 1: create sandboxes with the "old" provider ---
+	p1 := newTestProvider(t, repoDir)
+
+	fullObjectiveID := "abcdef12-3456-7890-abcd-ef1234567890"
+	sb1, err := p1.Create(ctx, sandbox.CreateOpts{
+		Labels: map[string]string{
+			"deck.objective": fullObjectiveID,
+			"deck.role":      "builder",
+			"deck.stream":    "stream-001",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create builder: %v", err)
+	}
+
+	sb2, err := p1.Create(ctx, sandbox.CreateOpts{
+		Labels: map[string]string{
+			"deck.objective": fullObjectiveID,
+			"deck.role":      "merger",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create merger: %v", err)
+	}
+
+	// Sanity: the original provider can find them.
+	results, _ := p1.List(ctx, map[string]string{"deck.objective": fullObjectiveID})
+	if len(results) != 2 {
+		t.Fatalf("pre-restart: expected 2 sandboxes, got %d", len(results))
+	}
+
+	// --- Phase 2: simulate daemon restart — new provider, empty map ---
+	p2 := newTestProvider(t, repoDir)
+
+	// Before Rediscover, the new provider knows nothing.
+	results, _ = p2.List(ctx, map[string]string{"deck.objective": fullObjectiveID})
+	if len(results) != 0 {
+		t.Fatalf("pre-rediscover: expected 0 sandboxes, got %d", len(results))
+	}
+
+	p2.Rediscover(ctx)
+
+	// --- Phase 3: verify Get works with original sandbox IDs ---
+	got1, err := p2.Get(ctx, sb1.ID())
+	if err != nil {
+		t.Fatalf("Get builder after restart: %v", err)
+	}
+	if got1.ID() != sb1.ID() {
+		t.Errorf("Get builder ID = %q, want %q", got1.ID(), sb1.ID())
+	}
+
+	got2, err := p2.Get(ctx, sb2.ID())
+	if err != nil {
+		t.Fatalf("Get merger after restart: %v", err)
+	}
+	if got2.ID() != sb2.ID() {
+		t.Errorf("Get merger ID = %q, want %q", got2.ID(), sb2.ID())
+	}
+
+	// --- Phase 4: verify List with FULL objective ID matches ---
+	// This is the critical assertion: the full UUID must match, not just
+	// the truncated 8-char prefix that appears in the branch name.
+	results, err = p2.List(ctx, map[string]string{"deck.objective": fullObjectiveID})
+	if err != nil {
+		t.Fatalf("List by full objective: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("List by full objective: expected 2, got %d", len(results))
+	}
+
+	// List by role should also work.
+	builders, _ := p2.List(ctx, map[string]string{
+		"deck.objective": fullObjectiveID,
+		"deck.role":      "builder",
+	})
+	if len(builders) != 1 {
+		t.Errorf("List builders: expected 1, got %d", len(builders))
+	}
+
+	mergers, _ := p2.List(ctx, map[string]string{
+		"deck.objective": fullObjectiveID,
+		"deck.role":      "merger",
+	})
+	if len(mergers) != 1 {
+		t.Errorf("List mergers: expected 1, got %d", len(mergers))
+	}
+
+	// Extra labels (deck.stream) should also survive.
+	withStream, _ := p2.List(ctx, map[string]string{"deck.stream": "stream-001"})
+	if len(withStream) != 1 {
+		t.Errorf("List by stream: expected 1, got %d", len(withStream))
+	}
+
+	// --- Phase 5: verify the sandbox is functional (can exec) ---
+	res, err := got1.Exec(ctx, "echo alive", sandbox.ExecOpts{})
+	if err != nil {
+		t.Fatalf("Exec after restart: %v", err)
+	}
+	if res.Stdout != "alive" {
+		t.Errorf("Exec stdout = %q, want alive", res.Stdout)
+	}
+}
