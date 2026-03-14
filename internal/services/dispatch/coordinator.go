@@ -1151,43 +1151,53 @@ func (c *Coordinator) checkPartialToCompleted(ctx context.Context, objectiveID s
 		}
 	}
 
-	// All streams are fully merged or completed — upgrade to completed.
-	if lifecycle.IsValidTransition(obj.Status, domain.ObjectiveStatusCompleted) {
-		if err := c.lifecycle.Transition(ctx, objectiveID, domain.ObjectiveStatusCompleted); err != nil {
-			c.logger.Warn("failed to upgrade objective from partial to completed",
-				"objective_id", objectiveID,
-				"error", err,
-			)
-		} else {
-			c.logger.Info("objective upgraded from partial to completed",
-				"objective_id", objectiveID,
-			)
-			// Re-push the merger branch so the PR reflects the retry results.
-			c.rePushMergerBranch(ctx, objectiveID)
-			c.cleanupObjectiveSandboxes(ctx, objectiveID)
-		}
+	// All streams are fully merged or completed.
+	// Re-push the merger branch first — if push fails, stay partial so the
+	// user can retry. Only transition to completed if push succeeds (or if
+	// no remote is configured, in which case push is skipped).
+	if !lifecycle.IsValidTransition(obj.Status, domain.ObjectiveStatusCompleted) {
+		return
+	}
+
+	if !c.rePushMergerBranch(ctx, objectiveID) {
+		c.logger.Warn("staying partial — merger branch re-push failed, retry possible",
+			"objective_id", objectiveID,
+		)
+		return
+	}
+
+	if err := c.lifecycle.Transition(ctx, objectiveID, domain.ObjectiveStatusCompleted); err != nil {
+		c.logger.Warn("failed to upgrade objective from partial to completed",
+			"objective_id", objectiveID,
+			"error", err,
+		)
+	} else {
+		c.logger.Info("objective upgraded from partial to completed",
+			"objective_id", objectiveID,
+		)
+		c.cleanupObjectiveSandboxes(ctx, objectiveID)
 	}
 }
 
 // rePushMergerBranch pushes the merger branch to origin after a retry completes.
-// This updates the PR with the new merge results.
-func (c *Coordinator) rePushMergerBranch(ctx context.Context, objectiveID string) {
+// Returns true if push succeeded or was skipped (no remote), false on push failure.
+func (c *Coordinator) rePushMergerBranch(ctx context.Context, objectiveID string) bool {
 	sb, err := c.spawner.FindMergerSandbox(ctx, objectiveID)
 	if err != nil || sb == nil {
-		c.logger.Debug("no merger sandbox found for re-push", "objective", objectiveID)
-		return
+		// No merger sandbox — likely a simple/hotfix objective with no merge step.
+		return true
 	}
 
-	// Check if origin remote exists
+	// Check if origin remote exists — if not, push is not applicable.
 	remoteCheck, err := sb.Exec(ctx, "git remote get-url origin", sandbox.ExecOpts{})
 	if err != nil || remoteCheck.ExitCode != 0 {
-		return
+		return true // no remote configured, nothing to push
 	}
 
-	// Get branch and force-push (the branch already exists from the first push)
 	branchResult, err := sb.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
 	if err != nil || branchResult.ExitCode != 0 {
-		return
+		c.logger.Warn("failed to get merger branch name", "objective", objectiveID)
+		return false
 	}
 	branch := strings.TrimSpace(branchResult.Stdout)
 
@@ -1198,13 +1208,14 @@ func (c *Coordinator) rePushMergerBranch(ctx context.Context, objectiveID string
 			"branch", branch,
 			"error", pushResult.Stderr,
 		)
-		return
+		return false
 	}
 
 	c.logger.Info("re-pushed merger branch after retry",
 		"objective", objectiveID,
 		"branch", branch,
 	)
+	return true
 }
 
 // spawnAndMonitor spawns an agent and launches a background goroutine that waits
