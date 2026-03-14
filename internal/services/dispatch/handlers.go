@@ -32,6 +32,7 @@ type Handlers struct {
 	agents          *db.AgentStore
 	sandboxProvider sandbox.SandboxProvider
 	eventBus        *events.PersistentBus
+	baseBranch      string
 	logger          *slog.Logger
 }
 
@@ -48,8 +49,12 @@ func NewHandlers(
 	agents *db.AgentStore,
 	sandboxProvider sandbox.SandboxProvider,
 	eventBus *events.PersistentBus,
+	baseBranch string,
 	logger *slog.Logger,
 ) *Handlers {
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
 	return &Handlers{
 		scheduler:       scheduler,
 		gateRunner:      gateRunner,
@@ -62,6 +67,7 @@ func NewHandlers(
 		agents:          agents,
 		sandboxProvider: sandboxProvider,
 		eventBus:        eventBus,
+		baseBranch:      baseBranch,
 		logger:          logger,
 	}
 }
@@ -252,6 +258,27 @@ func (h *Handlers) runQualityGates(ctx context.Context, exec *blueprint.Executio
 	}
 
 	if !result.AllPassed {
+		// File-attribution: in a sub-execution, only fail if errors are in
+		// the stream's file scope. Errors in other streams' files are caught
+		// at merge time by the post-merge quality gates.
+		if exec.StreamID != "" {
+			stream, streamErr := h.streams.Get(ctx, exec.StreamID)
+			if streamErr == nil && len(stream.FileScope) > 0 {
+				if !gateErrorsInScope(result, stream.FileScope) {
+					h.logger.Info("gate failed but no errors in stream file scope, passing",
+						"stream_id", exec.StreamID,
+						"execution_id", exec.ID,
+					)
+					return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
+				}
+				// Only include in-scope errors in the fix context
+				return blueprint.StepResult{
+					Status: blueprint.StepStatusFailed,
+					Error:  formatGateErrorsScoped(result, stream.FileScope),
+				}, nil
+			}
+		}
+
 		return blueprint.StepResult{
 			Status: blueprint.StepStatusFailed,
 			Error:  formatGateErrors(result),
@@ -387,6 +414,19 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 		}, nil
 	}
 
+	// Check if origin remote exists — skip PR creation if not configured.
+	remoteCheck, err := sb.Exec(ctx, "git remote get-url origin", sandbox.ExecOpts{})
+	if err != nil || remoteCheck.ExitCode != 0 {
+		h.logger.Info("no origin remote configured, skipping PR creation",
+			"execution_id", exec.ID,
+			"objective_id", exec.ObjectiveID,
+		)
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusCompleted,
+			Output: "skipped: no origin remote configured",
+		}, nil
+	}
+
 	// Get the current branch name.
 	branchResult, err := sb.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
 	if err != nil || branchResult.ExitCode != 0 {
@@ -415,6 +455,38 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 		"objective_id", exec.ObjectiveID,
 	)
 
+	// Build stream status summary for the PR body.
+	plan, planErr := h.plans.GetByObjective(ctx, exec.ObjectiveID)
+	var streamSummary string
+	if planErr == nil {
+		streamList, listErr := h.streams.ListByPlan(ctx, plan.ID)
+		if listErr == nil && len(streamList) > 0 {
+			var succeeded, failed []string
+			for _, s := range streamList {
+				switch s.Status {
+				case domain.StreamStatusMerged, domain.StreamStatusMergeReady, "completed":
+					succeeded = append(succeeded, s.Title)
+				case "failed":
+					failed = append(failed, s.Title)
+				}
+			}
+			var sb strings.Builder
+			if len(succeeded) > 0 {
+				sb.WriteString("\n\n### Streams (succeeded)\n")
+				for _, t := range succeeded {
+					sb.WriteString(fmt.Sprintf("- %s\n", t))
+				}
+			}
+			if len(failed) > 0 {
+				sb.WriteString("\n### Streams (failed)\n")
+				for _, t := range failed {
+					sb.WriteString(fmt.Sprintf("- %s\n", t))
+				}
+			}
+			streamSummary = sb.String()
+		}
+	}
+
 	// Create PR via gh CLI.
 	messages := generatedMessagesFromSource(exec, step.MessageSource)
 	title := obj.Description
@@ -425,9 +497,10 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 	if messages.PRBody != "" {
 		body = messages.PRBody
 	}
+	body += streamSummary
 	escapedTitle := "'" + escapeShellSingleQuote(title) + "'"
 	escapedBody := "'" + escapeShellSingleQuote(body) + "'"
-	prCmd := fmt.Sprintf("gh pr create --title %s --body %s --head %s", escapedTitle, escapedBody, branch)
+	prCmd := fmt.Sprintf("gh pr create --title %s --body %s --head %s --base %s", escapedTitle, escapedBody, branch, h.baseBranch)
 
 	prResult, err := sb.Exec(ctx, prCmd, sandbox.ExecOpts{})
 	if err != nil || prResult.ExitCode != 0 {
@@ -491,9 +564,20 @@ func (h *Handlers) findSandboxForObjective(ctx context.Context, objectiveID stri
 
 // findMergerSandbox locates the merger sandbox for creating a PR.
 // After multi-stream blueprints, the merger sandbox contains the final merged code.
-// Falls back to findSandboxForObjective for single-stream/hotfix blueprints
-// where no merger agent exists.
+// The merge processor creates the sandbox directly (not as an agent session), so
+// we first check sandbox labels, then fall back to agent sessions and finally
+// findSandboxForObjective for single-stream/hotfix blueprints.
 func (h *Handlers) findMergerSandbox(ctx context.Context, objectiveID string) (sandbox.Sandbox, error) {
+	// Primary: find the merger sandbox created by the merge processor via labels.
+	sandboxes, err := h.sandboxProvider.List(ctx, map[string]string{
+		"deck.objective": objectiveID,
+		"deck.role":      "merger",
+	})
+	if err == nil && len(sandboxes) > 0 {
+		return sandboxes[0], nil
+	}
+
+	// Secondary: check agent sessions for a merger role (future agent-based mergers).
 	sessions, err := h.agents.ListByObjective(ctx, objectiveID)
 	if err != nil {
 		return nil, fmt.Errorf("listing agents for objective: %s", err)
@@ -556,13 +640,62 @@ func formatGateErrors(result *gates.RunResult) string {
 	return strings.TrimSpace(b.String())
 }
 
+// gateErrorsInScope checks whether any gate failure references files within the stream's scope.
+func gateErrorsInScope(result *gates.RunResult, fileScope []string) bool {
+	for _, gr := range result.Results {
+		if gr.Passed {
+			continue
+		}
+		combined := gr.Stderr + "\n" + gr.Stdout
+		errorFiles := gates.ExtractErrorFiles(combined)
+		inScope := gates.FilesInScope(errorFiles, fileScope)
+		if len(inScope) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// formatGateErrorsScoped is like formatGateErrors but filters output to only
+// include lines referencing files within the stream's file scope.
+func formatGateErrorsScoped(result *gates.RunResult, fileScope []string) string {
+	const maxOutputLen = 2000
+	truncate := func(s string) string {
+		s = strings.TrimSpace(s)
+		if len(s) <= maxOutputLen {
+			return s
+		}
+		return "..." + s[len(s)-maxOutputLen:]
+	}
+
+	var b strings.Builder
+	for _, gr := range result.Results {
+		if gr.Passed {
+			continue
+		}
+		fmt.Fprintf(&b, "gate %q failed (exit %d)\n", gr.Gate.Command, gr.ExitCode)
+		if stderr := truncate(gates.FilterOutputByScope(gr.Stderr, fileScope)); stderr != "" {
+			fmt.Fprintf(&b, "stderr:\n%s\n", stderr)
+		}
+		if stdout := truncate(gates.FilterOutputByScope(gr.Stdout, fileScope)); stdout != "" {
+			fmt.Fprintf(&b, "stdout:\n%s\n", stdout)
+		}
+	}
+	if b.Len() == 0 {
+		return "one or more quality gates failed (in-scope errors)"
+	}
+	return strings.TrimSpace(b.String())
+}
+
 func escapeShellSingleQuote(s string) string {
 	return strings.Replace(s, "'", `'\''`, -1)
 }
 
 // mergeQueue implements the "merge_queue" deterministic action.
-// Enqueues all merge_ready streams and blocks until every merge resolves
-// (completed or failed). If any merge fails, the step fails.
+// Partitions streams into merge_ready, failed, and active (executing/pending).
+// Waits for active streams to resolve, then merges whatever is merge_ready.
+// If all streams failed (zero merge_ready), returns completed — mark_complete
+// handles setting the objective to partial status.
 func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (blueprint.StepResult, error) {
 	if h.mergeProcessor == nil {
 		h.logger.Warn("merge processor not configured, skipping merge queue",
@@ -588,21 +721,107 @@ func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (b
 		}, nil
 	}
 
-	// Collect streams that need merging.
+	// Partition streams by status.
 	var toMerge []string
+	var failed []string
+	var active []string // executing or pending — still in progress
 	for _, s := range allStreams {
-		if s.Status == domain.StreamStatusMergeReady {
+		switch s.Status {
+		case domain.StreamStatusMergeReady:
 			toMerge = append(toMerge, s.ID)
+		case "failed":
+			failed = append(failed, s.ID)
+		case "executing", "pending":
+			active = append(active, s.ID)
 		}
 	}
 
+	h.logger.Info("merge queue partitioned streams",
+		"execution_id", exec.ID,
+		"merge_ready", len(toMerge),
+		"failed", len(failed),
+		"active", len(active),
+	)
+
+	// If streams are still active, wait for them to resolve before proceeding.
+	if len(active) > 0 {
+		sub, unsub := h.eventBus.Subscribe(64)
+		defer unsub()
+
+		activeSet := make(map[string]bool, len(active))
+		for _, id := range active {
+			activeSet[id] = true
+		}
+
+		for len(activeSet) > 0 {
+			select {
+			case <-ctx.Done():
+				return blueprint.StepResult{
+					Status: blueprint.StepStatusFailed,
+					Error:  "context cancelled while waiting for active streams",
+				}, nil
+			case event, ok := <-sub:
+				if !ok {
+					return blueprint.StepResult{
+						Status: blueprint.StepStatusFailed,
+						Error:  "event subscription closed while waiting for active streams",
+					}, nil
+				}
+				if !activeSet[event.Stream] {
+					continue
+				}
+				switch event.Type {
+				case domain.EventMergeQueued:
+					// Stream became merge_ready — move to toMerge.
+					delete(activeSet, event.Stream)
+					toMerge = append(toMerge, event.Stream)
+				case domain.EventAgentFailed:
+					// Stream failed — move to failed.
+					delete(activeSet, event.Stream)
+					failed = append(failed, event.Stream)
+				case domain.EventAgentCompleted:
+					// Stream completed but not yet merge_ready — re-check status.
+					stream, err := h.streams.Get(ctx, event.Stream)
+					if err != nil {
+						delete(activeSet, event.Stream)
+						failed = append(failed, event.Stream)
+						continue
+					}
+					if stream.Status == domain.StreamStatusMergeReady {
+						delete(activeSet, event.Stream)
+						toMerge = append(toMerge, event.Stream)
+					} else if stream.Status == "failed" {
+						delete(activeSet, event.Stream)
+						failed = append(failed, event.Stream)
+					}
+					// Otherwise, still active — keep waiting.
+				}
+			}
+		}
+
+		h.logger.Info("all active streams resolved",
+			"execution_id", exec.ID,
+			"merge_ready", len(toMerge),
+			"failed", len(failed),
+		)
+	}
+
+	// If no streams are merge_ready (all failed), return completed.
+	// mark_complete will set the objective to partial status.
 	if len(toMerge) == 0 {
-		return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
+		h.logger.Info("no merge_ready streams, skipping merge",
+			"execution_id", exec.ID,
+			"failed_count", len(failed),
+		)
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusCompleted,
+			Output: fmt.Sprintf("no streams to merge (%d failed)", len(failed)),
+		}, nil
 	}
 
 	// Subscribe to merge events BEFORE enqueuing so we don't miss any.
-	sub, unsub := h.eventBus.Subscribe(64)
-	defer unsub()
+	mergeSub, mergeUnsub := h.eventBus.Subscribe(64)
+	defer mergeUnsub()
 
 	// Enqueue — fail the step if any enqueue errors.
 	for _, streamID := range toMerge {
@@ -620,7 +839,7 @@ func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (b
 		pending[id] = true
 	}
 
-	var failures []string
+	var mergeFailures []string
 	for len(pending) > 0 {
 		select {
 		case <-ctx.Done():
@@ -628,7 +847,7 @@ func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (b
 				Status: blueprint.StepStatusFailed,
 				Error:  "context cancelled while waiting for merges",
 			}, nil
-		case event, ok := <-sub:
+		case event, ok := <-mergeSub:
 			if !ok {
 				return blueprint.StepResult{
 					Status: blueprint.StepStatusFailed,
@@ -645,15 +864,22 @@ func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (b
 				delete(pending, event.Stream)
 				var payload map[string]string
 				_ = json.Unmarshal([]byte(event.Payload), &payload)
-				failures = append(failures, fmt.Sprintf("stream %s: %s", event.Stream, payload["error"]))
+				mergeFailures = append(mergeFailures, fmt.Sprintf("stream %s: %s", event.Stream, payload["error"]))
 			}
 		}
 	}
 
-	if len(failures) > 0 {
+	if len(mergeFailures) > 0 {
 		return blueprint.StepResult{
 			Status: blueprint.StepStatusFailed,
-			Error:  fmt.Sprintf("merge failures: %s", strings.Join(failures, "; ")),
+			Error:  fmt.Sprintf("merge failures: %s", strings.Join(mergeFailures, "; ")),
+		}, nil
+	}
+
+	if len(failed) > 0 {
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusCompleted,
+			Output: fmt.Sprintf("partial: %d streams merged, %d streams failed", len(toMerge), len(failed)),
 		}, nil
 	}
 
