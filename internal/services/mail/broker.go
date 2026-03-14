@@ -42,8 +42,10 @@ func (b *Broker) Send(ctx context.Context, msg *domain.MailMessage) error {
 	// @human: publish escalation event, store for audit trail
 	if msg.To == "@human" {
 		// Escalation dedup: skip if an unread escalation with the same
-		// subject+stream already exists.
-		dedupKey := computeDedupKey(msg.Subject, msg.Stream)
+		// subject+stream+objective already exists. Including objective
+		// prevents planner escalations across different objectives from
+		// being deduplicated against each other.
+		dedupKey := computeDedupKey(msg.Subject, msg.Stream, msg.Objective)
 		msg.DedupKey = dedupKey
 
 		exists, err := b.mail.ExistsUnreadDedup(ctx, dedupKey)
@@ -124,7 +126,8 @@ func (b *Broker) List(ctx context.Context, filters db.MailFilters) ([]domain.Mai
 }
 
 // computeDedupKey creates a deterministic key for escalation dedup.
-func computeDedupKey(subject, streamID string) string {
-	h := sha256.Sum256([]byte(subject + "\x00" + streamID))
+// Includes objective to prevent cross-objective dedup collisions.
+func computeDedupKey(subject, streamID, objectiveID string) string {
+	h := sha256.Sum256([]byte(subject + "\x00" + streamID + "\x00" + objectiveID))
 	return fmt.Sprintf("%x", h[:16])
 }

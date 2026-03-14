@@ -21,6 +21,7 @@ type PiProcess struct {
 	result   runtime.AgentResult
 	mu       sync.Mutex
 	killed   bool
+	hasError bool // set when RPC failures or extension errors occur
 	logger   *slog.Logger
 
 	// Accumulate assistant text output across streaming deltas
@@ -78,7 +79,9 @@ func (p *PiProcess) readLoop() {
 	}
 }
 
-// finalize sets a success result if nothing else was set, and runs cleanup.
+// finalize sets a default result if nothing else was set, and runs cleanup.
+// If RPC or extension errors occurred during the session, the result is
+// marked as failed even if no agent_end event was received.
 func (p *PiProcess) finalize() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -87,9 +90,17 @@ func (p *PiProcess) finalize() {
 		if summary == "" {
 			summary = "process ended"
 		}
-		p.result = runtime.AgentResult{
-			Success: true,
-			Summary: summary,
+		if p.hasError {
+			p.result = runtime.AgentResult{
+				Success: false,
+				Summary: summary,
+				Error:   "process ended with errors",
+			}
+		} else {
+			p.result = runtime.AgentResult{
+				Success: true,
+				Summary: summary,
+			}
 		}
 	}
 	if p.cleanup != nil {
@@ -105,6 +116,9 @@ func (p *PiProcess) handleEvent(event PiEvent) {
 		// Command acknowledgement from Pi (e.g., prompt accepted)
 		if !event.Success {
 			p.logger.Error("pi command failed", "command", event.Command, "error", event.Error)
+			p.mu.Lock()
+			p.hasError = true
+			p.mu.Unlock()
 			p.emit(runtime.AgentEvent{Type: "error", Content: fmt.Sprintf("command %s failed: %s", event.Command, event.Error)})
 		} else {
 			p.logger.Debug("pi command accepted", "command", event.Command)
@@ -180,6 +194,10 @@ func (p *PiProcess) handleEvent(event PiEvent) {
 			"hook", event.Event,
 			"error", event.Error,
 		)
+		p.mu.Lock()
+		p.hasError = true
+		p.mu.Unlock()
+		p.emit(runtime.AgentEvent{Type: "error", Content: fmt.Sprintf("extension error: %s (hook: %s)", event.Error, event.Event), IsError: true})
 
 	case PiEventTurnStart, PiEventTurnEnd:
 		// Internal turn lifecycle — no action needed
