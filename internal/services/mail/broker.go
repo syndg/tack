@@ -2,19 +2,23 @@ package mail
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
 	events "github.com/syndg/deck/internal/services/events"
 )
 
-// Broker manages inter-agent mail delivery and broadcast resolution.
+// Broker manages escalation delivery and mail storage.
+// Agent-to-agent messaging has been removed — with isolated worktrees,
+// agents cannot act on each other's messages. The broker now handles:
+//   - Agent-to-human escalation (@human)
+//   - Mail storage for audit trail and escalation history
+//   - Escalation dedup (prevents identical repeated escalations)
 type Broker struct {
 	mail     *db.MailStore
-	agents   *db.AgentStore
 	eventBus *events.PersistentBus
 	logger   *slog.Logger
 }
@@ -27,20 +31,49 @@ func New(
 ) *Broker {
 	return &Broker{
 		mail:     mail,
-		agents:   agents,
 		eventBus: eventBus,
 		logger:   logger,
 	}
 }
 
-// Send delivers a message from one agent to another.
-// If msg.To is a broadcast address (starts with "@"), delegates to SendBroadcast.
-// Publishes EventMailSent after persisting.
+// Send delivers a message. @human triggers an escalation event.
+// All other messages are stored for audit trail.
 func (b *Broker) Send(ctx context.Context, msg *domain.MailMessage) error {
-	if IsBroadcast(msg.To) {
-		return b.SendBroadcast(ctx, msg.From, msg.To, msg.Type, msg.Payload, msg.Objective, msg.Stream)
+	// @human: publish escalation event, store for audit trail
+	if msg.To == "@human" {
+		// Escalation dedup: skip if an unread escalation with the same
+		// subject+stream already exists.
+		dedupKey := computeDedupKey(msg.Subject, msg.Stream)
+		msg.DedupKey = dedupKey
+
+		exists, err := b.mail.ExistsUnreadDedup(ctx, dedupKey)
+		if err != nil {
+			b.logger.Error("checking escalation dedup", "error", err)
+			// Continue anyway — better to duplicate than to drop
+		} else if exists {
+			b.logger.Info("skipping duplicate escalation",
+				"subject", msg.Subject,
+				"stream", msg.Stream,
+			)
+			return nil
+		}
+
+		// Store the escalation for audit trail
+		if err := b.mail.Send(ctx, msg); err != nil {
+			return fmt.Errorf("storing escalation: %w", err)
+		}
+
+		b.eventBus.Publish(domain.Event{
+			Type:      domain.EventEscalation,
+			Objective: msg.Objective,
+			Stream:    msg.Stream,
+			Agent:     msg.From,
+			Payload:   msg.Body,
+		})
+		return nil
 	}
 
+	// All other messages: store for audit trail
 	if err := b.mail.Send(ctx, msg); err != nil {
 		return fmt.Errorf("sending mail: %w", err)
 	}
@@ -50,86 +83,13 @@ func (b *Broker) Send(ctx context.Context, msg *domain.MailMessage) error {
 		Objective: msg.Objective,
 		Stream:    msg.Stream,
 		Agent:     msg.From,
-		Payload:   fmt.Sprintf(`{"to":%q,"type":%q,"count":1}`, msg.To, msg.Type),
+		Payload:   fmt.Sprintf(`{"to":%q,"type":%q}`, msg.To, msg.Type),
 	})
 
 	return nil
 }
 
-// SendBroadcast resolves a broadcast address and delivers to all matching agents.
-// Broadcast addresses:
-//
-//	@all           — all active agents for the objective
-//	@stream:{id}   — all agents assigned to the given stream
-//	@builders      — all agents with role "builder"
-//	@leads         — all agents with role "lead"
-//	@human         — special: publish EventEscalation, do not deliver to agents
-func (b *Broker) SendBroadcast(ctx context.Context, from, broadcastAddr, msgType, payload, objectiveID, streamID string) error {
-	// @human is a special case: escalate and do not deliver to agents.
-	if broadcastAddr == "@human" {
-		b.eventBus.Publish(domain.Event{
-			Type:      domain.EventEscalation,
-			Objective: objectiveID,
-			Stream:    streamID,
-			Agent:     from,
-			Payload:   payload,
-		})
-		return nil
-	}
-
-	sessions, err := b.agents.ListByObjective(ctx, objectiveID)
-	if err != nil {
-		return fmt.Errorf("listing agents for objective %s: %w", objectiveID, err)
-	}
-
-	var recipients []domain.AgentSession
-	for _, s := range sessions {
-		switch {
-		case broadcastAddr == "@all":
-			recipients = append(recipients, s)
-		case strings.HasPrefix(broadcastAddr, "@stream:"):
-			targetStreamID := strings.TrimPrefix(broadcastAddr, "@stream:")
-			if s.StreamID == targetStreamID {
-				recipients = append(recipients, s)
-			}
-		case broadcastAddr == "@builders":
-			if s.Role == domain.AgentRoleBuilder {
-				recipients = append(recipients, s)
-			}
-		case broadcastAddr == "@leads":
-			if s.Role == domain.AgentRoleLead {
-				recipients = append(recipients, s)
-			}
-		}
-	}
-
-	for _, recipient := range recipients {
-		msg := &domain.MailMessage{
-			From:      from,
-			To:        recipient.ID,
-			Type:      msgType,
-			Payload:   payload,
-			Objective: objectiveID,
-			Stream:    streamID,
-		}
-		if err := b.mail.Send(ctx, msg); err != nil {
-			b.logger.Error("failed to send broadcast mail", "to", recipient.ID, "broadcast", broadcastAddr, "error", err)
-		}
-	}
-
-	b.eventBus.Publish(domain.Event{
-		Type:      domain.EventMailSent,
-		Objective: objectiveID,
-		Stream:    streamID,
-		Agent:     from,
-		Payload:   fmt.Sprintf(`{"to":%q,"type":%q,"count":%d}`, broadcastAddr, msgType, len(recipients)),
-	})
-
-	return nil
-}
-
-// GetUnread retrieves unread messages for an agent, ordered by creation time.
-// Delegates to MailStore.GetUnread().
+// GetUnread retrieves unread messages for an agent.
 func (b *Broker) GetUnread(ctx context.Context, agentName string) ([]domain.MailMessage, error) {
 	messages, err := b.mail.GetUnread(ctx, agentName)
 	if err != nil {
@@ -148,19 +108,23 @@ func (b *Broker) MarkRead(ctx context.Context, messageID int64) error {
 
 // MarkAllRead marks all unread messages for an agent as read.
 func (b *Broker) MarkAllRead(ctx context.Context, agentName string) error {
-	messages, err := b.mail.GetUnread(ctx, agentName)
-	if err != nil {
-		return fmt.Errorf("getting unread messages for %s: %w", agentName, err)
-	}
-	for _, msg := range messages {
-		if err := b.mail.MarkRead(ctx, msg.ID); err != nil {
-			return fmt.Errorf("marking message %d as read: %w", msg.ID, err)
-		}
+	if _, err := b.mail.MarkAllRead(ctx, agentName); err != nil {
+		return fmt.Errorf("marking all messages for %s as read: %w", agentName, err)
 	}
 	return nil
 }
 
-// IsBroadcast returns true if the address is a broadcast group (@all, @leads, etc).
-func IsBroadcast(addr string) bool {
-	return strings.HasPrefix(addr, "@")
+// List returns messages matching the given filters.
+func (b *Broker) List(ctx context.Context, filters db.MailFilters) ([]domain.MailMessage, error) {
+	messages, err := b.mail.List(ctx, filters)
+	if err != nil {
+		return nil, fmt.Errorf("listing mail: %w", err)
+	}
+	return messages, nil
+}
+
+// computeDedupKey creates a deterministic key for escalation dedup.
+func computeDedupKey(subject, streamID string) string {
+	h := sha256.Sum256([]byte(subject + "\x00" + streamID))
+	return fmt.Sprintf("%x", h[:16])
 }

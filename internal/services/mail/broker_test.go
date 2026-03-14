@@ -44,7 +44,8 @@ func TestSend_PersistedAndEventPublished(t *testing.T) {
 	defer unsub()
 
 	msg := &domain.MailMessage{
-		From: "alice", To: "bob", Type: "note", Payload: "hello", Objective: "obj-1",
+		From: "alice", To: "bob", Subject: "hello", Body: "hi there",
+		Type: "message", Objective: "obj-1",
 	}
 	if err := f.broker.Send(ctx, msg); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -69,135 +70,27 @@ func TestSend_PersistedAndEventPublished(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 unread message, got %d", len(msgs))
 	}
-	if msgs[0].From != "alice" {
-		t.Errorf("From = %q, want alice", msgs[0].From)
+	if msgs[0].Subject != "hello" {
+		t.Errorf("Subject = %q, want hello", msgs[0].Subject)
 	}
 }
 
-func TestSendBroadcast_All(t *testing.T) {
-	f := setupBroker(t)
-	ctx := context.Background()
-
-	objID := "obj-all"
-	roles := []domain.AgentRole{domain.AgentRoleLead, domain.AgentRoleBuilder, domain.AgentRolePlanner}
-	var sessions []*domain.AgentSession
-	for _, role := range roles {
-		sess := &domain.AgentSession{ObjectiveID: objID, Role: role}
-		if err := f.agentStore.Create(ctx, sess); err != nil {
-			t.Fatalf("Create agent: %v", err)
-		}
-		sessions = append(sessions, sess)
-	}
-
-	if err := f.broker.SendBroadcast(ctx, "sender", "@all", "note", "hi", objID, ""); err != nil {
-		t.Fatalf("SendBroadcast: %v", err)
-	}
-
-	for _, sess := range sessions {
-		msgs, err := f.broker.GetUnread(ctx, sess.ID)
-		if err != nil {
-			t.Fatalf("GetUnread(%s): %v", sess.ID, err)
-		}
-		if len(msgs) != 1 {
-			t.Errorf("agent %s (%s): expected 1 message, got %d", sess.ID, sess.Role, len(msgs))
-		}
-	}
-}
-
-func TestSendBroadcast_Stream(t *testing.T) {
-	f := setupBroker(t)
-	ctx := context.Background()
-
-	objID := "obj-stream"
-	targetStream := "stream-abc"
-	otherStream := "stream-xyz"
-
-	inStream := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleBuilder, StreamID: targetStream}
-	outOfStream := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleBuilder, StreamID: otherStream}
-	f.agentStore.Create(ctx, inStream)
-	f.agentStore.Create(ctx, outOfStream)
-
-	if err := f.broker.SendBroadcast(ctx, "sender", "@stream:"+targetStream, "note", "hi", objID, targetStream); err != nil {
-		t.Fatalf("SendBroadcast: %v", err)
-	}
-
-	in, _ := f.broker.GetUnread(ctx, inStream.ID)
-	if len(in) != 1 {
-		t.Errorf("in-stream agent: expected 1 message, got %d", len(in))
-	}
-	out, _ := f.broker.GetUnread(ctx, outOfStream.ID)
-	if len(out) != 0 {
-		t.Errorf("out-of-stream agent: expected 0 messages, got %d", len(out))
-	}
-}
-
-func TestSendBroadcast_Leads(t *testing.T) {
-	f := setupBroker(t)
-	ctx := context.Background()
-
-	objID := "obj-leads"
-	lead := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleLead}
-	builder := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleBuilder}
-	f.agentStore.Create(ctx, lead)
-	f.agentStore.Create(ctx, builder)
-
-	if err := f.broker.SendBroadcast(ctx, "sender", "@leads", "note", "hi", objID, ""); err != nil {
-		t.Fatalf("SendBroadcast: %v", err)
-	}
-
-	leadMsgs, _ := f.broker.GetUnread(ctx, lead.ID)
-	if len(leadMsgs) != 1 {
-		t.Errorf("lead: expected 1 message, got %d", len(leadMsgs))
-	}
-	builderMsgs, _ := f.broker.GetUnread(ctx, builder.ID)
-	if len(builderMsgs) != 0 {
-		t.Errorf("builder: expected 0 messages (leads only), got %d", len(builderMsgs))
-	}
-}
-
-func TestSendBroadcast_BuildersMatchesBuilderRole(t *testing.T) {
-	f := setupBroker(t)
-	ctx := context.Background()
-
-	objID := "obj-builders"
-	builder := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleBuilder}
-	lead := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleLead}
-	if err := f.agentStore.Create(ctx, builder); err != nil {
-		t.Fatalf("Create builder: %v", err)
-	}
-	if err := f.agentStore.Create(ctx, lead); err != nil {
-		t.Fatalf("Create lead: %v", err)
-	}
-
-	if err := f.broker.SendBroadcast(ctx, "sender", "@builders", "note", "hi", objID, ""); err != nil {
-		t.Fatalf("SendBroadcast: %v", err)
-	}
-
-	builderMsgs, _ := f.broker.GetUnread(ctx, builder.ID)
-	if len(builderMsgs) != 1 {
-		t.Errorf("builder: expected 1 message, got %d", len(builderMsgs))
-	}
-	leadMsgs, _ := f.broker.GetUnread(ctx, lead.ID)
-	if len(leadMsgs) != 0 {
-		t.Errorf("lead: expected 0 messages (@builders only), got %d", len(leadMsgs))
-	}
-}
-
-func TestSendBroadcast_Human_PublishesEscalationWithoutAgentDelivery(t *testing.T) {
+func TestHumanEscalation_PublishesEventAndStores(t *testing.T) {
 	f := setupBroker(t)
 	ctx := context.Background()
 
 	sub, unsub := f.bus.Subscribe(10)
 	defer unsub()
 
-	objID := "obj-human"
-	agent := &domain.AgentSession{ObjectiveID: objID, Role: domain.AgentRoleBuilder}
-	f.agentStore.Create(ctx, agent)
-
-	if err := f.broker.SendBroadcast(ctx, "sender", "@human", "question", "help?", objID, ""); err != nil {
-		t.Fatalf("SendBroadcast: %v", err)
+	msg := &domain.MailMessage{
+		From: "builder", To: "@human", Subject: "help", Body: "need help",
+		Type: "escalation", Objective: "obj-1", Stream: "stream-1",
+	}
+	if err := f.broker.Send(ctx, msg); err != nil {
+		t.Fatalf("Send: %v", err)
 	}
 
+	// Should publish escalation event
 	select {
 	case ev := <-sub:
 		if ev.Type != domain.EventEscalation {
@@ -207,9 +100,87 @@ func TestSendBroadcast_Human_PublishesEscalationWithoutAgentDelivery(t *testing.
 		t.Error("expected EventEscalation to be published")
 	}
 
-	msgs, _ := f.broker.GetUnread(ctx, agent.ID)
-	if len(msgs) != 0 {
-		t.Errorf("expected 0 messages to agent, got %d", len(msgs))
+	// Escalation should be stored for audit trail
+	if msg.ID == 0 {
+		t.Error("expected escalation to be stored with an ID")
+	}
+}
+
+func TestEscalationDedup_SkipsDuplicate(t *testing.T) {
+	f := setupBroker(t)
+	ctx := context.Background()
+
+	sub, unsub := f.bus.Subscribe(10)
+	defer unsub()
+
+	// Send first escalation
+	msg1 := &domain.MailMessage{
+		From: "builder", To: "@human", Subject: "TS errors blocking gate", Body: "details",
+		Type: "escalation", Objective: "obj-1", Stream: "stream-1",
+	}
+	if err := f.broker.Send(ctx, msg1); err != nil {
+		t.Fatalf("Send first: %v", err)
+	}
+	// Drain the event
+	<-sub
+
+	// Send identical escalation — should be skipped
+	msg2 := &domain.MailMessage{
+		From: "builder", To: "@human", Subject: "TS errors blocking gate", Body: "details again",
+		Type: "escalation", Objective: "obj-1", Stream: "stream-1",
+	}
+	if err := f.broker.Send(ctx, msg2); err != nil {
+		t.Fatalf("Send second: %v", err)
+	}
+
+	// Should NOT have published a second event
+	select {
+	case ev := <-sub:
+		t.Errorf("expected no second event, got %q", ev.Type)
+	default:
+		// Good — no duplicate event
+	}
+
+	// msg2 should not have been stored (ID remains 0)
+	if msg2.ID != 0 {
+		t.Error("expected duplicate escalation to not be stored")
+	}
+}
+
+func TestEscalationDedup_AllowsAfterRead(t *testing.T) {
+	f := setupBroker(t)
+	ctx := context.Background()
+
+	sub, unsub := f.bus.Subscribe(10)
+	defer unsub()
+
+	// Send first escalation
+	msg1 := &domain.MailMessage{
+		From: "builder", To: "@human", Subject: "blocker", Body: "help",
+		Type: "escalation", Objective: "obj-1", Stream: "stream-1",
+	}
+	f.broker.Send(ctx, msg1)
+	<-sub // drain event
+
+	// Mark as read (human has seen it)
+	f.broker.MarkRead(ctx, msg1.ID)
+
+	// Send same escalation again — should go through since the first was read
+	msg2 := &domain.MailMessage{
+		From: "builder", To: "@human", Subject: "blocker", Body: "still blocked",
+		Type: "escalation", Objective: "obj-1", Stream: "stream-1",
+	}
+	if err := f.broker.Send(ctx, msg2); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	select {
+	case ev := <-sub:
+		if ev.Type != domain.EventEscalation {
+			t.Errorf("event type = %q, want escalation", ev.Type)
+		}
+	default:
+		t.Error("expected escalation event after read")
 	}
 }
 
@@ -219,7 +190,10 @@ func TestGetUnread_ReturnsOnlyUnread(t *testing.T) {
 
 	var firstID int64
 	for i := 0; i < 3; i++ {
-		msg := &domain.MailMessage{From: "s", To: "receiver", Type: "note", Payload: "x", Objective: "obj-1"}
+		msg := &domain.MailMessage{
+			From: "s", To: "receiver", Subject: "test", Body: "x",
+			Type: "message", Objective: "obj-1",
+		}
 		f.broker.Send(ctx, msg)
 		if i == 0 {
 			firstID = msg.ID
@@ -240,7 +214,10 @@ func TestMarkRead_UpdatesReadStatus(t *testing.T) {
 	f := setupBroker(t)
 	ctx := context.Background()
 
-	msg := &domain.MailMessage{From: "a", To: "b", Type: "note", Payload: "x", Objective: "obj-1"}
+	msg := &domain.MailMessage{
+		From: "a", To: "b", Subject: "test", Body: "x",
+		Type: "message", Objective: "obj-1",
+	}
 	f.broker.Send(ctx, msg)
 
 	if err := f.broker.MarkRead(ctx, msg.ID); err != nil {
@@ -258,7 +235,10 @@ func TestMarkAllRead_MarksAllAgentMessages(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 5; i++ {
-		msg := &domain.MailMessage{From: "a", To: "all-agent", Type: "note", Payload: "x", Objective: "obj-1"}
+		msg := &domain.MailMessage{
+			From: "a", To: "all-agent", Subject: "test", Body: "x",
+			Type: "message", Objective: "obj-1",
+		}
 		f.broker.Send(ctx, msg)
 	}
 
@@ -272,24 +252,27 @@ func TestMarkAllRead_MarksAllAgentMessages(t *testing.T) {
 	}
 }
 
-func TestIsBroadcast_CorrectlyIdentifiesAddresses(t *testing.T) {
-	cases := []struct {
-		addr string
-		want bool
-	}{
-		{"@all", true},
-		{"@leads", true},
-		{"@human", true},
-		{"@stream:abc-123", true},
-		{"@builders", true},
-		{"agent-id-123", false},
-		{"specific-name", false},
-		{"", false},
+func TestGetUnread_PriorityOrdering(t *testing.T) {
+	f := setupBroker(t)
+	ctx := context.Background()
+
+	priorities := []string{"low", "normal", "high", "urgent"}
+	for _, p := range priorities {
+		msg := &domain.MailMessage{
+			From: "s", To: "r", Subject: p, Body: p,
+			Type: "message", Priority: p, Objective: "obj-1",
+		}
+		f.broker.Send(ctx, msg)
 	}
-	for _, tc := range cases {
-		got := IsBroadcast(tc.addr)
-		if got != tc.want {
-			t.Errorf("IsBroadcast(%q) = %v, want %v", tc.addr, got, tc.want)
+
+	msgs, _ := f.broker.GetUnread(ctx, "r")
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	}
+	expected := []string{"urgent", "high", "normal", "low"}
+	for i, exp := range expected {
+		if msgs[i].Priority != exp {
+			t.Errorf("msgs[%d].Priority = %q, want %q", i, msgs[i].Priority, exp)
 		}
 	}
 }

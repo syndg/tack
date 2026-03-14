@@ -1,21 +1,27 @@
 /**
  * Deck Agent Pi Extension
  *
+ * Runtime adapter for the agent orchestration protocol.
+ * Handles escalation, task completion, and file scope enforcement.
+ *
  * Hooks:
- *   - context: Injects unread mail into context before each LLM call
- *   - tool_call: Enforces file scope from DECK_FILE_SCOPE env var
- *   - agent_end: Cleanup/reporting
+ *   - tool_call:  Enforces file scope from DECK_FILE_SCOPE env var
  *
  * Tools:
- *   - deck_mail_send: Send mail to another agent or @human
- *   - deck_status: Report status via mail to @human
- *   - deck_escalate: Escalate to @lead or custom target
- *   - deck_done: Signal task completion
+ *   - deck_escalate:   Escalate an issue to the human operator
+ *   - deck_done:       Task completion signal
  */
+
+import { Type } from "@sinclair/typebox";
+
+// --- Environment ---
 
 const DAEMON_URL = process.env.DECK_DAEMON_URL ?? "http://127.0.0.1:9800";
 const AGENT_TOKEN = process.env.DECK_AGENT_TOKEN ?? "";
 const AGENT_NAME = process.env.DECK_AGENT_NAME ?? "unknown";
+const AGENT_ROLE = process.env.DECK_AGENT_ROLE ?? "";
+const OBJECTIVE_ID = process.env.DECK_OBJECTIVE_ID ?? "";
+const STREAM_ID = process.env.DECK_STREAM_ID ?? "";
 const FILE_SCOPE = (process.env.DECK_FILE_SCOPE ?? "")
   .split(",")
   .map((s) => s.trim())
@@ -56,223 +62,156 @@ function matchesScope(filePath: string, patterns: string[]): boolean {
   return false;
 }
 
-// --- Hooks ---
+// --- Extension Factory ---
 
-export const hooks = {
-  /**
-   * Fetch unread mail and inject into context before each LLM call.
-   */
-  async context(): Promise<string | null> {
-    try {
-      const resp = await deckFetch(`/mail/${AGENT_NAME}/unread`);
-      if (!resp.ok) return null;
-      const messages = await resp.json();
-      if (!Array.isArray(messages) || messages.length === 0) return null;
+export default function deckExtension(pi: any) {
+  // --- Lifecycle Hooks ---
 
-      const mailBlock = messages
-        .map(
-          (m: { from: string; content: string; type?: string }) =>
-            `[Mail from ${m.from}${m.type ? ` (${m.type})` : ""}]: ${m.content}`
-        )
-        .join("\n");
+  // Planner system prompt augmentation
+  pi.on(
+    "before_agent_start",
+    async (event: { prompt: string; systemPrompt: string }) => {
+      let systemPrompt = event.systemPrompt;
+      if (AGENT_ROLE === "planner") {
+        systemPrompt +=
+          `\n\n## CRITICAL: Output Format
+Your final response MUST contain a YAML plan inside a fenced code block. Use exactly this format:
 
-      return `\n--- Unread Mail ---\n${mailBlock}\n--- End Mail ---\n`;
-    } catch {
-      return null;
-    }
-  },
+\`\`\`yaml
+streams:
+  - title: "stream name"
+    description: "what this stream does"
+    file_scope:
+      - "src/path/**"
+    dependencies: []
+quality_gates:
+  - "command to validate"
+\`\`\`
 
-  /**
-   * Enforce file scope: block write/edit operations outside allowed paths.
-   */
-  async tool_call(tool: {
-    name: string;
-    args: Record<string, unknown>;
-  }): Promise<{ allow: boolean; reason?: string }> {
-    if (FILE_SCOPE.length === 0) return { allow: true };
-
-    const writeTools = ["Write", "Edit", "write", "edit", "file_write", "file_edit"];
-    if (!writeTools.includes(tool.name)) return { allow: true };
-
-    const filePath =
-      (tool.args.file_path as string) ??
-      (tool.args.path as string) ??
-      (tool.args.file as string) ??
-      "";
-    if (!filePath) return { allow: true };
-
-    if (!matchesScope(filePath, FILE_SCOPE)) {
-      return {
-        allow: false,
-        reason: `File ${filePath} is outside allowed scope: ${FILE_SCOPE.join(", ")}`,
-      };
-    }
-
-    return { allow: true };
-  },
-
-  /**
-   * Cleanup hook when agent ends.
-   */
-  async agent_end(result: {
-    success: boolean;
-    summary?: string;
-  }): Promise<void> {
-    try {
-      await deckFetch("/mail", {
-        method: "POST",
-        body: JSON.stringify({
-          from: AGENT_NAME,
-          to: "@human",
-          content: result.success
-            ? `Agent completed: ${result.summary ?? "done"}`
-            : `Agent failed: ${result.summary ?? "unknown error"}`,
-          type: "status",
-        }),
-      });
-    } catch {
-      // Best-effort cleanup
-    }
-  },
-};
-
-// --- Tools ---
-
-export const tools = {
-  /**
-   * Send mail to another agent or @human.
-   */
-  deck_mail_send: {
-    description: "Send a message to another agent or @human via the Deck mail system",
-    parameters: {
-      type: "object",
-      properties: {
-        to: {
-          type: "string",
-          description: "Recipient agent name or @human",
-        },
-        content: {
-          type: "string",
-          description: "Message content",
-        },
-        type: {
-          type: "string",
-          enum: ["message", "status", "escalation", "question"],
-          description: "Message type (default: message)",
-        },
-      },
-      required: ["to", "content"],
-    },
-    async execute(args: { to: string; content: string; type?: string }) {
-      const resp = await deckFetch("/mail", {
-        method: "POST",
-        body: JSON.stringify({
-          from: AGENT_NAME,
-          to: args.to,
-          content: args.content,
-          type: args.type ?? "message",
-        }),
-      });
-      if (!resp.ok) {
-        const body = await resp.text();
-        throw new Error(`Failed to send mail: ${resp.status} ${body}`);
+You may include analysis and reasoning text before the YAML block, but the YAML block is REQUIRED and must be valid YAML matching the schema above. The orchestrator parses this block to create the execution plan.`;
       }
-      return { success: true, message: `Mail sent to ${args.to}` };
-    },
-  },
 
-  /**
-   * Report status to @human.
-   */
-  deck_status: {
-    description: "Report current status to @human",
-    parameters: {
-      type: "object",
-      properties: {
-        message: {
-          type: "string",
-          description: "Status message",
-        },
-      },
-      required: ["message"],
-    },
-    async execute(args: { message: string }) {
-      const resp = await deckFetch("/mail", {
-        method: "POST",
-        body: JSON.stringify({
-          from: AGENT_NAME,
-          to: "@human",
-          content: args.message,
-          type: "status",
-        }),
-      });
-      if (!resp.ok) {
-        throw new Error(`Failed to send status: ${resp.status}`);
+      return { systemPrompt };
+    }
+  );
+
+  // Enforce file scope: block write/edit operations outside allowed paths
+  pi.on(
+    "tool_call",
+    async (event: { toolName: string; input: Record<string, unknown> }) => {
+      if (FILE_SCOPE.length === 0) return;
+
+      const writeTools = [
+        "bash",
+        "write",
+        "edit",
+        "Write",
+        "Edit",
+        "file_write",
+        "file_edit",
+      ];
+      if (!writeTools.includes(event.toolName)) return;
+
+      const filePath =
+        (event.input.file_path as string) ??
+        (event.input.path as string) ??
+        (event.input.file as string) ??
+        "";
+      if (!filePath) return;
+
+      if (!matchesScope(filePath, FILE_SCOPE)) {
+        return {
+          block: true,
+          reason: `File ${filePath} is outside allowed scope: ${FILE_SCOPE.join(", ")}`,
+        };
       }
-      return { success: true };
-    },
-  },
+    }
+  );
 
-  /**
-   * Escalate to @lead or a custom target.
-   */
-  deck_escalate: {
+  // --- Tools ---
+
+  // deck_escalate: Escalate an issue to the human operator
+  pi.registerTool({
+    name: "deck_escalate",
+    label: "Deck Escalate",
     description:
-      "Escalate an issue to the lead agent or a specific target",
-    parameters: {
-      type: "object",
-      properties: {
-        reason: {
-          type: "string",
-          description: "Reason for escalation",
-        },
-        to: {
-          type: "string",
-          description: "Escalation target (default: @lead)",
-        },
-      },
-      required: ["reason"],
-    },
-    async execute(args: { reason: string; to?: string }) {
-      const target = args.to ?? "@lead";
+      "Escalate an issue to the human operator. Use when you encounter a blocker " +
+      "that you cannot resolve within your file scope.",
+    parameters: Type.Object({
+      reason: Type.String({ description: "Reason for escalation" }),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: { reason: string }
+    ) {
       const resp = await deckFetch("/mail", {
         method: "POST",
         body: JSON.stringify({
           from: AGENT_NAME,
-          to: target,
-          content: `ESCALATION: ${args.reason}`,
+          to: "@human",
+          subject: "Escalation",
+          body: params.reason,
           type: "escalation",
+          priority: "high",
+          objective: OBJECTIVE_ID,
+          stream: STREAM_ID,
         }),
       });
       if (!resp.ok) {
-        throw new Error(`Failed to escalate: ${resp.status}`);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Failed to escalate: ${resp.status}`,
+            },
+          ],
+          isError: true,
+        };
       }
-      return { success: true, escalated_to: target };
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Escalated to human: ${params.reason}`,
+          },
+        ],
+      };
     },
-  },
+  });
 
-  /**
-   * Signal task completion.
-   */
-  deck_done: {
+  // deck_done: Task completion signal
+  pi.registerTool({
+    name: "deck_done",
+    label: "Deck Done",
     description: "Signal that the current task is complete",
-    parameters: {
-      type: "object",
-      properties: {
-        summary: {
-          type: "string",
-          description: "Summary of what was accomplished",
-        },
-      },
-      required: ["summary"],
-    },
-    async execute(args: { summary: string }) {
-      // Signal completion via Pi's notify mechanism
-      // The DECK_DONE: prefix is detected by the Go process handler
-      if (typeof globalThis !== "undefined" && (globalThis as any).pi?.ui?.notify) {
-        (globalThis as any).pi.ui.notify(`DECK_DONE:${args.summary}`);
+    promptGuidelines: [
+      "Call deck_done when you have finished your assigned task to signal completion to the orchestrator.",
+    ],
+    parameters: Type.Object({
+      summary: Type.String({
+        description: "Summary of what was accomplished",
+      }),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: { summary: string },
+      _signal: any,
+      _onUpdate: any,
+      ctx: any
+    ) {
+      // Use Pi's notify to signal completion — the DECK_DONE: prefix is
+      // detected by the Go process handler via JSONL events.
+      if (ctx?.ui?.notify) {
+        ctx.ui.notify(`DECK_DONE:${params.summary}`);
       }
-      return { success: true, summary: args.summary };
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Task complete: ${params.summary}`,
+          },
+        ],
+      };
     },
-  },
-};
+  });
+}
