@@ -21,8 +21,9 @@ type Config struct {
 }
 
 type DaemonConfig struct {
-	Listen  string `yaml:"listen"`
-	DataDir string `yaml:"data_dir"`
+	Listen     string `yaml:"listen"`
+	DataDir    string `yaml:"data_dir"`
+	BaseBranch string `yaml:"base_branch"`
 }
 
 type SandboxConfig struct {
@@ -30,6 +31,7 @@ type SandboxConfig struct {
 	DefaultResources  ResourceConfig `yaml:"default_resources"`
 	AutoStopMinutes   int            `yaml:"auto_stop_interval"`
 	AutoDeleteMinutes int            `yaml:"auto_delete_interval"`
+	PostCreate        []string       `yaml:"post_create"` // commands to run after worktree/sandbox creation
 	Daytona           DaytonaConfig  `yaml:"daytona"`
 }
 
@@ -46,12 +48,50 @@ type ResourceConfig struct {
 }
 
 type AgentsConfig struct {
-	Runtime            string   `yaml:"runtime"`
-	MaxConcurrent      int      `yaml:"max_concurrent"`
-	MaxDepth           int      `yaml:"max_depth"`
-	StaggerDelayMs     int      `yaml:"stagger_delay_ms"`
-	IdleTimeoutMinutes int      `yaml:"idle_timeout_minutes"`
-	Pi                 PiConfig `yaml:"pi"`
+	Runtime            string         `yaml:"runtime"`
+	MaxConcurrent      int            `yaml:"max_concurrent"`
+	MaxDepth           int            `yaml:"max_depth"`
+	StaggerDelayMs     int            `yaml:"stagger_delay_ms"`
+	IdleTimeoutMinutes int            `yaml:"idle_timeout_minutes"`
+	Timeouts           TimeoutConfig  `yaml:"timeouts"`
+	Pi                 PiConfig       `yaml:"pi"`
+}
+
+// TimeoutConfig holds per-role timeout settings.
+type TimeoutConfig struct {
+	Default  RoleTimeout `yaml:"default"`
+	Planner  RoleTimeout `yaml:"planner"`
+	Builder  RoleTimeout `yaml:"builder"`
+	Reviewer RoleTimeout `yaml:"reviewer"`
+	Scout    RoleTimeout `yaml:"scout"`
+}
+
+// RoleTimeout holds timeout settings for a specific role.
+type RoleTimeout struct {
+	MaxDurationMinutes int `yaml:"max_duration_minutes"`
+	IdleMinutes        int `yaml:"idle_minutes"`
+}
+
+// GetTimeout returns the effective timeout for a role, falling back to defaults.
+func (t *TimeoutConfig) GetTimeout(role string) RoleTimeout {
+	var rt RoleTimeout
+	switch role {
+	case "planner":
+		rt = t.Planner
+	case "builder":
+		rt = t.Builder
+	case "reviewer":
+		rt = t.Reviewer
+	case "scout":
+		rt = t.Scout
+	}
+	if rt.MaxDurationMinutes == 0 {
+		rt.MaxDurationMinutes = t.Default.MaxDurationMinutes
+	}
+	if rt.IdleMinutes == 0 {
+		rt.IdleMinutes = t.Default.IdleMinutes
+	}
+	return rt
 }
 
 type PiConfig struct {
@@ -104,8 +144,9 @@ func Load(path string) (*Config, error) {
 func Default() *Config {
 	return &Config{
 		Daemon: DaemonConfig{
-			Listen:  "0.0.0.0:9800",
-			DataDir: "~/.deck/data",
+			Listen:     "0.0.0.0:9800",
+			DataDir:    "~/.deck/data",
+			BaseBranch: "main",
 		},
 		Sandbox: SandboxConfig{
 			Provider: "daytona",
@@ -123,6 +164,9 @@ func Default() *Config {
 			MaxDepth:           2,
 			StaggerDelayMs:     500,
 			IdleTimeoutMinutes: 15,
+			Timeouts: TimeoutConfig{
+				Default: RoleTimeout{MaxDurationMinutes: 30, IdleMinutes: 10},
+			},
 		},
 		Planning: PlanningConfig{
 			DefaultMode: "collaborative",

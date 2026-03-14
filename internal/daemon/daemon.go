@@ -23,6 +23,7 @@ import (
 	"github.com/syndg/deck/internal/sandbox"
 	"github.com/syndg/deck/internal/sandbox/daytona"
 	"github.com/syndg/deck/internal/sandbox/local"
+	"github.com/syndg/deck/internal/services/agents"
 	"github.com/syndg/deck/internal/services/dispatch"
 	"github.com/syndg/deck/internal/services/events"
 	"github.com/syndg/deck/internal/services/lifecycle"
@@ -187,7 +188,9 @@ func New(cfg *config.Config) (*Daemon, error) {
 			// Fall back to local if no API key
 			logger.Warn("daytona provider configured but no API key found, falling back to local")
 			worktreeDir := filepath.Join(os.TempDir(), "deck-worktrees")
-			sandboxProv = local.New(projectRoot, worktreeDir, logger)
+			lp := local.New(projectRoot, worktreeDir, logger)
+			lp.SetPostCreate(cfg.Sandbox.PostCreate)
+			sandboxProv = lp
 		} else {
 			dp, err := daytona.New(daytona.Config{
 				APIKey:   apiKey,
@@ -202,7 +205,9 @@ func New(cfg *config.Config) (*Daemon, error) {
 		}
 	default: // "local"
 		worktreeDir := filepath.Join(os.TempDir(), "deck-worktrees")
-		sandboxProv = local.New(projectRoot, worktreeDir, logger)
+		lp := local.New(projectRoot, worktreeDir, logger)
+		lp.SetPostCreate(cfg.Sandbox.PostCreate)
+		sandboxProv = lp
 	}
 
 	// Create agent runtime based on config.
@@ -239,12 +244,20 @@ func New(cfg *config.Config) (*Daemon, error) {
 	)
 
 	// Create step handlers and register deterministic + human types.
-	handlers := dispatch.NewHandlers(scheduler, gateRun, lifecycleMgr, mergeProcessor, planStore, streamStore, objectiveStore, executionStore, agentStore, sandboxProv, eventBus, logger)
+	handlers := dispatch.NewHandlers(scheduler, gateRun, lifecycleMgr, mergeProcessor, planStore, streamStore, objectiveStore, executionStore, agentStore, sandboxProv, eventBus, cfg.Daemon.BaseBranch, logger)
 	bpEngine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
 	bpEngine.RegisterHandler(blueprint.StepTypeHuman, handlers.HandleHuman)
 
+	// Create activity logger for agent event tracking.
+	activityLogDir := filepath.Join(cfg.Daemon.DataDir, "activity")
+	activityLogger, err := agents.NewActivityLogger(activityLogDir, logger)
+	if err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("creating activity logger: %w", err)
+	}
+
 	// Create coordinator.
-	coordinator := dispatch.NewCoordinator(bpEngine, scheduler, spawner, lifecycleMgr, mergeProcessor, executionStore, objectiveStore, planStore, streamStore, eventBus, logger)
+	coordinator := dispatch.NewCoordinator(bpEngine, scheduler, spawner, lifecycleMgr, mergeProcessor, planningService, executionStore, objectiveStore, planStore, streamStore, eventBus, activityLogger, cfg.Agents.Timeouts, logger)
 	bpEngine.RegisterHandler(blueprint.StepTypeAgent, coordinator.HandleAgentStep)
 	bpEngine.RegisterHandler(blueprint.StepTypeBlueprintRef, coordinator.HandleBlueprintRefStep)
 

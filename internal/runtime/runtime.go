@@ -36,8 +36,9 @@ type AgentMessage struct {
 }
 
 type AgentEvent struct {
-	Type    string `json:"type"` // "output", "tool_call", "error"
+	Type    string `json:"type"` // "output", "tool_call", "tool_end", "error"
 	Content string `json:"content"`
+	IsError bool   `json:"is_error,omitempty"`
 }
 
 type AgentResult struct {

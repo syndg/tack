@@ -10,9 +10,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/syndg/deck/internal/config"
 	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
 	"github.com/syndg/deck/internal/harness/blueprint"
+	"github.com/syndg/deck/internal/runtime"
 	"github.com/syndg/deck/internal/sandbox"
 	"github.com/syndg/deck/internal/services/agents"
 	events "github.com/syndg/deck/internal/services/events"
@@ -24,26 +26,35 @@ type MergeEnqueuer interface {
 	EnqueueStream(ctx context.Context, streamID string) error
 }
 
+// PlanCreator creates a plan from planner agent output.
+type PlanCreator interface {
+	CreatePlan(ctx context.Context, objectiveID string, agentOutput string) (*domain.Plan, error)
+}
+
 // Coordinator orchestrates objective execution from plan approval to completion.
 // It subscribes to events and drives blueprint execution.
 type Coordinator struct {
-	engine        *blueprint.Engine
-	scheduler     *Scheduler
-	spawner       *Spawner
-	lifecycle     *lifecycle.Manager
-	mergeEnqueuer MergeEnqueuer
-	executions    *db.ExecutionStore
-	objectives    *db.ObjectiveStore
-	plans         *db.PlanStore
-	streams       *db.StreamStore
-	eventBus      *events.PersistentBus
-	logger        *slog.Logger
+	engine         *blueprint.Engine
+	scheduler      *Scheduler
+	spawner        *Spawner
+	lifecycle      *lifecycle.Manager
+	mergeEnqueuer  MergeEnqueuer
+	planCreator    PlanCreator
+	executions     *db.ExecutionStore
+	objectives     *db.ObjectiveStore
+	plans          *db.PlanStore
+	streams        *db.StreamStore
+	eventBus       *events.PersistentBus
+	activityLogger *agents.ActivityLogger
+	timeouts       config.TimeoutConfig
+	logger         *slog.Logger
 
 	ctx         context.Context // set in Start(); used as parent for execution goroutines
 	mu          sync.Mutex
 	activeExecs map[string]context.CancelFunc // objectiveID → cancel
 	agentMap    map[string]*SpawnResult       // sessionID → spawn result
 	terminated  map[string]bool               // sessionID → explicitly killed
+	idleTimers  map[string]*time.Timer        // sessionID → idle timeout timer
 }
 
 // NewCoordinator creates a new Coordinator and registers step handlers with the engine.
@@ -53,28 +64,35 @@ func NewCoordinator(
 	spawner *Spawner,
 	lc *lifecycle.Manager,
 	mergeEnqueuer MergeEnqueuer,
+	planCreator PlanCreator,
 	executions *db.ExecutionStore,
 	objectives *db.ObjectiveStore,
 	plans *db.PlanStore,
 	streams *db.StreamStore,
 	eventBus *events.PersistentBus,
+	activityLogger *agents.ActivityLogger,
+	timeouts config.TimeoutConfig,
 	logger *slog.Logger,
 ) *Coordinator {
 	c := &Coordinator{
-		engine:        engine,
-		scheduler:     scheduler,
-		spawner:       spawner,
-		lifecycle:     lc,
-		mergeEnqueuer: mergeEnqueuer,
-		executions:    executions,
-		objectives:    objectives,
-		plans:         plans,
-		streams:       streams,
-		eventBus:      eventBus,
-		logger:        logger,
-		activeExecs:   make(map[string]context.CancelFunc),
-		agentMap:      make(map[string]*SpawnResult),
-		terminated:    make(map[string]bool),
+		engine:         engine,
+		scheduler:      scheduler,
+		spawner:        spawner,
+		lifecycle:      lc,
+		mergeEnqueuer:  mergeEnqueuer,
+		planCreator:    planCreator,
+		executions:     executions,
+		objectives:     objectives,
+		plans:          plans,
+		streams:        streams,
+		eventBus:       eventBus,
+		activityLogger: activityLogger,
+		timeouts:       timeouts,
+		logger:         logger,
+		activeExecs:    make(map[string]context.CancelFunc),
+		agentMap:       make(map[string]*SpawnResult),
+		terminated:     make(map[string]bool),
+		idleTimers:     make(map[string]*time.Timer),
 	}
 
 	return c
@@ -98,8 +116,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 					return
 				}
 				switch event.Type {
-				case domain.EventObjectiveUpdated:
-					c.handleObjectiveUpdated(ctx, event)
+				case domain.EventObjectiveCreated:
+					c.handleObjectiveCreated(ctx, event)
 				case domain.EventMergeCompleted:
 					// After a merge completes, check if a partial objective
 					// can now be upgraded to completed (retry path).
@@ -215,26 +233,18 @@ func (c *Coordinator) ResumeExecution(exec *blueprint.Execution) {
 	go c.runExecution(execCtx, exec)
 }
 
-// handleObjectiveUpdated processes EventObjectiveUpdated events.
-// Triggers StartExecution when an objective transitions to "approved".
-func (c *Coordinator) handleObjectiveUpdated(ctx context.Context, event domain.Event) {
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
-		c.logger.Error("failed to parse objective updated payload", "error", err)
-		return
-	}
-
-	if payload["to"] != string(domain.ObjectiveStatusApproved) {
-		return
-	}
-
+// handleObjectiveCreated processes EventObjectiveCreated events.
+// Every objective starts its blueprint execution immediately — the blueprint
+// is the source of truth. If it has a plan step, the planner agent runs.
+// If it has an approve step, execution pauses for human review.
+func (c *Coordinator) handleObjectiveCreated(ctx context.Context, event domain.Event) {
 	if event.Objective == "" {
 		return
 	}
 
 	go func() {
 		if err := c.StartExecution(ctx, event.Objective); err != nil {
-			c.logger.Error("failed to start execution after approval",
+			c.logger.Error("failed to start execution for new objective",
 				"objective_id", event.Objective,
 				"error", err,
 			)
@@ -242,51 +252,48 @@ func (c *Coordinator) handleObjectiveUpdated(ctx context.Context, event domain.E
 	}()
 }
 
-// StartExecution begins blueprint execution for an approved objective.
-//  1. Fetch objective, verify status is "approved"
-//  2. Fetch plan for the objective
-//  3. Determine blueprint name (from objective.Blueprint, default to "feature")
-//  4. Create execution via engine.Start(blueprintName, objectiveID)
-//  5. Transition objective to "executing" via lifecycle
-//  6. Run the execution loop in a goroutine
+// StartExecution begins blueprint execution for an objective.
+// The blueprint is the source of truth — all steps run in order, including
+// planner agents and human approval gates. No steps are skipped.
+//
+//  1. Fetch objective, verify it's in a startable state (planning or approved)
+//  2. Determine blueprint name (from objective.Blueprint, default to "feature")
+//  3. Create execution via engine.Start(blueprintName, objectiveID)
+//  4. Transition objective to "executing" via lifecycle
+//  5. Run the execution loop in a goroutine
 func (c *Coordinator) StartExecution(ctx context.Context, objectiveID string) error {
-	// 1. Fetch objective and verify status is "approved".
+	// 1. Fetch objective and verify it's startable.
 	obj, err := c.objectives.Get(ctx, objectiveID)
 	if err != nil {
 		return fmt.Errorf("getting objective %s: %w", objectiveID, err)
 	}
-	if obj.Status != domain.ObjectiveStatusApproved {
-		return fmt.Errorf("objective %s is not approved (status: %s)", objectiveID, obj.Status)
+	if obj.Status != domain.ObjectiveStatusPlanning && obj.Status != domain.ObjectiveStatusApproved {
+		return fmt.Errorf("objective %s cannot start execution (status: %s)", objectiveID, obj.Status)
 	}
 
-	// 2. Fetch plan for the objective.
-	plan, err := c.plans.GetByObjective(ctx, objectiveID)
-	if err != nil {
-		return fmt.Errorf("getting plan for objective %s: %w", objectiveID, err)
-	}
-
-	// 3. Determine blueprint name, defaulting to the shipped feature blueprint.
+	// 2. Determine blueprint name, defaulting to the shipped feature blueprint.
 	blueprintName := obj.Blueprint
 	if blueprintName == "" {
 		blueprintName = "Feature Implementation"
 	}
 
-	// 4. Create execution via engine.Start.
+	// 3. Create execution via engine.Start — all blueprint steps run in order.
 	exec, err := c.engine.Start(ctx, blueprintName, objectiveID)
 	if err != nil {
 		return fmt.Errorf("starting blueprint execution for objective %s: %w", objectiveID, err)
 	}
-	c.prepareExecutionForApprovedObjective(exec)
 	if err := c.executions.Create(ctx, exec); err != nil {
 		return fmt.Errorf("persisting execution for objective %s: %w", objectiveID, err)
 	}
 
-	// 5. Transition objective and plan to executing.
+	// 4. Transition objective to executing.
 	if err := c.lifecycle.Transition(ctx, objectiveID, domain.ObjectiveStatusExecuting); err != nil {
 		return fmt.Errorf("transitioning objective %s to executing: %w", objectiveID, err)
 	}
-	if err := c.plans.UpdateStatus(ctx, plan.ID, domain.PlanStatusExecuting); err != nil {
-		return fmt.Errorf("transitioning plan %s to executing: %w", plan.ID, err)
+
+	// If a plan already exists (e.g. simple mode), also transition it.
+	if plan, err := c.plans.GetByObjective(ctx, objectiveID); err == nil {
+		_ = c.plans.UpdateStatus(ctx, plan.ID, domain.PlanStatusExecuting)
 	}
 
 	// Publish EventExecutionStarted.
@@ -502,6 +509,9 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		"execution_id", exec.ID,
 	)
 
+	// Drain agent activity events to logger + event bus.
+	c.drainAgentActivity(result.Session, result.Process)
+
 	// Block until agent completes.
 	agentResult, waitErr := result.Process.Wait()
 
@@ -553,6 +563,22 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		}
 	case blueprint.CommitModeNone:
 		// No commit needed.
+	}
+
+	// If this was a planner agent, create the plan from its output.
+	if role == string(domain.AgentRolePlanner) && c.planCreator != nil {
+		plan, err := c.planCreator.CreatePlan(ctx, exec.ObjectiveID, cleanSummary)
+		if err != nil {
+			c.spawner.MarkFailed(ctx, result.Session, fmt.Sprintf("plan creation failed: %s", err))
+			return blueprint.StepResult{
+				Status: blueprint.StepStatusFailed,
+				Error:  fmt.Sprintf("creating plan from planner output: %s", err),
+			}, nil
+		}
+		c.logger.Info("plan created from planner agent",
+			"plan_id", plan.ID,
+			"objective_id", exec.ObjectiveID,
+		)
 	}
 
 	c.spawner.MarkCompleted(ctx, result.Session, cleanSummary)
@@ -1118,6 +1144,9 @@ func (c *Coordinator) spawnAndMonitor(ctx context.Context, req SpawnRequest) (*S
 	delete(c.terminated, result.Session.ID)
 	c.mu.Unlock()
 
+	// Drain agent activity events to logger + event bus.
+	c.drainAgentActivity(result.Session, result.Process)
+
 	go func() {
 		agentResult, waitErr := result.Process.Wait()
 		wasKilled := c.finishTrackedAgent(result.Session.ID)
@@ -1167,38 +1196,6 @@ func (c *Coordinator) finishTrackedAgent(sessionID string) bool {
 	wasKilled := c.terminated[sessionID]
 	delete(c.terminated, sessionID)
 	return wasKilled
-}
-
-func (c *Coordinator) prepareExecutionForApprovedObjective(exec *blueprint.Execution) {
-	bp, ok := c.engine.GetBlueprint(exec.BlueprintName)
-	if !ok || len(bp.Steps) == 0 {
-		return
-	}
-
-	first := bp.Steps[0]
-	if first.Type != blueprint.StepTypeAgent || first.Role != string(domain.AgentRolePlanner) {
-		return
-	}
-
-	now := time.Now()
-	if state := exec.StepStates[first.ID]; state != nil {
-		state.Status = blueprint.StepStatusCompleted
-		state.Error = ""
-	}
-
-	nextID := first.Next
-	if nextID != "" {
-		if step, err := c.engine.GetStepByID(bp, nextID); err == nil && step.Type == blueprint.StepTypeHuman {
-			if state := exec.StepStates[step.ID]; state != nil {
-				state.Status = blueprint.StepStatusCompleted
-				state.Error = ""
-			}
-			nextID = step.Next
-		}
-	}
-
-	exec.CurrentStep = nextID
-	exec.UpdatedAt = now
 }
 
 func (c *Coordinator) singleStreamForObjective(ctx context.Context, objectiveID string) (*domain.Stream, error) {
@@ -1359,6 +1356,9 @@ func (c *Coordinator) completeExecution(ctx context.Context, objectiveID string)
 			}
 		}
 	}
+
+	// Clean up sandboxes and branches for this objective.
+	c.cleanupObjectiveSandboxes(ctx, objectiveID)
 }
 
 func (c *Coordinator) failExecution(ctx context.Context, objectiveID, reason string) {
@@ -1390,4 +1390,145 @@ func (c *Coordinator) failExecution(ctx context.Context, objectiveID, reason str
 			c.logger.Error("failed to transition objective to failed", "objective_id", objectiveID, "reason", reason, "error", err)
 		}
 	}
+
+	// Clean up sandboxes and branches for this objective.
+	c.cleanupObjectiveSandboxes(ctx, objectiveID)
+}
+
+// drainAgentActivity starts a goroutine that reads agent output events and
+// publishes them to the event bus + writes to the activity JSONL log.
+// cleanupObjectiveSandboxes removes all sandboxes and branches for a completed objective.
+// Runs in a background goroutine to avoid blocking the completion flow.
+func (c *Coordinator) cleanupObjectiveSandboxes(ctx context.Context, objectiveID string) {
+	go func() {
+		c.spawner.CleanupObjective(ctx, objectiveID)
+	}()
+}
+
+// Also starts timeout timers (max duration + idle) for the agent.
+// Returns immediately — the goroutine runs until the output channel closes.
+func (c *Coordinator) drainAgentActivity(session *domain.AgentSession, process interface {
+	Output() <-chan runtime.AgentEvent
+	Kill() error
+}) {
+	role := string(session.Role)
+	rt := c.timeouts.GetTimeout(role)
+
+	// Start max duration timer
+	if rt.MaxDurationMinutes > 0 {
+		dur := time.Duration(rt.MaxDurationMinutes) * time.Minute
+		time.AfterFunc(dur, func() {
+			c.mu.Lock()
+			_, stillActive := c.agentMap[session.ID]
+			if stillActive {
+				c.terminated[session.ID] = true
+			}
+			c.mu.Unlock()
+			if stillActive {
+				c.logger.Warn("agent max duration exceeded, killing",
+					"session_id", session.ID,
+					"role", role,
+					"max_minutes", rt.MaxDurationMinutes,
+				)
+				_ = process.Kill()
+			}
+		})
+	}
+
+	// Start idle timer
+	var idleTimer *time.Timer
+	if rt.IdleMinutes > 0 {
+		idleDur := time.Duration(rt.IdleMinutes) * time.Minute
+		idleTimer = time.AfterFunc(idleDur, func() {
+			c.mu.Lock()
+			_, stillActive := c.agentMap[session.ID]
+			if stillActive {
+				c.terminated[session.ID] = true
+			}
+			c.mu.Unlock()
+			if stillActive {
+				c.logger.Warn("agent idle timeout, killing",
+					"session_id", session.ID,
+					"role", role,
+					"idle_minutes", rt.IdleMinutes,
+				)
+				_ = process.Kill()
+			}
+		})
+		c.mu.Lock()
+		c.idleTimers[session.ID] = idleTimer
+		c.mu.Unlock()
+	}
+
+	go func() {
+		for event := range process.Output() {
+			// Reset idle timer on any activity
+			if idleTimer != nil {
+				idleTimer.Reset(time.Duration(rt.IdleMinutes) * time.Minute)
+			}
+
+			kind := event.Type
+			tool := ""
+			switch event.Type {
+			case "tool_call":
+				kind = "tool_start"
+				if idx := strings.Index(event.Content, ": "); idx > 0 {
+					tool = event.Content[:idx]
+				} else {
+					tool = event.Content
+				}
+			case "tool_end":
+				kind = "tool_end"
+				tool = strings.TrimSuffix(event.Content, " (failed)")
+			case "output":
+				kind = "message"
+			case "error":
+				kind = "error"
+			}
+
+			if c.activityLogger != nil {
+				c.activityLogger.Log(agents.ActivityEvent{
+					Timestamp: time.Now(),
+					AgentID:   session.ID,
+					Kind:      kind,
+					Tool:      tool,
+					Content:   event.Content,
+					IsError:   event.IsError,
+				})
+			}
+
+			payload, _ := json.Marshal(map[string]any{
+				"kind":     kind,
+				"tool":     tool,
+				"content":  truncateForEvent(event.Content, 500),
+				"is_error": event.IsError,
+			})
+			c.eventBus.Publish(domain.Event{
+				Type:      domain.EventAgentActivity,
+				Objective: session.ObjectiveID,
+				Stream:    session.StreamID,
+				Agent:     session.ID,
+				Payload:   string(payload),
+				CreatedAt: time.Now(),
+			})
+		}
+
+		// Cleanup: stop idle timer and close log file
+		if idleTimer != nil {
+			idleTimer.Stop()
+			c.mu.Lock()
+			delete(c.idleTimers, session.ID)
+			c.mu.Unlock()
+		}
+		if c.activityLogger != nil {
+			c.activityLogger.CloseAgent(session.ID)
+		}
+	}()
+}
+
+func truncateForEvent(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
