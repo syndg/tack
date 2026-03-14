@@ -75,16 +75,6 @@ func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox
 		return nil, fmt.Errorf("creating git worktree: %w (stderr: %s)", err, stderr.String())
 	}
 
-	// Exclude Deck runtime artifacts from git so auto-commit doesn't include them.
-	// Use the repo's shared info/exclude which is outside the working tree and
-	// won't show up as a change in any worktree.
-	infoExclude := filepath.Join(p.repoRoot, ".git", "info", "exclude")
-	if data, err := os.ReadFile(infoExclude); err == nil {
-		if !strings.Contains(string(data), ".deck-ext") {
-			_ = os.WriteFile(infoExclude, append(data, []byte("\n.deck-ext\n")...), 0o644)
-		}
-	}
-
 	// Copy gitignored files (node_modules, build caches, .env) from main repo.
 	if err := copyIgnoredFiles(p.repoRoot, worktreePath, p.logger); err != nil {
 		p.logger.Warn("copy-ignored failed, continuing", "error", err)

@@ -1162,8 +1162,49 @@ func (c *Coordinator) checkPartialToCompleted(ctx context.Context, objectiveID s
 			c.logger.Info("objective upgraded from partial to completed",
 				"objective_id", objectiveID,
 			)
+			// Re-push the merger branch so the PR reflects the retry results.
+			c.rePushMergerBranch(ctx, objectiveID)
+			c.cleanupObjectiveSandboxes(ctx, objectiveID)
 		}
 	}
+}
+
+// rePushMergerBranch pushes the merger branch to origin after a retry completes.
+// This updates the PR with the new merge results.
+func (c *Coordinator) rePushMergerBranch(ctx context.Context, objectiveID string) {
+	sb, err := c.spawner.FindMergerSandbox(ctx, objectiveID)
+	if err != nil || sb == nil {
+		c.logger.Debug("no merger sandbox found for re-push", "objective", objectiveID)
+		return
+	}
+
+	// Check if origin remote exists
+	remoteCheck, err := sb.Exec(ctx, "git remote get-url origin", sandbox.ExecOpts{})
+	if err != nil || remoteCheck.ExitCode != 0 {
+		return
+	}
+
+	// Get branch and force-push (the branch already exists from the first push)
+	branchResult, err := sb.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
+	if err != nil || branchResult.ExitCode != 0 {
+		return
+	}
+	branch := strings.TrimSpace(branchResult.Stdout)
+
+	pushResult, err := sb.Exec(ctx, fmt.Sprintf("git push -f origin %s", branch), sandbox.ExecOpts{})
+	if err != nil || pushResult.ExitCode != 0 {
+		c.logger.Warn("failed to re-push merger branch after retry",
+			"objective", objectiveID,
+			"branch", branch,
+			"error", pushResult.Stderr,
+		)
+		return
+	}
+
+	c.logger.Info("re-pushed merger branch after retry",
+		"objective", objectiveID,
+		"branch", branch,
+	)
 }
 
 // spawnAndMonitor spawns an agent and launches a background goroutine that waits

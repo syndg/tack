@@ -59,6 +59,18 @@ func (r *Runtime) uploadExtensionToSandbox(ctx context.Context, sb sandbox.Sandb
 			return "", fmt.Errorf("uploading extension file %s: %w", name, err)
 		}
 	}
+
+	// Exclude .deck-ext from git inside the sandbox so auto-commit doesn't
+	// include runtime artifacts. Works for both local worktrees and remote
+	// sandboxes (Daytona). Appends to .git/info/exclude which is outside
+	// the working tree and won't show up as a change.
+	excludeCmd := `mkdir -p "$(git rev-parse --git-dir)/info" && ` +
+		`grep -q '.deck-ext' "$(git rev-parse --git-dir)/info/exclude" 2>/dev/null || ` +
+		`echo '.deck-ext' >> "$(git rev-parse --git-dir)/info/exclude"`
+	if _, err := sb.Exec(ctx, excludeCmd, sandbox.ExecOpts{}); err != nil {
+		r.logger.Warn("failed to add .deck-ext to git exclude", "error", err)
+	}
+
 	return extDir, nil
 }
 

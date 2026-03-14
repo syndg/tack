@@ -366,6 +366,21 @@ func (s *Spawner) Kill(ctx context.Context, sessionID string) error {
 	return nil
 }
 
+// FindMergerSandbox returns the merger sandbox for an objective, if one exists.
+func (s *Spawner) FindMergerSandbox(ctx context.Context, objectiveID string) (sandbox.Sandbox, error) {
+	sandboxes, err := s.sp.List(ctx, map[string]string{
+		"deck.objective": objectiveID,
+		"deck.role":      "merger",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(sandboxes) == 0 {
+		return nil, nil
+	}
+	return sandboxes[0], nil
+}
+
 // CleanupObjective deletes all sandboxes (worktrees + branches) for an objective.
 // Called when the objective reaches a terminal state (completed, partial, failed).
 func (s *Spawner) CleanupObjective(ctx context.Context, objectiveID string) {

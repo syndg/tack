@@ -165,9 +165,19 @@ func (p *PiProcess) handleEvent(event PiEvent) {
 		summary := strings.TrimSpace(p.textBuf.String())
 
 		p.mu.Lock()
-		p.result = runtime.AgentResult{
-			Success: true,
-			Summary: summary,
+		if p.hasError {
+			// RPC or extension errors occurred during this session —
+			// don't mark as success even though agent_end was received.
+			p.result = runtime.AgentResult{
+				Success: false,
+				Summary: summary,
+				Error:   "agent ended with prior errors",
+			}
+		} else {
+			p.result = runtime.AgentResult{
+				Success: true,
+				Summary: summary,
+			}
 		}
 
 		// Check for DECK_DONE signal in accumulated text
