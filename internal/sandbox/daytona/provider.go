@@ -199,8 +199,9 @@ func matchesLabels(target, filter map[string]string) bool {
 	return true
 }
 
-// buildEffectiveCommand prepends env exports to a command when the Daytona
-// toolbox API doesn't support per-command env vars natively.
+// buildEffectiveCommand wraps a command with env exports when the Daytona
+// toolbox API doesn't support per-command env vars natively. The entire
+// command is wrapped in sh -c so exports take effect before the command runs.
 func buildEffectiveCommand(cmd string, opts sandbox.ExecOpts) string {
 	if len(opts.Env) == 0 {
 		return cmd
@@ -209,7 +210,8 @@ func buildEffectiveCommand(cmd string, opts sandbox.ExecOpts) string {
 	for k, v := range opts.Env {
 		exports = append(exports, fmt.Sprintf("export %s=%s", k, shellescape(v)))
 	}
-	return strings.Join(exports, " && ") + " && " + cmd
+	inner := strings.Join(exports, " && ") + " && " + cmd
+	return "sh -c " + shellescape(inner)
 }
 
 // shellescape wraps a value in single quotes for safe shell interpolation.
