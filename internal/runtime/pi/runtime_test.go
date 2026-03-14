@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"testing"
 
@@ -112,20 +111,18 @@ func TestRuntime_Spawn_UploadsExtension(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	// Extension is written to a temp dir (not uploaded to sandbox) for local use.
-	// The --extension flag in the command should point to a temp dir with index.ts.
-	if !strings.Contains(sb.streamCmd, "--extension") {
-		t.Fatalf("command %q should contain --extension flag", sb.streamCmd)
+	// Extension files should be uploaded to the sandbox via sb.Upload.
+	if len(sb.uploaded) == 0 {
+		t.Error("expected extension files to be uploaded to sandbox")
 	}
-	// Extract the extension dir from the command
-	parts := strings.Split(sb.streamCmd, "--extension ")
-	if len(parts) < 2 {
-		t.Fatal("could not parse --extension path from command")
+	foundIndex := false
+	for path := range sb.uploaded {
+		if strings.Contains(path, "index.ts") {
+			foundIndex = true
+		}
 	}
-	extDir := strings.Fields(parts[1])[0]
-	// Verify index.ts exists in the temp dir
-	if _, err := os.Stat(extDir + "/index.ts"); err != nil {
-		t.Errorf("expected index.ts in temp extension dir %s: %v", extDir, err)
+	if !foundIndex {
+		t.Error("expected index.ts to be uploaded")
 	}
 
 	// Check command contains pi --mode rpc

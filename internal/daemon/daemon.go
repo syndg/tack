@@ -257,7 +257,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 	}
 
 	// Create coordinator.
-	coordinator := dispatch.NewCoordinator(bpEngine, scheduler, spawner, lifecycleMgr, mergeProcessor, planningService, executionStore, objectiveStore, planStore, streamStore, eventBus, activityLogger, cfg.Agents.Timeouts, logger)
+	coordinator := dispatch.NewCoordinator(bpEngine, scheduler, spawner, lifecycleMgr, mergeProcessor, planningService, mailBroker, executionStore, objectiveStore, planStore, streamStore, eventBus, activityLogger, cfg.Agents.Timeouts, logger)
 	bpEngine.RegisterHandler(blueprint.StepTypeAgent, coordinator.HandleAgentStep)
 	bpEngine.RegisterHandler(blueprint.StepTypeBlueprintRef, coordinator.HandleBlueprintRefStep)
 

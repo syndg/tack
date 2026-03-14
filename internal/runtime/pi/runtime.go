@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/syndg/deck/internal/runtime"
@@ -45,37 +43,16 @@ func New(cfg RuntimeConfig, logger *slog.Logger) *Runtime {
 	}
 }
 
-// writeExtensionToTemp writes the embedded extension files to a location
-// appropriate for the sandbox type:
-//   - Local sandbox: writes to an OS temp dir so the project tree stays clean.
-//     Returns the absolute path to the temp dir.
-//   - Remote sandbox (Daytona etc): uploads to .pi/extensions/deck-agent inside
-//     the sandbox filesystem. Returns the relative path.
-func (r *Runtime) writeExtensionToTemp(ctx context.Context, sb sandbox.Sandbox, files map[string][]byte) (string, error) {
-	// Try local temp first — works for local sandbox provider.
-	tmpDir, err := os.MkdirTemp("", "deck-pi-ext-*")
-	if err != nil {
-		// Fall back to uploading into sandbox (remote provider).
-		return r.uploadExtensionToSandbox(ctx, sb, files)
-	}
-
-	for name, content := range files {
-		dest := filepath.Join(tmpDir, name)
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			os.RemoveAll(tmpDir)
-			return r.uploadExtensionToSandbox(ctx, sb, files)
-		}
-		if err := os.WriteFile(dest, content, 0o644); err != nil {
-			os.RemoveAll(tmpDir)
-			return r.uploadExtensionToSandbox(ctx, sb, files)
-		}
-	}
-
-	return tmpDir, nil
+// writeExtension uploads extension files into the sandbox filesystem via sb.Upload.
+// Uses .deck-ext/ inside the sandbox so the extension is accessible from the
+// sandbox process regardless of whether it's local or remote.
+// The worktree (and .deck-ext/ with it) is cleaned up when the objective completes.
+func (r *Runtime) writeExtension(ctx context.Context, sb sandbox.Sandbox, files map[string][]byte) (string, error) {
+	return r.uploadExtensionToSandbox(ctx, sb, files)
 }
 
 func (r *Runtime) uploadExtensionToSandbox(ctx context.Context, sb sandbox.Sandbox, files map[string][]byte) (string, error) {
-	extDir := ".pi/extensions/deck-agent"
+	extDir := ".deck-ext"
 	for name, content := range files {
 		path := extDir + "/" + name
 		if err := sb.Upload(ctx, content, path); err != nil {
@@ -100,7 +77,7 @@ func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.Ag
 	// runtime artifacts. For remote sandboxes we still upload into the
 	// sandbox filesystem via sb.Upload.
 	extFiles := ExtensionFiles()
-	extDir, err := r.writeExtensionToTemp(ctx, sb, extFiles)
+	extDir, err := r.writeExtension(ctx, sb, extFiles)
 	if err != nil {
 		return nil, fmt.Errorf("writing extension: %w", err)
 	}
@@ -144,15 +121,6 @@ func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.Ag
 
 	// 6. Create process with output channel
 	proc := newPiProcess(handle, r.logger)
-
-	// Set cleanup to remove temp extension dir when process finishes
-	if strings.HasPrefix(extDir, os.TempDir()) {
-		cleanupDir := extDir
-		proc.cleanup = func() {
-			os.RemoveAll(cleanupDir)
-			r.logger.Debug("cleaned up temp extension dir", "dir", cleanupDir)
-		}
-	}
 
 	// 7. Send initial prompt via RPC
 	prompt := opts.Overlay + "\n\nBegin your task now."

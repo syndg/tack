@@ -31,6 +31,11 @@ type PlanCreator interface {
 	CreatePlan(ctx context.Context, objectiveID string, agentOutput string) (*domain.Plan, error)
 }
 
+// MailSender sends mail messages (used for escalations via the broker).
+type MailSender interface {
+	Send(ctx context.Context, msg *domain.MailMessage) error
+}
+
 // Coordinator orchestrates objective execution from plan approval to completion.
 // It subscribes to events and drives blueprint execution.
 type Coordinator struct {
@@ -40,6 +45,7 @@ type Coordinator struct {
 	lifecycle      *lifecycle.Manager
 	mergeEnqueuer  MergeEnqueuer
 	planCreator    PlanCreator
+	mailSender     MailSender
 	executions     *db.ExecutionStore
 	objectives     *db.ObjectiveStore
 	plans          *db.PlanStore
@@ -65,6 +71,7 @@ func NewCoordinator(
 	lc *lifecycle.Manager,
 	mergeEnqueuer MergeEnqueuer,
 	planCreator PlanCreator,
+	mailSender MailSender,
 	executions *db.ExecutionStore,
 	objectives *db.ObjectiveStore,
 	plans *db.PlanStore,
@@ -81,6 +88,7 @@ func NewCoordinator(
 		lifecycle:      lc,
 		mergeEnqueuer:  mergeEnqueuer,
 		planCreator:    planCreator,
+		mailSender:     mailSender,
 		executions:     executions,
 		objectives:     objectives,
 		plans:          plans,
@@ -924,13 +932,40 @@ func (c *Coordinator) escalateStreamFailure(ctx context.Context, exec *blueprint
 	}
 	payloadJSON, _ := json.Marshal(payload)
 
-	c.eventBus.Publish(domain.Event{
-		Type:      domain.EventEscalation,
-		Objective: exec.ObjectiveID,
-		Stream:    streamID,
-		Payload:   string(payloadJSON),
-		CreatedAt: time.Now(),
-	})
+	// Route through mail broker so the escalation is persisted and visible
+	// via `deck mail` / unread-mail APIs, not just the event stream.
+	if c.mailSender != nil {
+		msg := &domain.MailMessage{
+			From:      "coordinator",
+			To:        "@human",
+			Subject:   "Stream failed: " + stream.Title,
+			Body:      errMsg,
+			Type:      "escalation",
+			Priority:  "high",
+			Payload:   string(payloadJSON),
+			Objective: exec.ObjectiveID,
+			Stream:    streamID,
+		}
+		if err := c.mailSender.Send(ctx, msg); err != nil {
+			c.logger.Error("failed to send stream failure escalation via broker", "error", err)
+			// Fall back to direct event publish
+			c.eventBus.Publish(domain.Event{
+				Type:      domain.EventEscalation,
+				Objective: exec.ObjectiveID,
+				Stream:    streamID,
+				Payload:   string(payloadJSON),
+				CreatedAt: time.Now(),
+			})
+		}
+	} else {
+		c.eventBus.Publish(domain.Event{
+			Type:      domain.EventEscalation,
+			Objective: exec.ObjectiveID,
+			Stream:    streamID,
+			Payload:   string(payloadJSON),
+			CreatedAt: time.Now(),
+		})
+	}
 
 	c.logger.Info("stream failure escalated to human",
 		"stream_id", streamID,
@@ -1357,8 +1392,11 @@ func (c *Coordinator) completeExecution(ctx context.Context, objectiveID string)
 		}
 	}
 
-	// Clean up sandboxes and branches for this objective.
-	c.cleanupObjectiveSandboxes(ctx, objectiveID)
+	// Clean up sandboxes only when fully completed — partial objectives
+	// retain their sandboxes so failed streams can be retried and merged.
+	if targetStatus == domain.ObjectiveStatusCompleted {
+		c.cleanupObjectiveSandboxes(ctx, objectiveID)
+	}
 }
 
 func (c *Coordinator) failExecution(ctx context.Context, objectiveID, reason string) {
