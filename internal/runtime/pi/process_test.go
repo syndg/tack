@@ -73,7 +73,7 @@ func TestPiProcess_ToolCallEvent(t *testing.T) {
 }
 
 func TestPiProcess_ErrorEvent(t *testing.T) {
-	// A failed Pi RPC response emits an error event.
+	// A failed Pi RPC response emits an error event and makes Wait() return failure.
 	handle := &mockProcessHandle{
 		lines: []string{
 			`{"type":"response","success":false,"command":"prompt","error":"something went wrong"}`,
@@ -90,12 +90,69 @@ func TestPiProcess_ErrorEvent(t *testing.T) {
 	if len(events) < 1 {
 		t.Fatalf("expected at least 1 event, got %d", len(events))
 	}
-	// First event should be the error from the failed response
 	if events[0].Type != "error" {
 		t.Errorf("event type = %q, want error", events[0].Type)
 	}
 	if events[0].Content != "command prompt failed: something went wrong" {
 		t.Errorf("content = %q", events[0].Content)
+	}
+
+	// Wait() should return failure because of the RPC error
+	result, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if result.Success {
+		t.Error("expected Wait() result to be failure after RPC error")
+	}
+	if result.Error == "" {
+		t.Error("expected non-empty error message in result")
+	}
+}
+
+func TestPiProcess_ExtensionError_FailsResult(t *testing.T) {
+	// An extension_error event should make the final result a failure.
+	handle := &mockProcessHandle{
+		lines: []string{
+			`{"type":"extension_error","extensionPath":".deck-ext","event":"before_agent_start","error":"hook crashed"}`,
+			`{"type":"agent_end"}`,
+		},
+	}
+
+	proc := newPiProcess(handle, slog.Default())
+	// Drain output
+	for range proc.Output() {
+	}
+
+	result, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if result.Success {
+		t.Error("expected Wait() result to be failure after extension error")
+	}
+}
+
+func TestPiProcess_RPCError_WithoutAgentEnd_FailsResult(t *testing.T) {
+	// If Pi rejects the prompt and exits (no agent_end), finalize should
+	// still mark the result as failed.
+	handle := &mockProcessHandle{
+		lines: []string{
+			`{"type":"response","success":false,"command":"prompt","error":"invalid prompt"}`,
+			// No agent_end — process exits
+		},
+	}
+
+	proc := newPiProcess(handle, slog.Default())
+	for range proc.Output() {
+	}
+
+	result, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if result.Success {
+		t.Error("expected Wait() result to be failure after RPC error without agent_end")
 	}
 }
 

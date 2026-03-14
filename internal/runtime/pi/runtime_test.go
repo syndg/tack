@@ -40,6 +40,7 @@ func (h *mockProcessHandle) Kill() error        { h.killed = true; return nil }
 // mockSandbox for Pi runtime tests.
 type mockSandbox struct {
 	uploaded   map[string][]byte
+	execCmds   []string // commands passed to Exec
 	streamFn   func(ctx context.Context, cmd string, opts sandbox.ExecOpts) (sandbox.ProcessHandle, error)
 	streamCmd  string
 	streamOpts sandbox.ExecOpts
@@ -51,8 +52,9 @@ func newMockSandbox() *mockSandbox {
 
 func (m *mockSandbox) ID() string                    { return "mock-sb" }
 func (m *mockSandbox) Status() sandbox.SandboxStatus { return sandbox.SandboxStatusRunning }
-func (m *mockSandbox) Exec(_ context.Context, _ string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
-	return sandbox.ExecResult{}, nil
+func (m *mockSandbox) Exec(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
+	m.execCmds = append(m.execCmds, cmd)
+	return sandbox.ExecResult{ExitCode: 0, Stdout: "ok"}, nil
 }
 func (m *mockSandbox) ExecStreaming(ctx context.Context, cmd string, opts sandbox.ExecOpts) (sandbox.ProcessHandle, error) {
 	m.streamCmd = cmd
@@ -151,6 +153,17 @@ func TestRuntime_Spawn_UploadsExtension(t *testing.T) {
 	}
 	if !result.Success {
 		t.Errorf("expected success, got: %+v", result)
+	}
+
+	// Should have run a git exclude command for .deck-ext
+	foundExclude := false
+	for _, cmd := range sb.execCmds {
+		if strings.Contains(cmd, ".deck-ext") && strings.Contains(cmd, "exclude") {
+			foundExclude = true
+		}
+	}
+	if !foundExclude {
+		t.Error("expected git exclude command for .deck-ext to be run in sandbox")
 	}
 }
 
