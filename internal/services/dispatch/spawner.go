@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -206,12 +207,16 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	envVars := map[string]string{
 		"DECK_DAEMON_URL":   s.daemonURL,
 		"DECK_AGENT_TOKEN":  agentToken,
+		"DECK_AGENT_NAME":   agentName,
 		"DECK_OBJECTIVE_ID": req.Objective.ID,
 		"DECK_AGENT_ROLE":   req.Role,
 	}
 	if req.Stream != nil {
 		envVars["DECK_STREAM_ID"] = req.Stream.ID
 		envVars["DECK_STREAM_TITLE"] = req.Stream.Title
+		if len(req.Stream.FileScope) > 0 {
+			envVars["DECK_FILE_SCOPE"] = strings.Join(req.Stream.FileScope, ",")
+		}
 	}
 	if req.TaskSpec != "" {
 		envVars["DECK_TASK_SPEC"] = req.TaskSpec
@@ -359,4 +364,36 @@ func (s *Spawner) Kill(ctx context.Context, sessionID string) error {
 
 	s.logger.Info("agent killed", "session_id", sessionID)
 	return nil
+}
+
+// CleanupObjective deletes all sandboxes (worktrees + branches) for an objective.
+// Called when the objective reaches a terminal state (completed, partial, failed).
+func (s *Spawner) CleanupObjective(ctx context.Context, objectiveID string) {
+	// Find all sandboxes for this objective
+	sandboxes, err := s.sp.List(ctx, map[string]string{
+		"deck.objective": objectiveID,
+	})
+	if err != nil {
+		s.logger.Error("listing sandboxes for cleanup", "objective", objectiveID, "error", err)
+		return
+	}
+
+	if len(sandboxes) == 0 {
+		return
+	}
+
+	deleted := 0
+	for _, sb := range sandboxes {
+		if err := s.sp.Delete(ctx, sb.ID()); err != nil {
+			s.logger.Warn("failed to delete sandbox", "sandbox_id", sb.ID(), "objective", objectiveID, "error", err)
+			continue
+		}
+		deleted++
+	}
+
+	s.logger.Info("cleaned up objective sandboxes",
+		"objective", objectiveID,
+		"deleted", deleted,
+		"total", len(sandboxes),
+	)
 }

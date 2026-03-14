@@ -20,8 +20,9 @@ import (
 // Provider creates sandboxes as local git worktrees.
 // Each sandbox is an isolated worktree with its own branch.
 type Provider struct {
-	repoRoot    string // path to the main git repository
-	worktreeDir string // base directory for worktrees
+	repoRoot    string   // path to the main git repository
+	worktreeDir string   // base directory for worktrees
+	postCreate  []string // commands to run after worktree creation
 	mu          sync.Mutex
 	sandboxes   map[string]*LocalSandbox
 	logger      *slog.Logger
@@ -34,6 +35,11 @@ func New(repoRoot string, worktreeDir string, logger *slog.Logger) *Provider {
 		sandboxes:   make(map[string]*LocalSandbox),
 		logger:      logger,
 	}
+}
+
+// SetPostCreate sets commands to run after worktree creation (e.g., "bun install").
+func (p *Provider) SetPostCreate(commands []string) {
+	p.postCreate = commands
 }
 
 // Create provisions a new git worktree sandbox.
@@ -67,6 +73,22 @@ func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("creating git worktree: %w (stderr: %s)", err, stderr.String())
+	}
+
+	// Copy gitignored files (node_modules, build caches, .env) from main repo.
+	if err := copyIgnoredFiles(p.repoRoot, worktreePath, p.logger); err != nil {
+		p.logger.Warn("copy-ignored failed, continuing", "error", err)
+	}
+
+	// Run post-create commands (e.g., "bun install").
+	for _, cmd := range p.postCreate {
+		p.logger.Info("running post-create command", "command", cmd, "worktree", id)
+		c := exec.CommandContext(ctx, "sh", "-c", cmd)
+		c.Dir = worktreePath
+		c.Env = os.Environ()
+		if out, err := c.CombinedOutput(); err != nil {
+			p.logger.Warn("post-create command failed", "command", cmd, "error", err, "output", string(out))
+		}
 	}
 
 	sb := &LocalSandbox{
@@ -262,10 +284,15 @@ func (s *LocalSandbox) ExecStreaming(ctx context.Context, cmdStr string, opts sa
 		return nil, fmt.Errorf("starting process: %w", err)
 	}
 
+	scanner := bufio.NewScanner(stdout)
+	// Pi can emit very large JSONL lines (e.g. file contents in tool results).
+	// Default 64KB is too small; use 4MB.
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+
 	return &localProcessHandle{
 		cmd:     cmd,
 		stdin:   stdin,
-		scanner: bufio.NewScanner(stdout),
+		scanner: scanner,
 	}, nil
 }
 

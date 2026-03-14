@@ -447,15 +447,28 @@ func (p *Processor) getStreamBranch(ctx context.Context, streamID, executionID s
 }
 
 // getMergerSandbox returns an existing merger sandbox for the objective,
-// or creates a new one if none exists.
+// or creates a new one if none exists. Existing sandboxes are reset to the
+// base branch (main) to avoid stale state from previous merges.
 func (p *Processor) getMergerSandbox(ctx context.Context, objectiveID string) (sandbox.Sandbox, error) {
-	// Try to find an existing merger sandbox.
+	// Try to find an existing merger sandbox for THIS objective.
 	sandboxes, err := p.sandboxProv.List(ctx, map[string]string{
 		"deck.objective": objectiveID,
 		"deck.role":      "merger",
 	})
 	if err == nil && len(sandboxes) > 0 {
-		return sandboxes[0], nil
+		sb := sandboxes[0]
+		// Reset to base branch to ensure clean state. Without this,
+		// a reused sandbox may contain merged branches from a previous
+		// run of the same objective.
+		resetResult, resetErr := sb.Exec(ctx, "git checkout main && git reset --hard origin/main 2>/dev/null || git reset --hard main", sandbox.ExecOpts{})
+		if resetErr != nil || resetResult.ExitCode != 0 {
+			p.logger.Warn("could not reset merger sandbox, creating fresh one",
+				"sandbox_id", sb.ID(),
+				"error", resetErr,
+			)
+		} else {
+			return sb, nil
+		}
 	}
 
 	// Create a new merger sandbox.
