@@ -197,7 +197,7 @@ When the spawner creates an agent, it reads the provider from project config and
 - Git credential: always injected as `GITHUB_TOKEN` (or `GITLAB_TOKEN` etc., derived from git host config)
 - Sandbox credentials (Daytona): never injected — daemon-side only
 
-**OAuth is out of initial scope.** The credential store schema supports the `oauth` type from day one (so adding it later doesn't require a schema migration), but auto-refresh, token exchange, and the `deck auth refresh` command are deferred. Initial implementation supports `api_key` and `pat` types only. If a user stores an OAuth token manually, Deck will inject it as-is with no refresh logic — it's their responsibility to keep it valid until OAuth is formally implemented.
+**OAuth is fully out of initial scope.** The credential store schema supports the `oauth` type (so adding it later doesn't require a schema migration), but the initial implementation only recognizes `api_key` and `pat` types. `deck init` and `deck auth add` do not offer OAuth as an auth method. If a credentials file contains an `oauth` entry (e.g., hand-edited), Deck ignores it and logs a warning: "OAuth credentials not yet supported, use api_key".
 
 **Flow:**
 1. Spawner reads project config → `agents.pi.provider: anthropic`
@@ -218,9 +218,6 @@ $ deck init
 
 → Which model provider? (anthropic / openai / gemini / ...)
   > anthropic
-
-→ Auth method for anthropic? (api_key / oauth)
-  > api_key
 
 → Anthropic API key:
   > sk-ant-...
