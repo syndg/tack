@@ -371,7 +371,7 @@ Slower (~30-60s) but works without any snapshot setup.
 1. **Local env isolation** — regression test: local sandbox `Exec` does NOT inherit `SUPER_SECRET_HOST_VAR` from `os.Environ()`, only receives allowlisted system vars + explicitly injected vars
 2. **Config precedence** — project config overrides user config; user config overrides defaults; credentials resolve literal/env/shell correctly
 3. **Project root discovery** — walk-up from nested subdirectory finds `.deck/config.yaml`; `--config` flag overrides discovery
-4. **Credential injection** — spawner injects correct env var per provider/type (`api_key` only for initial scope); git token always injected; daytona key never injected
+4. **Credential injection** — spawner injects correct env var per provider/type (`api_key` and `setup_token`); `setup_token` validated and injected as `ANTHROPIC_API_KEY`; git token always injected; daytona key never injected
 5. **Daytona bootstrap with snapshot** — provider creates from snapshot, pulls latest, checks out branch, post-create runs
 6. **Daytona bootstrap without snapshot** — provider creates from image, clones repo, installs deps, checks out branch
 
