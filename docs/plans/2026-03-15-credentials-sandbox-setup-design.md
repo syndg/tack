@@ -178,19 +178,16 @@ No other host environment variables pass through. This makes local sandboxes beh
 
 When the spawner creates an agent, it reads the provider from project config and maps it to the correct env var for the runtime.
 
-**Mapping table** (hardcoded in Deck):
+**Mapping table** (hardcoded in Deck, initial scope — `api_key` and `pat` only):
 
 | Provider | Type | Env var injected |
 |---|---|---|
 | anthropic | api_key | `ANTHROPIC_API_KEY` |
-| anthropic | oauth | `ANTHROPIC_OAUTH_TOKEN` |
 | openai | api_key | `OPENAI_API_KEY` |
 | gemini | api_key | `GEMINI_API_KEY` |
 | groq | api_key | `GROQ_API_KEY` |
 | mistral | api_key | `MISTRAL_API_KEY` |
 | xai | api_key | `XAI_API_KEY` |
-
-**OAuth env var:** Pi reads `ANTHROPIC_OAUTH_TOKEN` as a separate env var (checked before `ANTHROPIC_API_KEY` in `pi-mono/packages/ai/src/env-api-keys.ts:71-73`). Deck injects the access token as `ANTHROPIC_OAUTH_TOKEN`, not `ANTHROPIC_API_KEY`. This is verified for Pi. Claude Code's support for `ANTHROPIC_OAUTH_TOKEN` is **assumed but unverified** — must be validated before OAuth ships for the claude-code runtime.
 
 **Injection rules:**
 - Model provider credential: only the one matching the configured provider
@@ -365,6 +362,6 @@ Slower (~30-60s) but works without any snapshot setup.
 
 ### Deferred (follow-up)
 
-- **OAuth:** Auto-refresh, `deck auth refresh`, PKCE token exchange. Schema supports `oauth` type from day one. Refresh flow requires implementing Anthropic's token exchange (same as Pi's `anthropic.ts`). Ships after API key path is solid end-to-end.
+- **OAuth:** Auto-refresh, `deck auth refresh`, PKCE token exchange, `deck init`/`deck auth add` OAuth option. Schema supports `oauth` type from day one. When implemented, adds `anthropic | oauth | ANTHROPIC_OAUTH_TOKEN` to the mapping table. Pi reads `ANTHROPIC_OAUTH_TOKEN` as a separate env var (verified in `pi-mono/packages/ai/src/env-api-keys.ts:71-73`). Refresh flow requires implementing Anthropic's token exchange (same as Pi's `anthropic.ts`). Ships after API key path is solid end-to-end.
 - **Claude Code OAuth:** Verify `ANTHROPIC_OAUTH_TOKEN` env var support in Claude Code before enabling OAuth for the `claude-code` runtime.
 - **Multi-host git:** Schema supports `hosts` map. Initial implementation targets single-host (`host` + `token` fields). Multi-host added when a user needs it.
