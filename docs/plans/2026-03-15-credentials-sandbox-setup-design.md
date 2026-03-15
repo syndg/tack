@@ -67,9 +67,9 @@ Deep-merge rules:
 - Slices (quality_gates, post_create): later value replaces entirely (no append)
 - Maps: merged key-by-key (e.g., `agents.timeouts.roles` merges per-role)
 
-Config paths are conventional. For non-standard paths, env vars are the escape hatch:
-- `DECK_CONFIG_PATH` — override project config location
-- `DECK_USER_CONFIG_PATH` — override user config location
+**Project root discovery:** Deck walks up from `cwd` looking for a `.deck/` directory (same pattern as `.git/` discovery). The first `.deck/config.yaml` found is the project config. If none found, Deck operates with user config + defaults only. The daemon also uses this rule — it resolves the project root at startup via `os.Getwd()`, which is consistent with the current behavior.
+
+**`--config` flag:** The existing `--config` flag on `deck` and `deck-daemon` is **redefined** as the project config path override. It replaces the walk-up discovery for that invocation. Equivalent to `DECK_CONFIG_PATH`. The user config path is only overridable via `DECK_USER_CONFIG_PATH` (rare escape hatch, not a flag).
 
 ```go
 // Pseudocode
@@ -83,7 +83,7 @@ func Load(projectPath, userPath string) (*Config, error) {
 
 **`deck config` subcommand:**
 
-Manages both layers via a single command. Default target is project config (most common action). `--user` flag targets the user layer.
+Manages both layers via a single command. Default target is project config (most common action). `--user` flag targets the user layer. Project config location follows the same walk-up discovery as the rest of the CLI.
 
 ```
 deck config set <key> <value>              # project .deck/config.yaml
@@ -197,9 +197,7 @@ When the spawner creates an agent, it reads the provider from project config and
 - Git credential: always injected as `GITHUB_TOKEN` (or `GITLAB_TOKEN` etc., derived from git host config)
 - Sandbox credentials (Daytona): never injected — daemon-side only
 
-**OAuth auto-refresh:** If the stored access token is expired, Deck refreshes it using the refresh token before injection. If refresh fails, agent spawn fails with: "Anthropic OAuth token expired, run `deck auth refresh anthropic`".
-
-**Note on OAuth refresh:** Deck must implement the Anthropic OAuth token refresh flow (PKCE-based). This is the same flow Pi uses in `pi-mono/packages/ai/src/utils/oauth/anthropic.ts`. Initial scope: support API key auth. OAuth support added as a follow-up once the API key path is solid.
+**OAuth is out of initial scope.** The credential store schema supports the `oauth` type from day one (so adding it later doesn't require a schema migration), but auto-refresh, token exchange, and the `deck auth refresh` command are deferred. Initial implementation supports `api_key` and `pat` types only. If a user stores an OAuth token manually, Deck will inject it as-is with no refresh logic — it's their responsibility to keep it valid until OAuth is formally implemented.
 
 **Flow:**
 1. Spawner reads project config → `agents.pi.provider: anthropic`
@@ -256,9 +254,10 @@ Standalone subcommand for ongoing credential management.
 deck auth add <provider>       — add or replace a credential
 deck auth remove <provider>    — remove a credential
 deck auth list                 — show stored credentials (values masked)
-deck auth refresh <provider>   — refresh an OAuth token
 deck auth test <provider>      — verify credential works (hit the API)
 ```
+
+`deck auth refresh` deferred to the OAuth follow-up.
 
 ```
 $ deck auth list
@@ -350,23 +349,25 @@ Slower (~30-60s) but works without any snapshot setup.
 
 1. **Local env isolation** — regression test: local sandbox `Exec` does NOT inherit `SUPER_SECRET_HOST_VAR` from `os.Environ()`, only receives allowlisted system vars + explicitly injected vars
 2. **Config precedence** — project config overrides user config; user config overrides defaults; credentials resolve literal/env/shell correctly
-3. **Credential injection** — spawner injects correct env var per provider/type; OAuth uses `ANTHROPIC_OAUTH_TOKEN` not `ANTHROPIC_API_KEY`; git token always injected; daytona key never injected
-4. **Daytona bootstrap with snapshot** — provider creates from snapshot, pulls latest, checks out branch, post-create runs
-5. **Daytona bootstrap without snapshot** — provider creates from image, clones repo, installs deps, checks out branch
+3. **Project root discovery** — walk-up from nested subdirectory finds `.deck/config.yaml`; `--config` flag overrides discovery
+4. **Credential injection** — spawner injects correct env var per provider/type (`api_key` only for initial scope); git token always injected; daytona key never injected
+5. **Daytona bootstrap with snapshot** — provider creates from snapshot, pulls latest, checks out branch, post-create runs
+6. **Daytona bootstrap without snapshot** — provider creates from image, clones repo, installs deps, checks out branch
 
 ### Implementation Order
 
 1. **Credentials store** — `~/.config/deck/credentials.yaml` read/write, value resolution (literal/env/shell), `0600` permissions
-2. **Config layering** — project config + user config merge with project-wins precedence
-3. **Local env isolation** — replace `os.Environ()` with minimal allowlist in `LocalSandbox.Exec/ExecStreaming`
-4. **Credential injection** — spawner reads provider from config, maps to env var, injects into sandbox
-5. **`deck auth`** — add, remove, list, refresh, test subcommands (huh for interactive prompts)
-6. **`deck init`** — interactive wizard with charmbracelet/huh
-7. **Daytona bootstrap** — provider owns clone/fetch + branch checkout + post-create
-8. **`deck snapshot`** — create, update, staleness detection
-9. **OAuth support** — Anthropic OAuth refresh flow (follow-up after API key path is solid)
+2. **Config layering** — project root walk-up discovery, project + user config merge with project-wins precedence
+3. **`deck config`** — set, get, list, remove with `--user` flag
+4. **Local env isolation** — replace `os.Environ()` with minimal allowlist in `LocalSandbox.Exec/ExecStreaming`
+5. **Credential injection** — spawner reads provider from config, maps to env var, injects into sandbox
+6. **`deck auth`** — add, remove, list, test subcommands (huh for interactive prompts)
+7. **`deck init`** — interactive wizard with charmbracelet/huh
+8. **Daytona bootstrap** — provider owns clone/fetch + branch checkout + post-create
+9. **`deck snapshot`** — create, update, staleness detection
 
-### Open Decisions
+### Deferred (follow-up)
 
-- **OAuth refresh implementation:** Deferred to after API key auth is working end-to-end. The credential store schema supports OAuth from day one, but the refresh flow requires implementing Anthropic's PKCE token exchange, which is non-trivial and should be validated separately.
-- **Multi-host git:** The schema supports it (`hosts` map). Initial implementation targets single-host (`host` + `token` fields). Multi-host added when a user needs it.
+- **OAuth:** Auto-refresh, `deck auth refresh`, PKCE token exchange. Schema supports `oauth` type from day one. Refresh flow requires implementing Anthropic's token exchange (same as Pi's `anthropic.ts`). Ships after API key path is solid end-to-end.
+- **Claude Code OAuth:** Verify `ANTHROPIC_OAUTH_TOKEN` env var support in Claude Code before enabling OAuth for the `claude-code` runtime.
+- **Multi-host git:** Schema supports `hosts` map. Initial implementation targets single-host (`host` + `token` fields). Multi-host added when a user needs it.
