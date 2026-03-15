@@ -1,7 +1,7 @@
 # Credentials, Config Layers & Daytona Sandbox Setup
 
 **Date:** 2026-03-15
-**Status:** Approved
+**Status:** Draft (addressing review feedback)
 **Scope:** Unified credential management, two-layer config, Daytona sandbox lifecycle
 
 ---
@@ -15,6 +15,7 @@ Additionally:
 - No separation between shared project config and personal settings
 - No way to manage credentials for multiple model providers
 - No onboarding experience
+- Local sandbox `os.Environ()` inheritance leaks host secrets into agent processes
 
 ## Design
 
@@ -40,20 +41,22 @@ quality_gates:
   - bun run test
 ```
 
-**User** — `~/.deck/config.yaml` (personal, never tracked):
+**User** — `~/.config/deck/config.yaml` (personal, never tracked):
 ```yaml
 daemon:
   listen: "127.0.0.1:9800"
-  data_dir: "~/.deck/data"
+  data_dir: "~/.config/deck/data"
 agents:
   runtime: pi  # default when project doesn't specify
 ```
 
 **Resolution:** Project wins → User fallback → Hardcoded defaults.
 
+**Home directory:** `~/.config/deck/` is the canonical user home. This matches the existing CLI default paths (`root.go:34`, `main.go:17`), daemon blueprint/rule loading (`daemon.go:116`, `daemon.go:148`), and XDG conventions. No migration needed.
+
 ### Credentials Store
 
-Single file: `~/.deck/credentials.yaml` with `0600` permissions. Each entry is typed.
+Single file: `~/.config/deck/credentials.yaml` with `0600` permissions. Each entry is typed.
 
 ```yaml
 model_providers:
@@ -74,7 +77,17 @@ model_providers:
 
 git:
   type: pat
+  host: "github.com"       # scoped to host, not hardcoded to GitHub
   token: "ghp_..."
+
+  # Multi-host example:
+  # git:
+  #   type: pat
+  #   hosts:
+  #     github.com:
+  #       token: "ghp_..."
+  #     gitlab.mycompany.com:
+  #       token: "glpat-..."
 
 sandbox:
   daytona:
@@ -84,7 +97,7 @@ sandbox:
 
 **Sections:**
 - `model_providers` — keyed by provider name, injected into sandboxes per runtime
-- `git` — GitHub PAT for clone, fetch, push, PR creation, issue management
+- `git` — host-scoped PAT for clone, fetch, push, PR creation. Defaults to `github.com` for single-host config. Supports `hosts` map for multi-host setups.
 - `sandbox` — daemon-side only, never injected into sandboxes
 
 **Value resolution** — any string value supports three formats:
@@ -93,6 +106,22 @@ sandbox:
 - `"!op read 'op://vault/deck/anthropic'"` — shell command (1Password, keychain, etc.)
 
 Shell commands are executed once and cached for the process lifetime. Timeout: 10 seconds.
+
+### Local Sandbox Environment Isolation
+
+**Current problem:** `LocalSandbox.Exec()` and `ExecStreaming()` call `os.Environ()`, inheriting the daemon's full host environment. This leaks secrets that shouldn't reach agent processes.
+
+**Fix:** Replace `os.Environ()` with a minimal allowlist. Local sandboxes get:
+
+1. **System essentials** (allowlisted): `PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TMPDIR`, `XDG_*`
+2. **Sandbox-level env** (`s.envVars`): set at sandbox creation time
+3. **Per-execution env** (`opts.Env`): set by spawner — `DECK_*` vars + resolved credentials
+
+No other host environment variables pass through. This makes local sandboxes behave like Daytona sandboxes — agents only see what Deck explicitly provides.
+
+**Post-create commands** (`provider.go:206`): Also use the restricted env (system essentials only + sandbox envVars). They don't need model credentials — they just install dependencies.
+
+**Worktree management commands** (`git worktree add`, `git branch -D`, etc.): These run from the daemon process via `exec.Command`, not inside the sandbox, so they inherit the full daemon env. This is correct — they're Deck-internal operations, not agent-visible.
 
 ### Credential Injection
 
@@ -103,23 +132,27 @@ When the spawner creates an agent, it reads the provider from project config and
 | Provider | Type | Env var injected |
 |---|---|---|
 | anthropic | api_key | `ANTHROPIC_API_KEY` |
-| anthropic | oauth | `ANTHROPIC_API_KEY` (access_token) |
+| anthropic | oauth | `ANTHROPIC_OAUTH_TOKEN` |
 | openai | api_key | `OPENAI_API_KEY` |
 | gemini | api_key | `GEMINI_API_KEY` |
 | groq | api_key | `GROQ_API_KEY` |
 | mistral | api_key | `MISTRAL_API_KEY` |
 | xai | api_key | `XAI_API_KEY` |
 
+**OAuth env var:** Pi reads `ANTHROPIC_OAUTH_TOKEN` as a separate env var (checked before `ANTHROPIC_API_KEY` in `pi-mono/packages/ai/src/env-api-keys.ts:71-73`). Claude Code also supports it. Deck injects the access token as `ANTHROPIC_OAUTH_TOKEN`, not `ANTHROPIC_API_KEY`. This is a verified behavior, not an assumption.
+
 **Injection rules:**
 - Model provider credential: only the one matching the configured provider
-- Git credential (`GITHUB_TOKEN`): always injected — agents need GitHub access
+- Git credential: always injected as `GITHUB_TOKEN` (or `GITLAB_TOKEN` etc., derived from git host config)
 - Sandbox credentials (Daytona): never injected — daemon-side only
 
 **OAuth auto-refresh:** If the stored access token is expired, Deck refreshes it using the refresh token before injection. If refresh fails, agent spawn fails with: "Anthropic OAuth token expired, run `deck auth refresh anthropic`".
 
+**Note on OAuth refresh:** Deck must implement the Anthropic OAuth token refresh flow (PKCE-based). This is the same flow Pi uses in `pi-mono/packages/ai/src/utils/oauth/anthropic.ts`. Initial scope: support API key auth. OAuth support added as a follow-up once the API key path is solid.
+
 **Flow:**
 1. Spawner reads project config → `agents.pi.provider: anthropic`
-2. Looks up `anthropic` in `~/.deck/credentials.yaml`
+2. Looks up `anthropic` in `~/.config/deck/credentials.yaml`
 3. Resolves the value (literal / env var / shell command)
 4. Maps to env var name for the runtime
 5. Adds to sandbox env alongside `DECK_*` vars
@@ -142,27 +175,27 @@ $ deck init
 
 → Anthropic API key:
   > sk-ant-...
-  ✓ Stored in ~/.deck/credentials.yaml
+  ✓ Stored in ~/.config/deck/credentials.yaml
 
 → GitHub token (for PRs, clone, push):
   > ghp_...
-  ✓ Stored in ~/.deck/credentials.yaml
+  ✓ Stored in ~/.config/deck/credentials.yaml
 
 → Sandbox provider? (local / daytona)
   > daytona
 
 → Daytona API key:
   > dtn_...
-  ✓ Stored in ~/.deck/credentials.yaml
+  ✓ Stored in ~/.config/deck/credentials.yaml
 
 → Post-create commands? (e.g., bun install, npm install)
   > bun install
 
 ✓ Created .deck/config.yaml
-✓ Credentials saved to ~/.deck/credentials.yaml
+✓ Credentials saved to ~/.config/deck/credentials.yaml
 ```
 
-Skips credential prompts for providers already in `~/.deck/credentials.yaml` (second project, same provider).
+Skips credential prompts for providers already in `~/.config/deck/credentials.yaml` (second project, same provider).
 
 ### `deck auth`
 
@@ -178,7 +211,7 @@ deck auth test <provider>      — verify credential works (hit the API)
 
 ```
 $ deck auth list
-  anthropic    oauth     ✓ valid (expires in 12d)
+  anthropic    api_key   ✓ valid
   openai       api_key   ✓ valid
   github       pat       ✓ valid
   daytona      api_key   ✓ valid
@@ -186,20 +219,43 @@ $ deck auth list
 
 ### Daytona Sandbox Setup
 
+#### Bootstrap ownership
+
+The **Daytona sandbox provider** owns repo bootstrap. Today the provider only calls `client.Create()`. After this design, `Create()` gains a post-creation bootstrap phase:
+
+1. `client.Create()` — provision the sandbox (from snapshot or image)
+2. **Bootstrap phase** (new, owned by provider):
+   - If snapshot: `sandbox.Git.Pull()` to fetch latest (credentials passed via SDK options)
+   - If no snapshot: `sandbox.Git.Clone()` the repo (credentials passed via SDK options)
+   - `sandbox.Git.CreateBranch()` + `sandbox.Git.Checkout()` for the deck working branch
+   - Run post-create commands via `sandbox.Process.ExecuteCommand()`
+3. Return ready sandbox to spawner
+
+The spawner doesn't change — it calls `sandboxProv.Create()` and gets back a sandbox with code + deps ready. The runtime then uploads extensions and starts the agent process as before.
+
+**Credential flow for bootstrap:** The provider reads git credentials from the credentials store (passed in at construction time). These are used for SDK Git operations (`WithUsername`/`WithPassword` options) during bootstrap. They are NOT injected as env vars at this stage — that happens later when the spawner sets up the agent process.
+
+**New provider constructor:**
+```go
+func New(cfg Config, creds *credentials.Store, logger *slog.Logger) (*Provider, error)
+```
+
+The `credentials.Store` is a read-only interface that resolves credentials by name.
+
 #### Snapshot model (speed + freshness)
 
 **One-time:** `deck snapshot create`
 1. Auto-detects repo URL from `git remote get-url origin`
-2. Builds Daytona image: base OS + tooling + git clone (using stored GitHub token) + post-create commands (e.g., `bun install`)
+2. Builds Daytona image: base OS + tooling + git clone (using stored git credential) + post-create commands (e.g., `bun install`)
 3. Hashes the lockfile, stores hash in snapshot labels
 4. Saves as a named Daytona snapshot
 
 **Per-sandbox boot** (during execution, ~5s):
 1. Create sandbox from snapshot (deps pre-installed, repo present)
-2. `git fetch origin` using stored GitHub token (delta only)
-3. `git checkout -b deck/{obj}/{role}-{id} origin/{base_branch}`
-4. Inject model provider credential + `GITHUB_TOKEN` as env vars
-5. Agent starts
+2. Provider bootstrap: `sandbox.Git.Pull()` using git credential (delta only)
+3. Provider bootstrap: `sandbox.Git.CreateBranch()` + `Checkout()` for `deck/{obj}/{role}-{id}`
+4. Spawner injects model provider credential + git token as env vars
+5. Runtime starts agent process
 
 #### Staleness detection
 
@@ -207,17 +263,17 @@ Deck hashes the lockfile (`package-lock.json`, `bun.lockb`, `go.sum`, etc.) at s
 
 At sandbox creation:
 - Compare current lockfile hash with snapshot label
-- If different: warn and fall back to running post-create commands after fetch
+- If different: warn and fall back to running post-create commands after pull
 - User can run `deck snapshot update` to rebuild
 
 #### No-snapshot fallback
 
 If no snapshot exists (first run or user skips snapshot creation):
 1. Create sandbox from base image (ubuntu + git + runtime tooling)
-2. `git clone` the repo using GitHub token
-3. Run post-create commands (`bun install`)
-4. Checkout branch
-5. Agent starts
+2. Provider bootstrap: `sandbox.Git.Clone()` with git credential
+3. Provider bootstrap: run post-create commands
+4. Provider bootstrap: create + checkout deck branch
+5. Spawner injects credentials, runtime starts agent
 
 Slower (~30-60s) but works without any snapshot setup.
 
@@ -231,18 +287,35 @@ Slower (~30-60s) but works without any snapshot setup.
   rules/               # file-scope rules (optional)
 
 # User (personal, never tracked)
-~/.deck/
+~/.config/deck/
   config.yaml          # fallback defaults (listen addr, data dir)
   credentials.yaml     # all credentials (0600 perms)
+  blueprints/          # user-level blueprint overrides
+  rules/               # user-level rule overrides
   data/                # SQLite DB, activity logs
 ```
 
+### Tests Required
+
+1. **Local env isolation** — regression test: local sandbox `Exec` does NOT inherit `SUPER_SECRET_HOST_VAR` from `os.Environ()`, only receives allowlisted system vars + explicitly injected vars
+2. **Config precedence** — project config overrides user config; user config overrides defaults; credentials resolve literal/env/shell correctly
+3. **Credential injection** — spawner injects correct env var per provider/type; OAuth uses `ANTHROPIC_OAUTH_TOKEN` not `ANTHROPIC_API_KEY`; git token always injected; daytona key never injected
+4. **Daytona bootstrap with snapshot** — provider creates from snapshot, pulls latest, checks out branch, post-create runs
+5. **Daytona bootstrap without snapshot** — provider creates from image, clones repo, installs deps, checks out branch
+
 ### Implementation Order
 
-1. **Credentials store** — `~/.deck/credentials.yaml` read/write, value resolution (literal/env/shell), `0600` permissions
+1. **Credentials store** — `~/.config/deck/credentials.yaml` read/write, value resolution (literal/env/shell), `0600` permissions
 2. **Config layering** — project config + user config merge with project-wins precedence
-3. **Credential injection** — spawner reads provider from config, maps to env var, injects into sandbox
-4. **`deck auth`** — add, remove, list, refresh, test subcommands
-5. **`deck init`** — interactive wizard with charmbracelet/huh
-6. **Daytona sandbox setup** — clone/fetch, branch checkout, credential injection
-7. **`deck snapshot`** — create, update, staleness detection
+3. **Local env isolation** — replace `os.Environ()` with minimal allowlist in `LocalSandbox.Exec/ExecStreaming`
+4. **Credential injection** — spawner reads provider from config, maps to env var, injects into sandbox
+5. **`deck auth`** — add, remove, list, refresh, test subcommands (huh for interactive prompts)
+6. **`deck init`** — interactive wizard with charmbracelet/huh
+7. **Daytona bootstrap** — provider owns clone/fetch + branch checkout + post-create
+8. **`deck snapshot`** — create, update, staleness detection
+9. **OAuth support** — Anthropic OAuth refresh flow (follow-up after API key path is solid)
+
+### Open Decisions
+
+- **OAuth refresh implementation:** Deferred to after API key auth is working end-to-end. The credential store schema supports OAuth from day one, but the refresh flow requires implementing Anthropic's PKCE token exchange, which is non-trivial and should be validated separately.
+- **Multi-host git:** The schema supports it (`hosts` map). Initial implementation targets single-host (`host` + `token` fields). Multi-host added when a user needs it.
