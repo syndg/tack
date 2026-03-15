@@ -60,14 +60,16 @@ agents:
 
 1. Start with hardcoded defaults (`config.Default()`)
 2. If `~/.config/deck/config.yaml` exists, deep-merge it over defaults (user layer)
-3. If `.deck/config.yaml` exists (or `--config` flag), deep-merge it over the result (project layer wins)
+3. If `.deck/config.yaml` exists, deep-merge it over the result (project layer wins)
 
 Deep-merge rules:
 - Scalar fields: later value replaces earlier
 - Slices (quality_gates, post_create): later value replaces entirely (no append)
 - Maps: merged key-by-key (e.g., `agents.timeouts.roles` merges per-role)
 
-The CLI's `--config` flag becomes `--project-config` (override for project config path). A new `--user-config` flag overrides the user config path. Both default to their canonical locations.
+Config paths are conventional. For non-standard paths, env vars are the escape hatch:
+- `DECK_CONFIG_PATH` — override project config location
+- `DECK_USER_CONFIG_PATH` — override user config location
 
 ```go
 // Pseudocode
@@ -77,6 +79,30 @@ func Load(projectPath, userPath string) (*Config, error) {
     mergeFromFile(cfg, projectPath)     // .deck/config.yaml (wins)
     return cfg, nil
 }
+```
+
+**`deck config` subcommand:**
+
+Manages both layers via a single command. Default target is project config (most common action). `--user` flag targets the user layer.
+
+```
+deck config set <key> <value>              # project .deck/config.yaml
+deck config set --user <key> <value>       # user ~/.config/deck/config.yaml
+deck config get <key>                      # resolved value (merged)
+deck config get --user <key>               # user-layer value only
+deck config get --project <key>            # project-layer value only
+deck config list                           # all resolved config
+deck config list --user                    # user config only
+deck config remove <key>                   # remove from project config
+deck config remove --user <key>            # remove from user config
+```
+
+Dotted keys for nested values:
+```
+deck config set agents.runtime pi
+deck config set --user daemon.listen 127.0.0.1:9800
+deck config get agents.pi.model
+deck config remove quality_gates
 ```
 
 ### Credentials Store
