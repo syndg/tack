@@ -146,7 +146,7 @@ func Default() *Config {
 	return &Config{
 		Daemon: DaemonConfig{
 			Listen:     "0.0.0.0:9800",
-			DataDir:    "~/.deck/data",
+			DataDir:    "~/.config/deck/data",
 			BaseBranch: "main",
 		},
 		Sandbox: SandboxConfig{

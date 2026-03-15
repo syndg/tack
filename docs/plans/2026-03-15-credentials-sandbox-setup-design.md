@@ -54,6 +54,31 @@ agents:
 
 **Home directory:** `~/.config/deck/` is the canonical user home. This matches the existing CLI default paths (`root.go:34`, `main.go:17`), daemon blueprint/rule loading (`daemon.go:116`, `daemon.go:148`), and XDG conventions. No migration needed.
 
+**Config discovery and merge algorithm:**
+
+`config.Load` gains a new signature: `config.Load(projectPath, userPath string) (*Config, error)`.
+
+1. Start with hardcoded defaults (`config.Default()`)
+2. If `~/.config/deck/config.yaml` exists, deep-merge it over defaults (user layer)
+3. If `.deck/config.yaml` exists (or `--config` flag), deep-merge it over the result (project layer wins)
+
+Deep-merge rules:
+- Scalar fields: later value replaces earlier
+- Slices (quality_gates, post_create): later value replaces entirely (no append)
+- Maps: merged key-by-key (e.g., `agents.timeouts.roles` merges per-role)
+
+The CLI's `--config` flag becomes `--project-config` (override for project config path). A new `--user-config` flag overrides the user config path. Both default to their canonical locations.
+
+```go
+// Pseudocode
+func Load(projectPath, userPath string) (*Config, error) {
+    cfg := Default()                    // hardcoded defaults
+    mergeFromFile(cfg, userPath)        // ~/.config/deck/config.yaml
+    mergeFromFile(cfg, projectPath)     // .deck/config.yaml (wins)
+    return cfg, nil
+}
+```
+
 ### Credentials Store
 
 Single file: `~/.config/deck/credentials.yaml` with `0600` permissions. Each entry is typed.
@@ -139,7 +164,7 @@ When the spawner creates an agent, it reads the provider from project config and
 | mistral | api_key | `MISTRAL_API_KEY` |
 | xai | api_key | `XAI_API_KEY` |
 
-**OAuth env var:** Pi reads `ANTHROPIC_OAUTH_TOKEN` as a separate env var (checked before `ANTHROPIC_API_KEY` in `pi-mono/packages/ai/src/env-api-keys.ts:71-73`). Claude Code also supports it. Deck injects the access token as `ANTHROPIC_OAUTH_TOKEN`, not `ANTHROPIC_API_KEY`. This is a verified behavior, not an assumption.
+**OAuth env var:** Pi reads `ANTHROPIC_OAUTH_TOKEN` as a separate env var (checked before `ANTHROPIC_API_KEY` in `pi-mono/packages/ai/src/env-api-keys.ts:71-73`). Deck injects the access token as `ANTHROPIC_OAUTH_TOKEN`, not `ANTHROPIC_API_KEY`. This is verified for Pi. Claude Code's support for `ANTHROPIC_OAUTH_TOKEN` is **assumed but unverified** — must be validated before OAuth ships for the claude-code runtime.
 
 **Injection rules:**
 - Model provider credential: only the one matching the configured provider
