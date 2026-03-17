@@ -178,20 +178,13 @@ func (p *Processor) EnqueueStream(ctx context.Context, streamID string) error {
 	}
 
 	// 5. Publish EventMergeQueued.
-	payload, _ := json.Marshal(map[string]string{
-		"entry_id":     entry.ID,
-		"stream_id":    streamID,
-		"plan_id":      stream.PlanID,
-		"objective_id": plan.ObjectiveID,
-		"branch":       branch,
-	})
-	p.eventBus.Publish(domain.Event{
-		Type:      domain.EventMergeQueued,
-		Objective: plan.ObjectiveID,
-		Stream:    streamID,
-		Payload:   string(payload),
-		CreatedAt: time.Now(),
-	})
+	p.eventBus.Emit(domain.EventMergeQueued, plan.ObjectiveID, streamID, "",
+		"entry_id", entry.ID,
+		"stream_id", streamID,
+		"plan_id", stream.PlanID,
+		"objective_id", plan.ObjectiveID,
+		"branch", branch,
+	)
 
 	p.logger.Info("stream enqueued for merge",
 		"stream_id", streamID,
@@ -459,11 +452,22 @@ func (p *Processor) getStreamBranch(ctx context.Context, streamID, executionID s
 }
 
 // MergerSandboxID returns the sandbox ID being used as the merger for an objective.
-// Returns empty string if no merger sandbox has been set up yet.
+// Checks in-memory cache first, then falls back to the database (survives restarts).
 func (p *Processor) MergerSandboxID(objectiveID string) string {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.mergerSandboxes[objectiveID]
+	id := p.mergerSandboxes[objectiveID]
+	p.mu.Unlock()
+	if id != "" {
+		return id
+	}
+	// Recover from database (daemon restart case).
+	if dbID := p.queue.GetMergerSandboxID(context.Background(), objectiveID); dbID != "" {
+		p.mu.Lock()
+		p.mergerSandboxes[objectiveID] = dbID
+		p.mu.Unlock()
+		return dbID
+	}
+	return ""
 }
 
 // getMergerSandbox returns the merger sandbox for the objective.
@@ -518,6 +522,11 @@ func (p *Processor) getMergerSandbox(ctx context.Context, objectiveID string) (s
 	p.mu.Lock()
 	p.mergerSandboxes[objectiveID] = sb.ID()
 	p.mu.Unlock()
+
+	// Persist to database so it survives daemon restarts.
+	if err := p.queue.UpdateMergerSandboxID(ctx, objectiveID, sb.ID()); err != nil {
+		p.logger.Warn("failed to persist merger sandbox ID", "objective", objectiveID, "error", err)
+	}
 
 	// Reset to base branch for a clean merge target (only on first entry).
 	// We create a dedicated merge branch because local worktrees can't checkout
@@ -627,38 +636,24 @@ func (p *Processor) checkObjectiveComplete(ctx context.Context, objectiveID stri
 
 // publishMergeCompleted publishes an EventMergeCompleted event.
 func (p *Processor) publishMergeCompleted(entry *domain.MergeEntry, result *MergeResult) {
-	payload, _ := json.Marshal(map[string]any{
-		"entry_id":      entry.ID,
-		"stream_id":     entry.StreamID,
-		"branch":        entry.Branch,
-		"tier":          result.Tier,
-		"files_changed": result.FilesChanged,
-		"insertions":    result.Insertions,
-		"deletions":     result.Deletions,
-	})
-	p.eventBus.Publish(domain.Event{
-		Type:      domain.EventMergeCompleted,
-		Objective: entry.ObjectiveID,
-		Stream:    entry.StreamID,
-		Payload:   string(payload),
-		CreatedAt: time.Now(),
-	})
+	p.eventBus.Emit(domain.EventMergeCompleted, entry.ObjectiveID, entry.StreamID, "",
+		"entry_id", entry.ID,
+		"stream_id", entry.StreamID,
+		"branch", entry.Branch,
+		"tier", result.Tier,
+		"files_changed", result.FilesChanged,
+		"insertions", result.Insertions,
+		"deletions", result.Deletions,
+	)
 }
 
 // publishMergeFailed publishes an EventMergeFailed event.
 func (p *Processor) publishMergeFailed(entry *domain.MergeEntry, errMsg string) {
-	payload, _ := json.Marshal(map[string]string{
-		"entry_id":  entry.ID,
-		"stream_id": entry.StreamID,
-		"branch":    entry.Branch,
-		"error":     errMsg,
-	})
-	p.eventBus.Publish(domain.Event{
-		Type:      domain.EventMergeFailed,
-		Objective: entry.ObjectiveID,
-		Stream:    entry.StreamID,
-		Payload:   string(payload),
-		CreatedAt: time.Now(),
-	})
+	p.eventBus.Emit(domain.EventMergeFailed, entry.ObjectiveID, entry.StreamID, "",
+		"entry_id", entry.ID,
+		"stream_id", entry.StreamID,
+		"branch", entry.Branch,
+		"error", errMsg,
+	)
 }
 

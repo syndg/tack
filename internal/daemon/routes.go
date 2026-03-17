@@ -875,20 +875,13 @@ func (d *Daemon) handleRetryMerge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, _ := json.Marshal(map[string]string{
-		"entry_id":     entry.ID,
-		"stream_id":    entry.StreamID,
-		"plan_id":      entry.PlanID,
-		"objective_id": entry.ObjectiveID,
-		"branch":       entry.Branch,
-	})
-	d.eventBus.Publish(domain.Event{
-		Type:      domain.EventMergeQueued,
-		Objective: entry.ObjectiveID,
-		Stream:    entry.StreamID,
-		Payload:   string(payload),
-		CreatedAt: time.Now(),
-	})
+	d.eventBus.Emit(domain.EventMergeQueued, entry.ObjectiveID, entry.StreamID, "",
+		"entry_id", entry.ID,
+		"stream_id", entry.StreamID,
+		"plan_id", entry.PlanID,
+		"objective_id", entry.ObjectiveID,
+		"branch", entry.Branch,
+	)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

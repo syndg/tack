@@ -2,10 +2,8 @@ package lifecycle
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
@@ -90,21 +88,10 @@ func (m *Manager) Transition(ctx context.Context, objectiveID string, to domain.
 		return fmt.Errorf("updating objective status: %w", err)
 	}
 
-	payload, err := json.Marshal(map[string]string{
-		"from": string(from),
-		"to":   string(to),
-	})
-	if err != nil {
-		m.logger.Error("failed to marshal transition payload", "error", err)
-		payload = []byte("{}")
-	}
-
-	m.eventBus.Publish(domain.Event{
-		Type:      domain.EventObjectiveUpdated,
-		Objective: objectiveID,
-		Payload:   string(payload),
-		CreatedAt: time.Now(),
-	})
+	m.eventBus.Emit(domain.EventObjectiveUpdated, objectiveID, "", "",
+		"from", string(from),
+		"to", string(to),
+	)
 
 	m.logger.Info("objective transitioned", "id", objectiveID, "from", from, "to", to)
 	return nil
@@ -167,21 +154,10 @@ func (m *Manager) MarkPlanReady(ctx context.Context, planID string) error {
 		return fmt.Errorf("updating plan status to pending_approval: %w", err)
 	}
 
-	payload, err := json.Marshal(map[string]string{
-		"plan_id":     planID,
-		"plan_status": string(domain.PlanStatusPendingApproval),
-	})
-	if err != nil {
-		m.logger.Error("failed to marshal plan ready payload", "error", err)
-		payload = []byte("{}")
-	}
-
-	m.eventBus.Publish(domain.Event{
-		Type:      domain.EventObjectiveUpdated,
-		Objective: plan.ObjectiveID,
-		Payload:   string(payload),
-		CreatedAt: time.Now(),
-	})
+	m.eventBus.Emit(domain.EventObjectiveUpdated, plan.ObjectiveID, "", "",
+		"plan_id", planID,
+		"plan_status", string(domain.PlanStatusPendingApproval),
+	)
 
 	m.logger.Info("plan ready for approval", "plan_id", planID, "objective_id", plan.ObjectiveID)
 	return nil

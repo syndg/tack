@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/syndg/deck/internal/naming"
 	"github.com/syndg/deck/internal/runtime"
 	"github.com/syndg/deck/internal/sandbox"
 )
@@ -47,7 +48,7 @@ func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.Ag
 	// 4. Construct command: shell-quote the prompt using single quotes.
 	// --dangerously-skip-permissions is safe here because agents run in
 	// isolated worktrees with no internet access or sensitive data.
-	quotedPrompt := "'" + strings.ReplaceAll(prompt, "'", `'\''`) + "'"
+	quotedPrompt := naming.ShellQuote(prompt)
 	cmd := fmt.Sprintf("claude -p %s --model %s --dangerously-skip-permissions", quotedPrompt, model)
 	if toolList != "" {
 		cmd += " --allowedTools " + toolList

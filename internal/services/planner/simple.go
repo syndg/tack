@@ -2,9 +2,7 @@ package planner
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/syndg/deck/internal/domain"
 )
@@ -41,17 +39,11 @@ func (s *Service) StartSimple(ctx context.Context, description string, opts Simp
 		return nil, nil, fmt.Errorf("creating objective: %w", err)
 	}
 
-	payload, _ := json.Marshal(map[string]string{
-		"objective_id": obj.ID,
-		"description":  description,
-		"mode":         "simple",
-	})
-	s.eventBus.Publish(domain.Event{
-		Type:      domain.EventObjectiveCreated,
-		Objective: obj.ID,
-		Payload:   string(payload),
-		CreatedAt: time.Now(),
-	})
+	s.eventBus.Emit(domain.EventObjectiveCreated, obj.ID, "", "",
+		"objective_id", obj.ID,
+		"description", description,
+		"mode", "simple",
+	)
 
 	s.logger.Info("simple objective created", "objective_id", obj.ID, "description", description)
 

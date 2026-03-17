@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
 	"github.com/syndg/deck/internal/harness/blueprint"
 	"github.com/syndg/deck/internal/harness/gates"
+	"github.com/syndg/deck/internal/naming"
 	"github.com/syndg/deck/internal/sandbox"
 	"github.com/syndg/deck/internal/services/agents"
 	events "github.com/syndg/deck/internal/services/events"
@@ -339,18 +339,11 @@ func (h *Handlers) signalStreamMergeReady(ctx context.Context, streamID, planID,
 		}, nil
 	}
 
-	payload, _ := json.Marshal(map[string]string{
-		"stream_id":    streamID,
-		"plan_id":      planID,
-		"objective_id": objectiveID,
-	})
-	h.eventBus.Publish(domain.Event{
-		Type:      domain.EventMergeQueued,
-		Objective: objectiveID,
-		Stream:    streamID,
-		Payload:   string(payload),
-		CreatedAt: time.Now(),
-	})
+	h.eventBus.Emit(domain.EventMergeQueued, objectiveID, streamID, "",
+		"stream_id", streamID,
+		"plan_id", planID,
+		"objective_id", objectiveID,
+	)
 
 	h.logger.Info("stream signaled for merge",
 		"stream_id", streamID,
@@ -498,8 +491,8 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 		body = messages.PRBody
 	}
 	body += streamSummary
-	escapedTitle := "'" + escapeShellSingleQuote(title) + "'"
-	escapedBody := "'" + escapeShellSingleQuote(body) + "'"
+	escapedTitle := naming.ShellQuote(title)
+	escapedBody := naming.ShellQuote(body)
 	prCmd := fmt.Sprintf("gh pr create --title %s --body %s --head %s --base %s", escapedTitle, escapedBody, branch, h.baseBranch)
 
 	prResult, err := sb.Exec(ctx, prCmd, sandbox.ExecOpts{})
@@ -692,9 +685,6 @@ func (h *Handlers) resetMergingEntry(ctx context.Context, streamID string) {
 	}
 }
 
-func escapeShellSingleQuote(s string) string {
-	return strings.Replace(s, "'", `'\''`, -1)
-}
 
 // mergeQueue implements the "merge_queue" deterministic action.
 // Partitions streams into merge_ready, failed, and active (executing/pending).

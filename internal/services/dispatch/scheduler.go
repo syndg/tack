@@ -2,7 +2,6 @@ package dispatch
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -124,15 +123,10 @@ func (s *Scheduler) MarkCompleted(ctx context.Context, streamID string, planID s
 		if s.activeStreams[st.ID] {
 			continue
 		}
-		payload, _ := json.Marshal(map[string]string{
-			"stream_id": st.ID,
-			"plan_id":   planID,
-		})
-		s.eventBus.Publish(domain.Event{
-			Type:    domain.EventStreamReady,
-			Stream:  st.ID,
-			Payload: string(payload),
-		})
+		s.eventBus.Emit(domain.EventStreamReady, "", st.ID, "",
+			"stream_id", st.ID,
+			"plan_id", planID,
+		)
 		s.logger.Info("stream ready cascade", "stream_id", st.ID, "plan_id", planID)
 	}
 

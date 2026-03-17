@@ -2,11 +2,9 @@ package dispatch
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/syndg/deck/internal/credentials"
@@ -282,18 +280,11 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	}
 
 	// 9. Publish EventAgentSpawned.
-	payload, _ := json.Marshal(map[string]string{
-		"session_id": session.ID,
-		"role":       req.Role,
-		"sandbox_id": sb.ID(),
-	})
-	s.eventBus.Publish(domain.Event{
-		Type:      domain.EventAgentSpawned,
-		Objective: req.Objective.ID,
-		Stream:    streamID,
-		Agent:     agentName,
-		Payload:   string(payload),
-	})
+	s.eventBus.Emit(domain.EventAgentSpawned, req.Objective.ID, streamID, agentName,
+		"session_id", session.ID,
+		"role", req.Role,
+		"sandbox_id", sb.ID(),
+	)
 
 	s.logger.Info("agent spawned",
 		"session_id", session.ID,
@@ -344,18 +335,10 @@ func (s *Spawner) MarkCompleted(ctx context.Context, session *domain.AgentSessio
 	if err := s.agentStore.UpdateStatus(ctx, session.ID, "completed"); err != nil {
 		s.logger.Error("failed to update agent session to completed", "session_id", session.ID, "error", err)
 	}
-	payload, _ := json.Marshal(map[string]string{
-		"session_id": session.ID,
-		"summary":    summary,
-	})
-	s.eventBus.Publish(domain.Event{
-		Type:      domain.EventAgentCompleted,
-		Objective: session.ObjectiveID,
-		Stream:    session.StreamID,
-		Agent:     session.ID,
-		Payload:   string(payload),
-		CreatedAt: time.Now(),
-	})
+	s.eventBus.Emit(domain.EventAgentCompleted, session.ObjectiveID, session.StreamID, session.ID,
+		"session_id", session.ID,
+		"summary", summary,
+	)
 	s.logger.Info("agent completed", "session_id", session.ID)
 }
 
@@ -364,18 +347,10 @@ func (s *Spawner) MarkFailed(ctx context.Context, session *domain.AgentSession, 
 	if err := s.agentStore.UpdateStatus(ctx, session.ID, "failed"); err != nil {
 		s.logger.Error("failed to update agent session to failed", "session_id", session.ID, "error", err)
 	}
-	payload, _ := json.Marshal(map[string]string{
-		"session_id": session.ID,
-		"reason":     reason,
-	})
-	s.eventBus.Publish(domain.Event{
-		Type:      domain.EventAgentFailed,
-		Objective: session.ObjectiveID,
-		Stream:    session.StreamID,
-		Agent:     session.ID,
-		Payload:   string(payload),
-		CreatedAt: time.Now(),
-	})
+	s.eventBus.Emit(domain.EventAgentFailed, session.ObjectiveID, session.StreamID, session.ID,
+		"session_id", session.ID,
+		"reason", reason,
+	)
 	s.logger.Info("agent failed", "session_id", session.ID, "reason", reason)
 }
 
@@ -391,17 +366,10 @@ func (s *Spawner) Kill(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("marking session failed: %w", err)
 	}
 
-	payload, _ := json.Marshal(map[string]string{
-		"session_id": sessionID,
-		"reason":     "killed",
-	})
-	s.eventBus.Publish(domain.Event{
-		Type:      domain.EventAgentFailed,
-		Objective: session.ObjectiveID,
-		Stream:    session.StreamID,
-		Agent:     sessionID,
-		Payload:   string(payload),
-	})
+	s.eventBus.Emit(domain.EventAgentFailed, session.ObjectiveID, session.StreamID, sessionID,
+		"session_id", sessionID,
+		"reason", "killed",
+	)
 
 	s.logger.Info("agent killed", "session_id", sessionID)
 	return nil

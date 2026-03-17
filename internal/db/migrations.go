@@ -154,6 +154,10 @@ func RunMigrations(db *sql.DB) error {
 			return fmt.Errorf("ensuring merge_queue.%s: %w", col.name, err)
 		}
 	}
+	// Persist merger sandbox ID so it survives daemon restarts.
+	if err := ensureColumnExists(db, "merge_queue", "merger_sandbox_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("ensuring merge_queue.merger_sandbox_id: %w", err)
+	}
 	return nil
 }
 

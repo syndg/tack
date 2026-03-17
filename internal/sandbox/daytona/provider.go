@@ -13,6 +13,7 @@ import (
 
 	daytona "github.com/daytonaio/daytona/libs/sdk-go/pkg/daytona"
 	"github.com/daytonaio/daytona/libs/sdk-go/pkg/options"
+	"github.com/syndg/deck/internal/naming"
 	"github.com/daytonaio/daytona/libs/sdk-go/pkg/types"
 
 	"github.com/syndg/deck/internal/credentials"
@@ -332,16 +333,12 @@ func buildEffectiveCommand(cmd string, opts sandbox.ExecOpts) string {
 	}
 	var exports []string
 	for k, v := range opts.Env {
-		exports = append(exports, fmt.Sprintf("export %s=%s", k, shellescape(v)))
+		exports = append(exports, fmt.Sprintf("export %s=%s", k, naming.ShellQuote(v)))
 	}
 	inner := strings.Join(exports, " && ") + " && " + cmd
-	return "sh -c " + shellescape(inner)
+	return "sh -c " + naming.ShellQuote(inner)
 }
 
-// shellescape wraps a value in single quotes for safe shell interpolation.
-func shellescape(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
 
 // DaytonaSandbox wraps a Daytona SDK sandbox to implement sandbox.Sandbox.
 type DaytonaSandbox struct {
@@ -433,7 +430,7 @@ func (s *DaytonaSandbox) ExecStreaming(ctx context.Context, cmd string, opts san
 	var parts []string
 	parts = append(parts, `export PS1=""`, `stty -echo 2>/dev/null`)
 	if workDir != "" {
-		parts = append(parts, fmt.Sprintf("cd %s", shellescape(workDir)))
+		parts = append(parts, fmt.Sprintf("cd %s", naming.ShellQuote(workDir)))
 	}
 	parts = append(parts, "exec "+cmd)
 	shellSetup := strings.Join(parts, " && ")

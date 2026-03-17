@@ -170,6 +170,33 @@ func (s *MergeQueueStore) CountPending(ctx context.Context) (int, error) {
 	return count, nil
 }
 
+// UpdateMergerSandboxID sets the merger sandbox ID on all entries for an objective.
+// Called when a merger sandbox is picked so it survives daemon restarts.
+func (s *MergeQueueStore) UpdateMergerSandboxID(ctx context.Context, objectiveID, sandboxID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE merge_queue SET merger_sandbox_id = ? WHERE objective_id = ?`,
+		sandboxID, objectiveID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating merger_sandbox_id for objective %s: %w", objectiveID, err)
+	}
+	return nil
+}
+
+// GetMergerSandboxID returns the persisted merger sandbox ID for an objective.
+// Returns empty string if none is set.
+func (s *MergeQueueStore) GetMergerSandboxID(ctx context.Context, objectiveID string) string {
+	var id string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT merger_sandbox_id FROM merge_queue WHERE objective_id = ? AND merger_sandbox_id != '' LIMIT 1`,
+		objectiveID,
+	).Scan(&id)
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
 // scanMergeEntry scans a single merge entry from a row.
 type scannable interface {
 	Scan(dest ...any) error

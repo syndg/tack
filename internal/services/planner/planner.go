@@ -2,7 +2,6 @@ package planner
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -77,16 +76,10 @@ func (s *Service) CreatePlan(ctx context.Context, objectiveID string, agentOutpu
 	}
 
 	// Publish EventPlanCreated before marking ready.
-	payload, _ := json.Marshal(map[string]string{
-		"plan_id":      plan.ID,
-		"objective_id": objectiveID,
-	})
-	s.eventBus.Publish(domain.Event{
-		Type:      domain.EventPlanCreated,
-		Objective: objectiveID,
-		Payload:   string(payload),
-		CreatedAt: time.Now(),
-	})
+	s.eventBus.Emit(domain.EventPlanCreated, objectiveID, "", "",
+		"plan_id", plan.ID,
+		"objective_id", objectiveID,
+	)
 
 	// Mark plan ready — sets status to "pending_approval" and publishes EventObjectiveUpdated.
 	if err := s.lifecycle.MarkPlanReady(ctx, plan.ID); err != nil {
@@ -148,17 +141,11 @@ func (s *Service) CreateSimplePlan(ctx context.Context, objectiveID string) (*do
 		return nil, fmt.Errorf("storing simple stream: %w", err)
 	}
 
-	payload, _ := json.Marshal(map[string]string{
-		"plan_id":      plan.ID,
-		"objective_id": objectiveID,
-		"mode":         "simple",
-	})
-	s.eventBus.Publish(domain.Event{
-		Type:      domain.EventPlanCreated,
-		Objective: objectiveID,
-		Payload:   string(payload),
-		CreatedAt: now,
-	})
+	s.eventBus.Emit(domain.EventPlanCreated, objectiveID, "", "",
+		"plan_id", plan.ID,
+		"objective_id", objectiveID,
+		"mode", "simple",
+	)
 
 	s.logger.Info("simple plan created", "plan_id", plan.ID, "objective_id", objectiveID)
 	return plan, nil
