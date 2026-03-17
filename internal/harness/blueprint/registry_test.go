@@ -78,7 +78,7 @@ func TestGet_ResolvesNormalizedAliases(t *testing.T) {
 	}
 }
 
-func TestStreamExecutionDefaultIncludesOptionalScout(t *testing.T) {
+func TestStreamExecutionDefaultSteps(t *testing.T) {
 	reg := NewRegistry()
 	if err := reg.LoadDefaults(); err != nil {
 		t.Fatalf("LoadDefaults: %v", err)
@@ -88,25 +88,22 @@ func TestStreamExecutionDefaultIncludesOptionalScout(t *testing.T) {
 	if !ok {
 		t.Fatal("Get('Stream Execution') returned false")
 	}
-	if len(bp.Steps) != 5 {
-		t.Fatalf("steps = %d, want 5", len(bp.Steps))
+	if len(bp.Steps) != 4 {
+		t.Fatalf("steps = %d, want 4", len(bp.Steps))
 	}
 
 	first := bp.Steps[0]
-	if first.ID != "scout" {
-		t.Fatalf("first step id = %q, want %q", first.ID, "scout")
+	if first.ID != "build" {
+		t.Fatalf("first step id = %q, want %q", first.ID, "build")
 	}
 	if first.Type != StepTypeAgent {
 		t.Fatalf("first step type = %q, want %q", first.Type, StepTypeAgent)
 	}
-	if first.Role != "scout" {
-		t.Fatalf("first step role = %q, want %q", first.Role, "scout")
+	if first.Role != "builder" {
+		t.Fatalf("first step role = %q, want %q", first.Role, "builder")
 	}
-	if !first.Optional {
-		t.Fatal("expected scout step to be optional")
-	}
-	if first.Next != "build" {
-		t.Fatalf("first step next = %q, want %q", first.Next, "build")
+	if first.Next != "lint" {
+		t.Fatalf("first step next = %q, want %q", first.Next, "lint")
 	}
 }
 

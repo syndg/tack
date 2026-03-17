@@ -13,6 +13,7 @@ const (
 
 type CreateOpts struct {
 	Name       string            `json:"name"`
+	Branch     string            `json:"branch"`
 	Labels     map[string]string `json:"labels"`
 	Snapshot   string            `json:"snapshot"`
 	Resources  ResourceSpec      `json:"resources"`

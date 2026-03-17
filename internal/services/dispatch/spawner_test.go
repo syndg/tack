@@ -110,7 +110,7 @@ func setupSpawnerTest(t *testing.T) (*Spawner, *mockRuntime, *mockSandboxProvide
 	rulesEng := rules.NewEngine(slog.Default())
 	toolCurator := tools.NewCurator(slog.Default())
 
-	spawner := NewSpawner(agentStore, rt, sp, rulesEng, toolCurator, bus, slog.Default(), "http://localhost:8080")
+	spawner := NewSpawner(agentStore, rt, sp, rulesEng, toolCurator, bus, nil, "", slog.Default(), "http://localhost:8080")
 	return spawner, rt, sp, agentStore, bus
 }
 

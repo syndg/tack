@@ -26,7 +26,7 @@ func skipWithoutKey(t *testing.T) string {
 func newLiveProvider(t *testing.T) *Provider {
 	t.Helper()
 	key := skipWithoutKey(t)
-	p, err := New(Config{APIKey: key}, slog.Default())
+	p, err := New(Config{APIKey: key}, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestIntegration_ListSurvivesNewProvider(t *testing.T) {
 	defer cancel()
 
 	// --- Provider 1: create sandbox ---
-	p1, err := New(Config{APIKey: key}, slog.Default())
+	p1, err := New(Config{APIKey: key}, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New p1: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestIntegration_ListSurvivesNewProvider(t *testing.T) {
 	}()
 
 	// --- Provider 2: fresh instance, simulates restart ---
-	p2, err := New(Config{APIKey: key}, slog.Default())
+	p2, err := New(Config{APIKey: key}, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New p2: %v", err)
 	}

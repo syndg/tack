@@ -12,6 +12,7 @@ import (
 	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
 	"github.com/syndg/deck/internal/harness/gates"
+	"github.com/syndg/deck/internal/naming"
 	"github.com/syndg/deck/internal/sandbox"
 	events "github.com/syndg/deck/internal/services/events"
 )
@@ -26,11 +27,13 @@ type Processor struct {
 	gateRunner  *gates.Runner
 	sandboxProv sandbox.SandboxProvider
 	eventBus    *events.PersistentBus
+	baseBranch  string
 	logger      *slog.Logger
 
-	mu         sync.Mutex
-	processing bool
-	cancel     context.CancelFunc
+	mu              sync.Mutex
+	processing      bool
+	cancel          context.CancelFunc
+	mergerSandboxes map[string]string // objectiveID → sandboxID for merger reuse
 }
 
 // NewProcessor creates a new merge queue Processor.
@@ -43,18 +46,24 @@ func NewProcessor(
 	gateRunner *gates.Runner,
 	sandboxProv sandbox.SandboxProvider,
 	eventBus *events.PersistentBus,
+	baseBranch string,
 	logger *slog.Logger,
 ) *Processor {
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
 	return &Processor{
-		queue:       queue,
-		streams:     streams,
-		plans:       plans,
-		merger:      merger,
-		differ:      differ,
-		gateRunner:  gateRunner,
-		sandboxProv: sandboxProv,
-		eventBus:    eventBus,
-		logger:      logger.With("component", "merge-processor"),
+		queue:           queue,
+		streams:         streams,
+		plans:           plans,
+		merger:          merger,
+		differ:          differ,
+		gateRunner:      gateRunner,
+		sandboxProv:     sandboxProv,
+		eventBus:        eventBus,
+		baseBranch:      baseBranch,
+		logger:          logger.With("component", "merge-processor"),
+		mergerSandboxes: make(map[string]string),
 	}
 }
 
@@ -407,36 +416,16 @@ func (p *Processor) failEntry(ctx context.Context, entry *domain.MergeEntry, tie
 	p.publishMergeFailed(entry, errMsg)
 }
 
-// getStreamBranch determines the git branch name for a stream by querying its sandbox.
-// When executionID is provided (retry path), it filters for the sandbox belonging to
-// that specific execution to avoid picking a stale sandbox from a failed attempt.
+// getStreamBranch determines the git branch name for a stream.
+// Tries the stream's sandbox first (if still alive), then falls back to
+// querying the remote (branches are pushed after each agent step).
 func (p *Processor) getStreamBranch(ctx context.Context, streamID, executionID string) (string, error) {
-	// If we know which execution we need, filter builder sandboxes by execution ID.
-	if executionID != "" {
-		execSandboxes, err := p.sandboxProv.List(ctx, map[string]string{
-			"deck.stream":    streamID,
-			"deck.role":      "builder",
-			"deck.execution": executionID,
-		})
-		if err == nil && len(execSandboxes) > 0 {
-			sb := execSandboxes[0]
-			res, err := sb.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
-			if err == nil && res.ExitCode == 0 {
-				branch := strings.TrimSpace(res.Stdout)
-				if branch != "" {
-					return branch, nil
-				}
-			}
-		}
-	}
-
-	// Try any builder sandbox for this stream (works when there's only one).
-	builderSandboxes, err := p.sandboxProv.List(ctx, map[string]string{
+	// Try to get branch from the stream's sandbox (may be auto-stopped for remote sandboxes).
+	sandboxes, err := p.sandboxProv.List(ctx, map[string]string{
 		"deck.stream": streamID,
-		"deck.role":   "builder",
 	})
-	if err == nil && len(builderSandboxes) > 0 {
-		sb := builderSandboxes[0]
+	if err == nil && len(sandboxes) > 0 {
+		sb := sandboxes[0]
 		res, err := sb.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
 		if err == nil && res.ExitCode == 0 {
 			branch := strings.TrimSpace(res.Stdout)
@@ -446,74 +435,118 @@ func (p *Processor) getStreamBranch(ctx context.Context, streamID, executionID s
 		}
 	}
 
-	// Fall back to any sandbox for this stream.
-	sandboxes, err := p.sandboxProv.List(ctx, map[string]string{
-		"deck.stream": streamID,
-	})
+	// Sandbox not available — query the stream record for the branch name.
+	// The branch was pushed to origin after each agent step, so it exists on the remote.
+	stream, err := p.streams.Get(ctx, streamID)
 	if err != nil {
-		return "", fmt.Errorf("listing sandboxes for stream: %w", err)
-	}
-	if len(sandboxes) == 0 {
-		return "", fmt.Errorf("no sandbox found for stream %s", streamID)
+		return "", fmt.Errorf("getting stream: %w", err)
 	}
 
-	sb := sandboxes[0]
-	res, err := sb.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
+	// Look up the plan's objective to derive the branch name deterministically.
+	plan, err := p.plans.Get(ctx, stream.PlanID)
 	if err != nil {
-		return "", fmt.Errorf("getting branch from sandbox: %w", err)
+		return "", fmt.Errorf("getting plan: %w", err)
 	}
-	if res.ExitCode != 0 {
-		return "", fmt.Errorf("git rev-parse failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	objShort := plan.ObjectiveID
+	if len(objShort) > 8 {
+		objShort = objShort[:8]
 	}
-
-	branch := strings.TrimSpace(res.Stdout)
-	if branch == "" {
-		return "", fmt.Errorf("empty branch name from sandbox %s", sb.ID())
-	}
+	slug := naming.StreamSlug(stream.Title)
+	branch := fmt.Sprintf("deck/%s/%s", objShort, slug)
+	p.logger.Info("derived stream branch from title (sandbox unavailable)",
+		"branch", branch, "stream", streamID)
 	return branch, nil
 }
 
-// getMergerSandbox returns an existing merger sandbox for the objective,
-// or creates a new one if none exists. Existing sandboxes are reset to the
-// base branch (main) to avoid stale state from previous merges.
+// MergerSandboxID returns the sandbox ID being used as the merger for an objective.
+// Returns empty string if no merger sandbox has been set up yet.
+func (p *Processor) MergerSandboxID(objectiveID string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.mergerSandboxes[objectiveID]
+}
+
+// getMergerSandbox returns the merger sandbox for the objective.
+// On first call: picks any stream sandbox, resets to base branch.
+// On subsequent calls: returns the same sandbox WITHOUT resetting —
+// merges are cumulative (stream-1 merged, then stream-2 on top, etc.).
 func (p *Processor) getMergerSandbox(ctx context.Context, objectiveID string) (sandbox.Sandbox, error) {
-	// Try to find an existing merger sandbox for THIS objective.
-	sandboxes, err := p.sandboxProv.List(ctx, map[string]string{
-		"deck.objective": objectiveID,
-		"deck.role":      "merger",
-	})
-	if err == nil && len(sandboxes) > 0 {
-		sb := sandboxes[0]
-		// Reset to base branch to ensure clean state. Without this,
-		// a reused sandbox may contain merged branches from a previous
-		// run of the same objective.
-		resetResult, resetErr := sb.Exec(ctx, "git checkout main && git reset --hard origin/main 2>/dev/null || git reset --hard main", sandbox.ExecOpts{})
-		if resetErr != nil || resetResult.ExitCode != 0 {
-			p.logger.Warn("could not reset merger sandbox, creating fresh one",
-				"sandbox_id", sb.ID(),
-				"error", resetErr,
-			)
-		} else {
+	// Check if we already initialized a merger sandbox for this objective.
+	p.mu.Lock()
+	mergerID := p.mergerSandboxes[objectiveID]
+	p.mu.Unlock()
+
+	if mergerID != "" {
+		sb, err := p.sandboxProv.Get(ctx, mergerID)
+		if err == nil {
+			// Already initialized — return as-is (cumulative merge state).
 			return sb, nil
+		}
+		p.logger.Warn("cached merger sandbox not found, will pick new one",
+			"sandbox_id", mergerID, "error", err)
+	}
+
+	// First merge for this objective — pick any stream sandbox to reuse.
+	allSandboxes, listErr := p.sandboxProv.List(ctx, map[string]string{
+		"deck.objective": objectiveID,
+	})
+
+	var sb sandbox.Sandbox
+	var err error
+	if listErr == nil && len(allSandboxes) > 0 {
+		sb = allSandboxes[0]
+		p.logger.Info("reusing stream sandbox for merge", "sandbox_id", sb.ID(), "objective", objectiveID)
+	} else {
+		// No sandboxes available — create a new one (shouldn't happen normally).
+		objShort := objectiveID
+		if len(objShort) > 8 {
+			objShort = objShort[:8]
+		}
+		sb, err = p.sandboxProv.Create(ctx, sandbox.CreateOpts{
+			Name:   fmt.Sprintf("deck-%s-merger", objShort),
+			Branch: fmt.Sprintf("deck/%s/merger", objShort),
+			Labels: map[string]string{
+				"deck.objective": objectiveID,
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("creating merger sandbox: %w", err)
 		}
 	}
 
-	// Create a new merger sandbox.
+	// Track this sandbox as the merger for subsequent entries.
+	p.mu.Lock()
+	p.mergerSandboxes[objectiveID] = sb.ID()
+	p.mu.Unlock()
+
+	// Reset to base branch for a clean merge target (only on first entry).
+	// We create a dedicated merge branch because local worktrees can't checkout
+	// the base branch directly (it's already in use by the main worktree).
+	// Commands are separate because Daytona ExecuteCommand doesn't support && chains.
 	objShort := objectiveID
 	if len(objShort) > 8 {
 		objShort = objShort[:8]
 	}
+	mergeBranch := fmt.Sprintf("deck/%s/merge", objShort)
 
-	sb, err := p.sandboxProv.Create(ctx, sandbox.CreateOpts{
-		Name: fmt.Sprintf("deck-merger-%s", objShort),
-		Labels: map[string]string{
-			"deck.objective": objectiveID,
-			"deck.role":      "merger",
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("creating merger sandbox: %w", err)
+	// Fetch all branches. Try full refspec first (needed for Daytona clones
+	// which default to HEAD-only), fall back to plain fetch for local worktrees.
+	if res, _ := sb.Exec(ctx, "git fetch origin '+refs/heads/*:refs/remotes/origin/*'", sandbox.ExecOpts{}); res.ExitCode != 0 {
+		sb.Exec(ctx, "git fetch origin", sandbox.ExecOpts{})
 	}
+
+	// Create merge branch at the base branch's commit. Try origin first, then local ref.
+	created := false
+	if res, err := sb.Exec(ctx, fmt.Sprintf("git checkout -B %s origin/%s", mergeBranch, p.baseBranch), sandbox.ExecOpts{}); err == nil && res.ExitCode == 0 {
+		created = true
+	}
+	if !created {
+		// No remote — resolve the base branch commit by ref (avoids "branch in use" error).
+		if res, err := sb.Exec(ctx, fmt.Sprintf("git checkout -B %s %s", mergeBranch, p.baseBranch), sandbox.ExecOpts{}); err != nil || res.ExitCode != 0 {
+			return nil, fmt.Errorf("creating merge branch from %s: exit=%d stderr=%s", p.baseBranch, res.ExitCode, res.Stderr)
+		}
+	}
+
 	return sb, nil
 }
 
@@ -628,3 +661,4 @@ func (p *Processor) publishMergeFailed(entry *domain.MergeEntry, errMsg string) 
 		CreatedAt: time.Now(),
 	})
 }
+

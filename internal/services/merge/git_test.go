@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/syndg/deck/internal/sandbox"
@@ -39,12 +40,14 @@ func TestTryCleanMerge_Success(t *testing.T) {
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
 			callLog = append(callLog, cmd)
-			switch cmd {
-			case "git fetch origin":
+			switch {
+			case strings.Contains(cmd, "fetch origin"):
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case "git merge --no-edit feature-branch":
+			case strings.Contains(cmd, "rev-parse --verify"):
+				return sandbox.ExecResult{ExitCode: 128}, nil
+			case cmd == "git merge --no-edit feature-branch":
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case "git diff --stat HEAD~1":
+			case strings.Contains(cmd, "diff --stat"):
 				return sandbox.ExecResult{
 					ExitCode: 0,
 					Stdout:   " src/auth.go | 10 ++++----\n src/jwt.go  |  5 +++--\n 2 files changed, 7 insertions(+), 8 deletions(-)\n",
@@ -80,11 +83,8 @@ func TestTryCleanMerge_Success(t *testing.T) {
 	if len(callLog) < 2 {
 		t.Fatalf("expected at least 2 calls, got %d", len(callLog))
 	}
-	if callLog[0] != "git fetch origin" {
-		t.Errorf("first call = %q, want 'git fetch origin'", callLog[0])
-	}
-	if callLog[1] != "git merge --no-edit feature-branch" {
-		t.Errorf("second call = %q, want 'git merge --no-edit feature-branch'", callLog[1])
+	if !strings.Contains(callLog[0], "fetch origin") {
+		t.Errorf("first call = %q, want fetch origin", callLog[0])
 	}
 }
 
@@ -93,20 +93,22 @@ func TestTryCleanMerge_Conflict(t *testing.T) {
 	sb := &mockSandbox{
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
-			switch cmd {
-			case "git fetch origin":
+			switch {
+			case strings.Contains(cmd, "fetch origin"):
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case "git merge --no-edit conflict-branch":
+			case strings.Contains(cmd, "rev-parse --verify"):
+				return sandbox.ExecResult{ExitCode: 128}, nil
+			case cmd == "git merge --no-edit conflict-branch":
 				return sandbox.ExecResult{
 					ExitCode: 1,
 					Stderr:   "CONFLICT (content): Merge conflict in src/auth.go\nAutomatic merge failed",
 				}, nil
-			case "git diff --name-only --diff-filter=U":
+			case cmd == "git diff --name-only --diff-filter=U":
 				return sandbox.ExecResult{
 					ExitCode: 0,
 					Stdout:   "src/auth.go\nsrc/config.go\n",
 				}, nil
-			case "git merge --abort":
+			case cmd == "git merge --abort":
 				abortCalled = true
 				return sandbox.ExecResult{ExitCode: 0}, nil
 			default:
@@ -176,12 +178,14 @@ func TestTryAutoResolve_Failure(t *testing.T) {
 	sb := &mockSandbox{
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
-			switch cmd {
-			case "git merge -X theirs --no-edit bad-branch":
+			switch {
+			case strings.Contains(cmd, "rev-parse --verify"):
+				return sandbox.ExecResult{ExitCode: 128}, nil
+			case cmd == "git merge -X theirs --no-edit bad-branch":
 				return sandbox.ExecResult{ExitCode: 1, Stderr: "CONFLICT"}, nil
-			case "git diff --name-only --diff-filter=U":
+			case cmd == "git diff --name-only --diff-filter=U":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: "binary.dat\n"}, nil
-			case "git merge --abort":
+			case cmd == "git merge --abort":
 				abortCalled = true
 				return sandbox.ExecResult{ExitCode: 0}, nil
 			default:
@@ -252,7 +256,7 @@ func TestGetDiffStat(t *testing.T) {
 			}
 
 			merger := NewGitMerger(slog.Default())
-			files, ins, del, err := merger.GetDiffStat(context.Background(), sb)
+			files, ins, del, err := merger.GetDiffStat(context.Background(), sb, "")
 			if err != nil {
 				t.Fatalf("GetDiffStat: %v", err)
 			}
@@ -287,7 +291,7 @@ func TestGetDiffStat_FallsBackToHEADTilde1(t *testing.T) {
 	}
 
 	merger := NewGitMerger(slog.Default())
-	files, ins, del, err := merger.GetDiffStat(context.Background(), sb)
+	files, ins, del, err := merger.GetDiffStat(context.Background(), sb, "")
 	if err != nil {
 		t.Fatalf("GetDiffStat: %v", err)
 	}
@@ -296,6 +300,35 @@ func TestGetDiffStat_FallsBackToHEADTilde1(t *testing.T) {
 	}
 	if len(callLog) != 2 || callLog[0] != "git diff --stat ORIG_HEAD...HEAD" || callLog[1] != "git diff --stat HEAD~1" {
 		t.Fatalf("unexpected command sequence: %v", callLog)
+	}
+}
+
+func TestGetDiffStat_UsesPreMergeRef(t *testing.T) {
+	callLog := []string{}
+	sb := &mockSandbox{
+		id: "test-sb",
+		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
+			callLog = append(callLog, cmd)
+			switch cmd {
+			case "git diff --stat abc123...HEAD":
+				return sandbox.ExecResult{ExitCode: 0, Stdout: " f.go | 5 +++--\n 1 file changed, 3 insertions(+), 2 deletions(-)\n"}, nil
+			default:
+				return sandbox.ExecResult{ExitCode: 0}, nil
+			}
+		},
+	}
+
+	merger := NewGitMerger(slog.Default())
+	files, ins, del, err := merger.GetDiffStat(context.Background(), sb, "abc123")
+	if err != nil {
+		t.Fatalf("GetDiffStat: %v", err)
+	}
+	if files != 1 || ins != 3 || del != 2 {
+		t.Fatalf("GetDiffStat = (%d, %d, %d), want (1, 3, 2)", files, ins, del)
+	}
+	// Should use the preMergeRef directly without falling back to ORIG_HEAD.
+	if len(callLog) != 1 || callLog[0] != "git diff --stat abc123...HEAD" {
+		t.Fatalf("unexpected command sequence: %v (wanted single preMergeRef call)", callLog)
 	}
 }
 
@@ -368,25 +401,25 @@ func TestMerge_TiersSequentially(t *testing.T) {
 	sb := &mockSandbox{
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
-			switch cmd {
-			case "git fetch origin":
+			switch {
+			case strings.Contains(cmd, "fetch origin"):
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case "git merge --no-edit test-branch":
+			case strings.Contains(cmd, "rev-parse --verify"):
+				return sandbox.ExecResult{ExitCode: 128}, nil // no origin/ ref
+			case cmd == "git merge --no-edit test-branch":
 				tierAttempts++
-				// Tier 1 fails with conflict.
 				return sandbox.ExecResult{
 					ExitCode: 1,
 					Stderr:   "CONFLICT (content): Merge conflict in file.go",
 				}, nil
-			case "git diff --name-only --diff-filter=U":
+			case cmd == "git diff --name-only --diff-filter=U":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: "file.go\n"}, nil
-			case "git merge --abort":
+			case cmd == "git merge --abort":
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case "git merge -X theirs --no-edit test-branch":
+			case cmd == "git merge -X theirs --no-edit test-branch":
 				tierAttempts++
-				// Tier 2 succeeds.
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case "git diff --stat HEAD~1":
+			case strings.Contains(cmd, "diff --stat"):
 				return sandbox.ExecResult{
 					ExitCode: 0,
 					Stdout:   " file.go | 3 +++\n 1 file changed, 3 insertions(+)\n",
@@ -417,22 +450,24 @@ func TestMerge_AllTiersFail(t *testing.T) {
 	sb := &mockSandbox{
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
-			switch cmd {
-			case "git fetch origin":
+			switch {
+			case strings.Contains(cmd, "fetch origin"):
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case "git merge --no-edit stuck-branch":
+			case strings.Contains(cmd, "rev-parse --verify"):
+				return sandbox.ExecResult{ExitCode: 128}, nil
+			case cmd == "git merge --no-edit stuck-branch":
 				return sandbox.ExecResult{
 					ExitCode: 1,
 					Stderr:   "CONFLICT (content): Merge conflict in binary.dat",
 				}, nil
-			case "git merge -X theirs --no-edit stuck-branch":
+			case cmd == "git merge -X theirs --no-edit stuck-branch":
 				return sandbox.ExecResult{
 					ExitCode: 1,
 					Stderr:   "CONFLICT (binary): Merge conflict in binary.dat",
 				}, nil
-			case "git diff --name-only --diff-filter=U":
+			case cmd == "git diff --name-only --diff-filter=U":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: "binary.dat\n"}, nil
-			case "git merge --abort":
+			case cmd == "git merge --abort":
 				return sandbox.ExecResult{ExitCode: 0}, nil
 			default:
 				return sandbox.ExecResult{ExitCode: 0}, nil

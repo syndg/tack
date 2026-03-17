@@ -928,13 +928,11 @@ exit 0
 func setupGitRepo(t *testing.T) func() {
 	t.Helper()
 	repo := t.TempDir()
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir repo: %v", err)
-	}
+
+	// t.Chdir is test-scoped: it changes cwd for the current test and
+	// automatically restores it when the test finishes, avoiding races
+	// between concurrent test goroutines that share the process-wide cwd.
+	t.Chdir(repo)
 
 	runCmd := func(name string, args ...string) {
 		t.Helper()
@@ -954,9 +952,7 @@ func setupGitRepo(t *testing.T) func() {
 	runCmd("git", "add", "README.md")
 	runCmd("git", "commit", "-q", "-m", "init")
 
-	return func() {
-		_ = os.Chdir(cwd)
-	}
+	return func() { /* t.Chdir restores cwd automatically */ }
 }
 
 func installFakeClaude(t *testing.T, script string) {
@@ -980,6 +976,7 @@ func startExecutionDaemonWithInstance(t *testing.T, listen string, qualityGates 
 	cfg := config.Default()
 	cfg.Daemon.Listen = listen
 	cfg.Daemon.DataDir = t.TempDir()
+	cfg.Sandbox.Provider = "local"
 	cfg.QualityGates = append([]string(nil), qualityGates...)
 
 	d, err := New(cfg)
@@ -1000,6 +997,10 @@ func startExecutionDaemonWithInstance(t *testing.T, listen string, qualityGates 
 		defer cancel()
 		_ = d.Shutdown(ctx)
 		<-errCh
+		// Brief drain: give background goroutines (sandbox cleanup, event
+		// publishing) time to finish before the next test changes cwd or
+		// reuses the port.
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -1082,8 +1083,9 @@ func TestDaemonRestart_RediscoversLocalSandboxesAndCompletesObjective(t *testing
 	t.Setenv("PATH", slowBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	cfg1 := config.Default()
-	cfg1.Daemon.Listen = "127.0.0.1:19810"
+	cfg1.Daemon.Listen = "127.0.0.1:19812"
 	cfg1.Daemon.DataDir = sharedDataDir
+	cfg1.Sandbox.Provider = "local"
 	cfg1.Sandbox.WorktreeDir = sharedWorktreeDir
 	cfg1.QualityGates = []string{"true"} // trivial gate for test repo
 
@@ -1144,8 +1146,9 @@ func TestDaemonRestart_RediscoversLocalSandboxesAndCompletesObjective(t *testing
 	t.Setenv("PATH", fastBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	cfg2 := config.Default()
-	cfg2.Daemon.Listen = "127.0.0.1:19811"
+	cfg2.Daemon.Listen = "127.0.0.1:19813"
 	cfg2.Daemon.DataDir = sharedDataDir
+	cfg2.Sandbox.Provider = "local"
 	cfg2.Sandbox.WorktreeDir = sharedWorktreeDir
 	cfg2.QualityGates = []string{"true"}
 

@@ -1,14 +1,7 @@
 name: "Stream Execution"
-description: "Execute a single work stream: scout, build, lint, review"
+description: "Execute a single work stream: build, lint, review, merge_ready"
 
 steps:
-  - id: scout
-    type: agent
-    role: scout
-    optional: true
-    commit: none
-    next: build
-
   - id: build
     type: agent
     role: builder

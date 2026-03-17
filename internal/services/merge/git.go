@@ -67,16 +67,30 @@ func (m *GitMerger) Merge(ctx context.Context, sb sandbox.Sandbox, branch string
 }
 
 // TryCleanMerge attempts a tier 1 clean merge (no conflicts).
-// Runs: git merge --no-edit {branch}
+// Runs: git merge --no-edit origin/{branch}
 // Returns success=true if merge completes without conflicts.
 // On conflict: runs git merge --abort and returns success=false with conflict list.
 func (m *GitMerger) TryCleanMerge(ctx context.Context, sb sandbox.Sandbox, branch string) (*MergeResult, error) {
 	// Fetch latest refs
-	if _, err := sb.Exec(ctx, "git fetch origin", sandbox.ExecOpts{}); err != nil {
-		return nil, fmt.Errorf("git fetch: %w", err)
+	// Fetch all branches. Try full refspec first (needed for Daytona clones
+	// which default to HEAD-only), fall back to plain fetch for local worktrees.
+	if res, _ := sb.Exec(ctx, "git fetch origin '+refs/heads/*:refs/remotes/origin/*'", sandbox.ExecOpts{}); res.ExitCode != 0 {
+		sb.Exec(ctx, "git fetch origin", sandbox.ExecOpts{})
 	}
 
-	cmd := fmt.Sprintf("git merge --no-edit %s", branch)
+	// Use origin/ prefix — for remote sandboxes (Daytona) the branch only
+	// exists on origin after push. For local worktrees, origin/ also works
+	// as long as push ran (falls back to local ref if origin/ not found).
+	mergeRef := "origin/" + branch
+	// Check if origin ref exists; fall back to local branch name for worktrees.
+	checkRes, _ := sb.Exec(ctx, fmt.Sprintf("git rev-parse --verify %s", mergeRef), sandbox.ExecOpts{})
+	if checkRes.ExitCode != 0 {
+		mergeRef = branch
+	}
+	// Record pre-merge HEAD so we can diff against it after merge.
+	preMergeRef := m.getHeadRef(ctx, sb)
+
+	cmd := fmt.Sprintf("git merge --no-edit %s", mergeRef)
 	res, err := sb.Exec(ctx, cmd, sandbox.ExecOpts{})
 	if err != nil {
 		return nil, fmt.Errorf("executing git merge: %w", err)
@@ -84,7 +98,7 @@ func (m *GitMerger) TryCleanMerge(ctx context.Context, sb sandbox.Sandbox, branc
 
 	if res.ExitCode == 0 {
 		// Clean merge succeeded — collect diff stats
-		filesChanged, insertions, deletions, err := m.GetDiffStat(ctx, sb)
+		filesChanged, insertions, deletions, err := m.GetDiffStat(ctx, sb, preMergeRef)
 		if err != nil {
 			m.logger.Warn("failed to get diff stat after clean merge", "error", err)
 		}
@@ -129,7 +143,16 @@ func (m *GitMerger) TryCleanMerge(ctx context.Context, sb sandbox.Sandbox, branc
 // Uses git merge -X theirs to favor incoming changes — appropriate when
 // streams have file scope isolation (no overlapping edits).
 func (m *GitMerger) TryAutoResolve(ctx context.Context, sb sandbox.Sandbox, branch string) (*MergeResult, error) {
-	cmd := fmt.Sprintf("git merge -X theirs --no-edit %s", branch)
+	// Use origin/ prefix for remote sandboxes; fall back to local ref.
+	mergeRef := "origin/" + branch
+	checkRes, _ := sb.Exec(ctx, fmt.Sprintf("git rev-parse --verify %s", mergeRef), sandbox.ExecOpts{})
+	if checkRes.ExitCode != 0 {
+		mergeRef = branch
+	}
+	// Record pre-merge HEAD so we can diff against it after merge.
+	preMergeRef := m.getHeadRef(ctx, sb)
+
+	cmd := fmt.Sprintf("git merge -X theirs --no-edit %s", mergeRef)
 	res, err := sb.Exec(ctx, cmd, sandbox.ExecOpts{})
 	if err != nil {
 		return nil, fmt.Errorf("executing git merge -X theirs: %w", err)
@@ -137,7 +160,7 @@ func (m *GitMerger) TryAutoResolve(ctx context.Context, sb sandbox.Sandbox, bran
 
 	if res.ExitCode == 0 {
 		// Auto-resolve succeeded — collect diff stats
-		filesChanged, insertions, deletions, err := m.GetDiffStat(ctx, sb)
+		filesChanged, insertions, deletions, err := m.GetDiffStat(ctx, sb, preMergeRef)
 		if err != nil {
 			m.logger.Warn("failed to get diff stat after auto-resolve", "error", err)
 		}
@@ -166,14 +189,28 @@ func (m *GitMerger) TryAutoResolve(ctx context.Context, sb sandbox.Sandbox, bran
 	}, nil
 }
 
+// getHeadRef returns the current HEAD commit SHA (short form).
+// Returns empty string on failure (caller should handle gracefully).
+func (m *GitMerger) getHeadRef(ctx context.Context, sb sandbox.Sandbox) string {
+	res, err := sb.Exec(ctx, "git rev-parse HEAD", sandbox.ExecOpts{})
+	if err != nil || res.ExitCode != 0 {
+		return ""
+	}
+	return strings.TrimSpace(res.Stdout)
+}
+
 // GetDiffStat returns diff statistics for the last merge.
-// Prefers ORIG_HEAD...HEAD so multi-commit and fast-forward merges report the
-// full merged delta, then falls back to HEAD~1 for older environments/tests.
-func (m *GitMerger) GetDiffStat(ctx context.Context, sb sandbox.Sandbox) (filesChanged, insertions, deletions int, err error) {
-	commands := []string{
+// If preMergeRef is provided, diffs against it directly (most reliable).
+// Otherwise falls back to ORIG_HEAD and then HEAD~1.
+func (m *GitMerger) GetDiffStat(ctx context.Context, sb sandbox.Sandbox, preMergeRef string) (filesChanged, insertions, deletions int, err error) {
+	var commands []string
+	if preMergeRef != "" {
+		commands = append(commands, fmt.Sprintf("git diff --stat %s...HEAD", preMergeRef))
+	}
+	commands = append(commands,
 		"git diff --stat ORIG_HEAD...HEAD",
 		"git diff --stat HEAD~1",
-	}
+	)
 
 	var lastErr error
 	for _, cmd := range commands {

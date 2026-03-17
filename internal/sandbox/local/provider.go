@@ -11,12 +11,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
 	"github.com/google/uuid"
 	"github.com/syndg/deck/internal/sandbox"
 )
+
+// validBranchRe matches branch names that start with an alphanumeric char or
+// "deck/" and contain only alphanumeric, hyphen, underscore, dot, and slash.
+var validBranchRe = regexp.MustCompile(`^[a-zA-Z0-9][-a-zA-Z0-9_.\/]*$`)
 
 const sandboxMetaFile = ".deck-sandbox.json"
 
@@ -159,17 +164,28 @@ func (p *Provider) SetPostCreate(commands []string) {
 func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox.Sandbox, error) {
 	id := uuid.New().String()
 
-	// Build branch name: deck/{objective[:8]}/{role}-{id[:8]}
-	objective := opts.Labels["deck.objective"]
-	if len(objective) > 8 {
-		objective = objective[:8]
+	// Use explicit branch name if provided; otherwise derive from labels.
+	branch := opts.Branch
+	if branch == "" {
+		objective := opts.Labels["deck.objective"]
+		if len(objective) > 8 {
+			objective = objective[:8]
+		}
+		role := opts.Labels["deck.role"]
+		if role == "" {
+			role = "agent"
+		}
+		idShort := id[:8]
+		branch = fmt.Sprintf("deck/%s/%s-%s", objective, role, idShort)
 	}
-	role := opts.Labels["deck.role"]
-	if role == "" {
-		role = "agent"
+
+	// Validate branch name to prevent path traversal and injection.
+	if strings.Contains(branch, "..") {
+		return nil, fmt.Errorf("invalid branch name %q: contains '..'", branch)
 	}
-	idShort := id[:8]
-	branch := fmt.Sprintf("deck/%s/%s-%s", objective, role, idShort)
+	if !validBranchRe.MatchString(branch) {
+		return nil, fmt.Errorf("invalid branch name %q: must start with an alphanumeric character and contain only alphanumeric, hyphen, underscore, dot, or slash characters", branch)
+	}
 
 	worktreePath := filepath.Join(p.worktreeDir, id)
 
@@ -199,11 +215,13 @@ func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox
 	}
 
 	// Run post-create commands (e.g., "bun install").
+	// Uses system essentials + sandbox env only — no model credentials needed.
+	postCreateEnv := sandboxEnv(opts.EnvVars, nil)
 	for _, cmd := range p.postCreate {
 		p.logger.Info("running post-create command", "command", cmd, "worktree", id)
 		c := exec.CommandContext(ctx, "sh", "-c", cmd)
 		c.Dir = worktreePath
-		c.Env = os.Environ()
+		c.Env = postCreateEnv
 		if out, err := c.CombinedOutput(); err != nil {
 			p.logger.Warn("post-create command failed", "command", cmd, "error", err, "output", string(out))
 		}
@@ -306,6 +324,57 @@ func matchesLabels(target, filter map[string]string) bool {
 	return true
 }
 
+// envAllowlist contains host environment variable names (or prefixes ending in
+// '*') that are safe to pass into sandbox processes. Everything else is filtered.
+var envAllowlist = []string{
+	"PATH", "HOME", "USER", "SHELL",
+	"LANG", "LC_*",
+	"TERM", "TMPDIR",
+	"XDG_*",
+}
+
+// sandboxEnv builds a process environment from the allowlist + sandbox-level
+// env + per-execution env. No other host variables pass through.
+func sandboxEnv(sandboxVars, execVars map[string]string) []string {
+	env := filteredHostEnv()
+	for k, v := range sandboxVars {
+		env = append(env, k+"="+v)
+	}
+	for k, v := range execVars {
+		env = append(env, k+"="+v)
+	}
+	return env
+}
+
+// filteredHostEnv returns only host env vars matching the allowlist.
+func filteredHostEnv() []string {
+	var result []string
+	for _, entry := range os.Environ() {
+		eqIdx := strings.IndexByte(entry, '=')
+		if eqIdx < 0 {
+			continue
+		}
+		name := entry[:eqIdx]
+		if isAllowed(name) {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
+func isAllowed(name string) bool {
+	for _, pattern := range envAllowlist {
+		if strings.HasSuffix(pattern, "*") {
+			if strings.HasPrefix(name, pattern[:len(pattern)-1]) {
+				return true
+			}
+		} else if name == pattern {
+			return true
+		}
+	}
+	return false
+}
+
 // LocalSandbox implements sandbox.Sandbox backed by a git worktree.
 type LocalSandbox struct {
 	id      string
@@ -338,15 +407,7 @@ func (s *LocalSandbox) Exec(ctx context.Context, cmdStr string, opts sandbox.Exe
 	}
 	cmd.Dir = workDir
 
-	// Merge env: inherit OS env, then sandbox envVars, then opts.Env
-	env := os.Environ()
-	for k, v := range s.envVars {
-		env = append(env, k+"="+v)
-	}
-	for k, v := range opts.Env {
-		env = append(env, k+"="+v)
-	}
-	cmd.Env = env
+	cmd.Env = sandboxEnv(s.envVars, opts.Env)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -380,14 +441,7 @@ func (s *LocalSandbox) ExecStreaming(ctx context.Context, cmdStr string, opts sa
 	}
 	cmd.Dir = workDir
 
-	env := os.Environ()
-	for k, v := range s.envVars {
-		env = append(env, k+"="+v)
-	}
-	for k, v := range opts.Env {
-		env = append(env, k+"="+v)
-	}
-	cmd.Env = env
+	cmd.Env = sandboxEnv(s.envVars, opts.Env)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -403,9 +457,9 @@ func (s *LocalSandbox) ExecStreaming(ctx context.Context, cmdStr string, opts sa
 	}
 
 	scanner := bufio.NewScanner(stdout)
-	// Pi can emit very large JSONL lines (e.g. file contents in tool results).
-	// Default 64KB is too small; use 4MB.
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	// Pi can emit very large JSONL lines (e.g. file contents in tool results,
+	// agent_end with full conversation history). 16MB handles planners.
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 
 	return &localProcessHandle{
 		cmd:     cmd,

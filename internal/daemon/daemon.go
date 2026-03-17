@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/syndg/deck/internal/config"
+	"github.com/syndg/deck/internal/credentials"
 	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/harness/blueprint"
 	"github.com/syndg/deck/internal/harness/gates"
@@ -164,23 +166,40 @@ func New(cfg *config.Config) (*Daemon, error) {
 		return nil, fmt.Errorf("getting working directory: %w", err)
 	}
 
-	// Derive daemon URL from listen address (replace 0.0.0.0 with 127.0.0.1).
-	listenAddr := cfg.Daemon.Listen
+	// Derive daemon URL: prefer external_url (required for remote sandboxes like Daytona).
 	var daemonURL string
-	if strings.HasPrefix(listenAddr, "0.0.0.0:") {
-		daemonURL = "http://127.0.0.1:" + listenAddr[len("0.0.0.0:"):]
+	if cfg.Daemon.ExternalURL != "" {
+		daemonURL = cfg.Daemon.ExternalURL
+		logger.Info("using external daemon URL for agent callbacks", "url", daemonURL)
 	} else {
-		daemonURL = "http://" + listenAddr
+		listenAddr := cfg.Daemon.Listen
+		if strings.HasPrefix(listenAddr, "0.0.0.0:") {
+			daemonURL = "http://127.0.0.1:" + listenAddr[len("0.0.0.0:"):]
+		} else {
+			daemonURL = "http://" + listenAddr
+		}
 	}
 
 	// Create mail broker.
 	mailBroker := mail.New(mailStore, agentStore, eventBus, logger)
 
+	// Load credentials store early for sandbox provider setup.
+	credsPath := filepath.Join(home, ".config", "deck", "credentials.yaml")
+	creds, err := credentials.Load(credsPath)
+	if err != nil {
+		logger.Warn("loading credentials store", "path", credsPath, "error", err)
+		creds, _ = credentials.Load("") // empty store fallback
+	}
+
 	// Create sandbox provider based on config.
 	var sandboxProv sandbox.SandboxProvider
 	switch cfg.Sandbox.Provider {
 	case "daytona":
-		apiKey := cfg.Sandbox.Daytona.APIKey
+		// Resolve Daytona API key: credentials store → config → env var fallback.
+		apiKey, _ := creds.SandboxKey("daytona")
+		if apiKey == "" {
+			apiKey = cfg.Sandbox.Daytona.APIKey
+		}
 		if apiKey == "" {
 			apiKey = os.Getenv("DAYTONA_API_KEY")
 		}
@@ -192,11 +211,22 @@ func New(cfg *config.Config) (*Daemon, error) {
 			lp.Rediscover(context.Background())
 			sandboxProv = lp
 		} else {
+			// Derive repo URL from git remote for Daytona bootstrap.
+			repoURL := ""
+			if gitCmd := exec.Command("git", "remote", "get-url", "origin"); gitCmd != nil {
+				gitCmd.Dir = projectRoot
+				if out, err := gitCmd.Output(); err == nil {
+					repoURL = strings.TrimSpace(string(out))
+				}
+			}
+
 			dp, err := daytona.New(daytona.Config{
-				APIKey:   apiKey,
-				APIURL:   cfg.Sandbox.Daytona.APIURL,
-				Snapshot: cfg.Sandbox.Daytona.Snapshot,
-			}, logger)
+				APIKey:     apiKey,
+				APIURL:     cfg.Sandbox.Daytona.APIURL,
+				Snapshot:   cfg.Sandbox.Daytona.Snapshot,
+				RepoURL:    repoURL,
+				PostCreate: cfg.Sandbox.PostCreate,
+			}, creds, logger)
 			if err != nil {
 				_ = database.Close()
 				return nil, fmt.Errorf("creating daytona provider: %w", err)
@@ -227,8 +257,14 @@ func New(cfg *config.Config) (*Daemon, error) {
 		agentRuntime = claudecode.New(cfg.Planning.Model, logger)
 	}
 
+	// Determine model provider from config.
+	modelProvider := cfg.Agents.Pi.Provider
+	if modelProvider == "" {
+		modelProvider = "anthropic" // default
+	}
+
 	// Create spawner.
-	spawner := dispatch.NewSpawner(agentStore, agentRuntime, sandboxProv, rulesEng, toolCur, eventBus, logger, daemonURL)
+	spawner := dispatch.NewSpawner(agentStore, agentRuntime, sandboxProv, rulesEng, toolCur, eventBus, creds, modelProvider, logger, daemonURL)
 
 	// Create scheduler.
 	scheduler := dispatch.NewScheduler(streamStore, planStore, cfg.Agents.MaxConcurrent, eventBus, logger)
@@ -240,7 +276,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 	mergeProcessor := merge.NewProcessor(
 		mergeQueueStore, streamStore, planStore,
 		gitMerger, diffExtractor, gateRun, sandboxProv,
-		eventBus, logger,
+		eventBus, cfg.Daemon.BaseBranch, logger,
 	)
 
 	// Create step handlers and register deterministic + human types.

@@ -200,6 +200,51 @@ func TestGet_ReturnsErrorForNonExistentSandbox(t *testing.T) {
 	}
 }
 
+func TestExec_DoesNotInheritHostSecrets(t *testing.T) {
+	repoDir := initTestRepo(t)
+	p := newTestProvider(t, repoDir)
+	ctx := context.Background()
+
+	sb, err := p.Create(ctx, sandbox.CreateOpts{
+		Labels: map[string]string{"deck.objective": "obj-env", "deck.role": "builder"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Set a host secret that should NOT leak into the sandbox.
+	t.Setenv("SUPER_SECRET_HOST_VAR", "leaked!")
+
+	// Exec should not see the host secret.
+	res, err := sb.Exec(ctx, "echo ${SUPER_SECRET_HOST_VAR:-clean}", sandbox.ExecOpts{})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if res.Stdout != "clean" {
+		t.Errorf("host secret leaked: stdout = %q, want 'clean'", res.Stdout)
+	}
+
+	// But allowlisted vars (PATH, HOME) should be present.
+	res, err = sb.Exec(ctx, "echo $PATH", sandbox.ExecOpts{})
+	if err != nil {
+		t.Fatalf("Exec PATH: %v", err)
+	}
+	if res.Stdout == "" {
+		t.Error("PATH should be present in sandbox env")
+	}
+
+	// Explicitly injected vars should work.
+	res, err = sb.Exec(ctx, "echo $DECK_TEST", sandbox.ExecOpts{
+		Env: map[string]string{"DECK_TEST": "injected"},
+	})
+	if err != nil {
+		t.Fatalf("Exec with env: %v", err)
+	}
+	if res.Stdout != "injected" {
+		t.Errorf("injected var: stdout = %q, want 'injected'", res.Stdout)
+	}
+}
+
 // TestRediscover_RestoresFullLabelsAfterRestart simulates a daemon restart by
 // creating sandboxes with one provider instance, then constructing a fresh
 // provider (empty in-memory map) and calling Rediscover. Verifies that Get and

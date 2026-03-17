@@ -24,6 +24,7 @@ import (
 // MergeEnqueuer creates merge-queue entries for streams ready to merge.
 type MergeEnqueuer interface {
 	EnqueueStream(ctx context.Context, streamID string) error
+	MergerSandboxID(objectiveID string) string
 }
 
 // PlanCreator creates a plan from planner agent output.
@@ -464,35 +465,23 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		taskSpec = stream.Description
 	}
 
-	// Check for fix-loop context: if this step has fix_context metadata, the
-	// engine routed us here via on_fail. Find the previous sandbox to reuse,
-	// scoped to this specific stream and role so we don't grab a sandbox from
-	// a different agent (e.g. scout or reviewer) within the same objective.
-	var fixContext, reuseSandboxID string
+	// Extract fix context from previous iteration (for fix-loop retries).
+	var fixContext string
 	if state := exec.StepStates[step.ID]; state != nil && state.Metadata != nil {
 		fixContext = state.Metadata["fix_context"]
 	}
-	if fixContext != "" {
-		streamID := ""
-		if stream != nil {
-			streamID = stream.ID
-		}
-		if sb, err := c.spawner.FindSandboxForStep(ctx, exec.ObjectiveID, streamID, role); err == nil && sb != nil {
-			reuseSandboxID = sb.ID()
-		}
-	}
 
-	// Spawn the agent.
+	// Spawn the agent. The spawner handles sandbox reuse internally —
+	// it looks up existing stream sandboxes via labels.
 	result, err := c.spawner.Spawn(ctx, SpawnRequest{
-		Objective:      obj,
-		Stream:         stream,
-		Role:           role,
-		TaskSpec:       taskSpec,
-		ExecutionID:    exec.ID,
-		CommitMode:     string(step.EffectiveCommitMode()),
-		Messages:       step.Messages,
-		FixContext:     fixContext,
-		ReuseSandboxID: reuseSandboxID,
+		Objective:   obj,
+		Stream:      stream,
+		Role:        role,
+		TaskSpec:    taskSpec,
+		ExecutionID: exec.ID,
+		CommitMode:  string(step.EffectiveCommitMode()),
+		Messages:    step.Messages,
+		FixContext:  fixContext,
 	})
 	if err != nil {
 		if stream != nil {
@@ -573,6 +562,22 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		// No commit needed.
 	}
 
+	// Push the branch to origin so the merger sandbox can fetch it later.
+	// Required for remote sandboxes (Daytona) where each sandbox is a separate
+	// clone. Must happen right after commit while the sandbox is still alive —
+	// remote sandboxes may auto-stop before the merge step runs.
+	if stream != nil && role != string(domain.AgentRolePlanner) {
+		branchRes, _ := result.Sandbox.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
+		if branchRes.ExitCode == 0 {
+			branch := strings.TrimSpace(branchRes.Stdout)
+			pushRes, pushErr := result.Sandbox.Exec(ctx, fmt.Sprintf("git push -u origin %s", branch), sandbox.ExecOpts{})
+			if pushErr != nil || pushRes.ExitCode != 0 {
+				c.logger.Warn("failed to push branch (merge may fail for remote sandboxes)",
+					"branch", branch, "step", step.ID, "exit", pushRes.ExitCode)
+			}
+		}
+	}
+
 	// If this was a planner agent, create the plan from its output.
 	if role == string(domain.AgentRolePlanner) && c.planCreator != nil {
 		plan, err := c.planCreator.CreatePlan(ctx, exec.ObjectiveID, cleanSummary)
@@ -587,6 +592,12 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 			"plan_id", plan.ID,
 			"objective_id", exec.ObjectiveID,
 		)
+
+		// Delete planner sandbox — it's no longer needed and frees resources
+		// for the stream agents (important for Daytona tier CPU limits).
+		if err := c.spawner.DeleteSandbox(ctx, result.Sandbox.ID()); err != nil {
+			c.logger.Warn("failed to delete planner sandbox", "sandbox_id", result.Sandbox.ID(), "error", err)
+		}
 	}
 
 	c.spawner.MarkCompleted(ctx, result.Session, cleanSummary)
@@ -1193,10 +1204,15 @@ func (c *Coordinator) checkPartialToCompleted(ctx context.Context, objectiveID s
 // rePushMergerBranch pushes the merger branch to origin after a retry completes.
 // Returns true if push succeeded or was skipped (no remote), false on push failure.
 func (c *Coordinator) rePushMergerBranch(ctx context.Context, objectiveID string) bool {
-	sb, err := c.spawner.FindMergerSandbox(ctx, objectiveID)
-	if err != nil || sb == nil {
+	mergerID := c.mergeEnqueuer.MergerSandboxID(objectiveID)
+	if mergerID == "" {
 		// No merger sandbox — likely a simple/hotfix objective with no merge step.
 		return true
+	}
+	sb, err := c.spawner.GetSandbox(ctx, mergerID)
+	if err != nil {
+		c.logger.Warn("failed to get merger sandbox", "sandbox_id", mergerID, "error", err)
+		return false
 	}
 
 	// Check if origin remote exists — if not, push is not applicable.

@@ -15,13 +15,21 @@ import (
 	"github.com/daytonaio/daytona/libs/sdk-go/pkg/options"
 	"github.com/daytonaio/daytona/libs/sdk-go/pkg/types"
 
+	"github.com/syndg/deck/internal/credentials"
 	"github.com/syndg/deck/internal/sandbox"
 )
+
+// ptyExecSetupDelay is the wait time after sending exec to a PTY before
+// reading output. The PTY needs a moment for exec to replace the shell
+// process; without this delay, the first read may capture shell artifacts
+// (prompt, echo) instead of the command's stdout.
+const ptyExecSetupDelay = 200 * time.Millisecond
 
 // Provider creates sandboxes via the Daytona SDK.
 type Provider struct {
 	client    *daytona.Client
 	cfg       Config
+	creds     *credentials.Store
 	mu        sync.Mutex
 	sandboxes map[string]*DaytonaSandbox
 	logger    *slog.Logger
@@ -29,12 +37,15 @@ type Provider struct {
 
 // Config holds Daytona connection settings.
 type Config struct {
-	APIKey   string
-	APIURL   string
-	Snapshot string
+	APIKey     string
+	APIURL     string
+	Snapshot   string
+	RepoURL    string   // git remote URL for clone/pull
+	RepoPath   string   // path inside sandbox where repo lives (default: /home/daytona/project)
+	PostCreate []string // commands to run after repo setup
 }
 
-func New(cfg Config, logger *slog.Logger) (*Provider, error) {
+func New(cfg Config, creds *credentials.Store, logger *slog.Logger) (*Provider, error) {
 	var client *daytona.Client
 	var err error
 
@@ -50,9 +61,14 @@ func New(cfg Config, logger *slog.Logger) (*Provider, error) {
 		return nil, fmt.Errorf("creating daytona client: %w", err)
 	}
 
+	if cfg.RepoPath == "" {
+		cfg.RepoPath = "/home/daytona/project"
+	}
+
 	return &Provider{
 		client:    client,
 		cfg:       cfg,
+		creds:     creds,
 		sandboxes: make(map[string]*DaytonaSandbox),
 		logger:    logger,
 	}, nil
@@ -81,10 +97,20 @@ func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox
 		return nil, fmt.Errorf("creating daytona sandbox: %w", err)
 	}
 
+	// Bootstrap phase: set up repo + branch + post-create.
+	if p.cfg.RepoURL != "" {
+		if err := p.bootstrap(ctx, dSandbox, opts); err != nil {
+			p.logger.Error("bootstrap failed, deleting sandbox", "id", dSandbox.ID, "error", err)
+			_ = dSandbox.Delete(ctx)
+			return nil, fmt.Errorf("bootstrapping sandbox: %w", err)
+		}
+	}
+
 	sb := &DaytonaSandbox{
 		sandbox: dSandbox,
 		labels:  opts.Labels,
 		envVars: opts.EnvVars,
+		workDir: p.cfg.RepoPath,
 		logger:  p.logger,
 	}
 
@@ -93,6 +119,104 @@ func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox
 	p.mu.Unlock()
 
 	return sb, nil
+}
+
+// sshToHTTPS converts git@github.com:user/repo.git to https://github.com/user/repo.git.
+// Returns the original URL if it's not an SSH URL.
+func sshToHTTPS(url string) string {
+	if !strings.HasPrefix(url, "git@") {
+		return url
+	}
+	// git@github.com:user/repo.git → https://github.com/user/repo.git
+	url = strings.TrimPrefix(url, "git@")
+	url = strings.Replace(url, ":", "/", 1)
+	return "https://" + url
+}
+
+// bootstrap sets up the repo and working branch inside a freshly created sandbox.
+func (p *Provider) bootstrap(ctx context.Context, sb *daytona.Sandbox, opts sandbox.CreateOpts) error {
+	repoPath := p.cfg.RepoPath
+
+	// Daytona Git API only supports HTTPS auth — convert SSH URLs.
+	repoURL := sshToHTTPS(p.cfg.RepoURL)
+
+	// Resolve git credentials for clone/pull auth.
+	var gitOpts []func(*options.GitClone)
+	var pullOpts []func(*options.GitPull)
+	if p.creds != nil {
+		tok, err := p.creds.GitToken("")
+		if err == nil && tok != "" {
+			gitOpts = append(gitOpts, options.WithUsername("x-access-token"), options.WithPassword(tok))
+			pullOpts = append(pullOpts, options.WithPullUsername("x-access-token"), options.WithPullPassword(tok))
+		}
+	}
+
+	if p.cfg.Snapshot != "" {
+		// Snapshot model: repo is already present, just pull latest.
+		p.logger.Info("bootstrap: pulling latest into snapshot", "sandbox", sb.ID)
+		if err := sb.Git.Pull(ctx, repoPath, pullOpts...); err != nil {
+			p.logger.Warn("bootstrap: git pull failed (may be clean)", "error", err)
+			// Non-fatal — snapshot might already be at HEAD.
+		}
+	} else {
+		// No snapshot: clone from scratch.
+		p.logger.Info("bootstrap: cloning repo", "sandbox", sb.ID, "url", repoURL)
+		if err := sb.Git.Clone(ctx, repoURL, repoPath, gitOpts...); err != nil {
+			return fmt.Errorf("cloning repo: %w", err)
+		}
+	}
+
+	// Configure git CLI credentials so Exec-based push/fetch work.
+	// The Daytona Git API handles auth internally, but sandbox.Exec("git push ...")
+	// needs the token embedded in the remote URL.
+	if p.creds != nil {
+		tok, _ := p.creds.GitToken("")
+		if tok != "" {
+			authURL := strings.Replace(repoURL, "https://", fmt.Sprintf("https://x-access-token:%s@", tok), 1)
+			resp, err := sb.Process.ExecuteCommand(ctx, fmt.Sprintf("git remote set-url origin %s", authURL), options.WithCwd(repoPath))
+			if err != nil || resp.ExitCode != 0 {
+				p.logger.Warn("bootstrap: failed to set auth remote URL", "error", err)
+			}
+		}
+	}
+
+	// Create and checkout the deck working branch.
+	branch := opts.Branch
+	if branch == "" {
+		// Derive branch name from labels (legacy fallback).
+		obj := opts.Labels["deck.objective"]
+		if len(obj) > 8 {
+			obj = obj[:8]
+		}
+		role := opts.Labels["deck.role"]
+		if role == "" {
+			role = "agent"
+		}
+		branch = fmt.Sprintf("deck/%s/%s", obj, role)
+	}
+
+	p.logger.Info("bootstrap: creating branch", "branch", branch)
+	if err := sb.Git.CreateBranch(ctx, repoPath, branch); err != nil {
+		p.logger.Warn("bootstrap: create branch failed (may exist)", "error", err)
+	}
+	if err := sb.Git.Checkout(ctx, repoPath, branch); err != nil {
+		return fmt.Errorf("checking out branch %s: %w", branch, err)
+	}
+
+	// Run post-create commands.
+	for _, cmd := range p.cfg.PostCreate {
+		p.logger.Info("bootstrap: running post-create", "command", cmd)
+		resp, err := sb.Process.ExecuteCommand(ctx, cmd, options.WithCwd(repoPath))
+		if err != nil {
+			p.logger.Warn("bootstrap: post-create command failed", "command", cmd, "error", err)
+			continue
+		}
+		if resp.ExitCode != 0 {
+			p.logger.Warn("bootstrap: post-create non-zero exit", "command", cmd, "exit", resp.ExitCode, "output", resp.Result)
+		}
+	}
+
+	return nil
 }
 
 func (p *Provider) Get(ctx context.Context, id string) (sandbox.Sandbox, error) {
@@ -224,6 +348,7 @@ type DaytonaSandbox struct {
 	sandbox *daytona.Sandbox
 	labels  map[string]string
 	envVars map[string]string
+	workDir string // default working directory (repo path after bootstrap)
 	logger  *slog.Logger
 }
 
@@ -240,8 +365,12 @@ func (s *DaytonaSandbox) Exec(ctx context.Context, cmd string, opts sandbox.Exec
 	effectiveCmd := buildEffectiveCommand(cmd, opts)
 
 	var execOpts []func(*options.ExecuteCommand)
-	if opts.WorkDir != "" {
-		execOpts = append(execOpts, options.WithCwd(opts.WorkDir))
+	workDir := opts.WorkDir
+	if workDir == "" {
+		workDir = s.workDir
+	}
+	if workDir != "" {
+		execOpts = append(execOpts, options.WithCwd(workDir))
 	}
 	if opts.Timeout > 0 {
 		execOpts = append(execOpts, options.WithExecuteTimeout(opts.Timeout))
@@ -279,30 +408,66 @@ func (s *DaytonaSandbox) ExecStreaming(ctx context.Context, cmd string, opts san
 		return nil, fmt.Errorf("creating PTY: %w", err)
 	}
 
-	// Build command with cd prefix if WorkDir is set.
-	effectiveCmd := cmd
-	if opts.WorkDir != "" {
-		effectiveCmd = fmt.Sprintf("cd %s && %s", shellescape(opts.WorkDir), cmd)
+	// Resolve working directory (fallback to repo dir).
+	workDir := opts.WorkDir
+	if workDir == "" {
+		workDir = s.workDir
 	}
 
-	// Send the actual command to the PTY shell.
-	if err := pty.SendInput([]byte(effectiveCmd + "\n")); err != nil {
+	// Wait for the PTY WebSocket connection to be established before sending input.
+	if err := pty.WaitForConnection(ctx); err != nil {
+		pty.Disconnect()
+		return nil, fmt.Errorf("waiting for PTY connection: %w", err)
+	}
+
+	// Suppress shell artifacts before launching the command:
+	// - PS1="" kills the prompt
+	// - stty -echo disables terminal echo (so our JSON input isn't echoed back)
+	// - exec replaces the shell with the command (clean stdin/stdout, no shell interference)
+	// - cd MUST happen before exec (cd is a builtin, exec replaces the shell)
+	// This is critical for RPC-based agents (Pi) that use JSON over stdin/stdout.
+	// Build the PTY command:
+	// 1. Disable prompt and echo to keep stdout clean for JSON RPC
+	// 2. cd to the working directory
+	// 3. exec replaces the shell with the target command (clean stdin/stdout)
+	var parts []string
+	parts = append(parts, `export PS1=""`, `stty -echo 2>/dev/null`)
+	if workDir != "" {
+		parts = append(parts, fmt.Sprintf("cd %s", shellescape(workDir)))
+	}
+	parts = append(parts, "exec "+cmd)
+	shellSetup := strings.Join(parts, " && ")
+	if err := pty.SendInput([]byte(shellSetup + "\n")); err != nil {
 		pty.Disconnect()
 		return nil, fmt.Errorf("sending command to PTY: %w", err)
 	}
 
+	// Give exec a moment to replace the shell before we start reading.
+	time.Sleep(ptyExecSetupDelay)
+
+	scanner := bufio.NewScanner(pty)
+	// Pi can emit very large JSONL lines (file contents in tool results,
+	// agent_end with full conversation history). 16MB handles planners.
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+
 	return &daytonaPtyHandle{
 		pty:     pty,
-		scanner: bufio.NewScanner(pty),
+		scanner: scanner,
 	}, nil
 }
 
 func (s *DaytonaSandbox) Upload(ctx context.Context, content []byte, path string) error {
-	// UploadFile accepts []byte or string (local file path) as source
+	// Make relative paths resolve from the repo directory.
+	if s.workDir != "" && !strings.HasPrefix(path, "/") {
+		path = s.workDir + "/" + path
+	}
 	return s.sandbox.FileSystem.UploadFile(ctx, content, path)
 }
 
 func (s *DaytonaSandbox) Download(ctx context.Context, path string) ([]byte, error) {
+	if s.workDir != "" && !strings.HasPrefix(path, "/") {
+		path = s.workDir + "/" + path
+	}
 	return s.sandbox.FileSystem.DownloadFile(ctx, path, nil)
 }
 
@@ -325,22 +490,58 @@ type daytonaPtyHandle struct {
 }
 
 // ansiEscape matches ANSI escape sequences for stripping from PTY output.
-var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+var ansiEscape = regexp.MustCompile(`\x1b[\[\(][0-9;?]*[a-zA-Z=>lh]`)
+
+// controlChars matches other terminal control characters that aren't ANSI escapes.
+var controlChars = regexp.MustCompile(`[\x00-\x08\x0b\x0c\x0e-\x1a\x7f]`)
 
 func (h *daytonaPtyHandle) Write(data []byte) error {
 	return h.pty.SendInput(data)
 }
 
 func (h *daytonaPtyHandle) ReadLine() (string, error) {
-	if h.scanner.Scan() {
+	for {
+		if !h.scanner.Scan() {
+			if err := h.scanner.Err(); err != nil {
+				return "", err
+			}
+			return "", io.EOF
+		}
 		line := h.scanner.Text()
-		line = ansiEscape.ReplaceAllString(line, "")
+		line = strings.ReplaceAll(line, "\r", "")
+		line = strings.TrimSpace(line)
+		// Skip empty lines (common after stripping terminal artifacts).
+		if line == "" {
+			continue
+		}
+		// Only strip ANSI/control chars from the prefix before the JSON
+		// object starts. Stripping within JSON content corrupts escaped
+		// strings (e.g. agent_end payloads with full conversation history).
+		if idx := strings.Index(line, "{"); idx > 0 {
+			prefix := line[:idx]
+			prefix = ansiEscape.ReplaceAllString(prefix, "")
+			prefix = controlChars.ReplaceAllString(prefix, "")
+			line = strings.TrimSpace(prefix) + line[idx:]
+		} else if !strings.HasPrefix(line, "{") {
+			// Non-JSON line — strip fully.
+			line = ansiEscape.ReplaceAllString(line, "")
+			line = controlChars.ReplaceAllString(line, "")
+			line = strings.TrimSpace(line)
+		}
+		// Strip trailing ANSI/control chars after the last '}' so strict
+		// JSON parsers don't choke on e.g. trailing \x1b[0m.
+		if lastBrace := strings.LastIndex(line, "}"); lastBrace >= 0 && lastBrace < len(line)-1 {
+			suffix := line[lastBrace+1:]
+			suffix = ansiEscape.ReplaceAllString(suffix, "")
+			suffix = controlChars.ReplaceAllString(suffix, "")
+			suffix = strings.TrimSpace(suffix)
+			line = line[:lastBrace+1] + suffix
+		}
+		if line == "" {
+			continue
+		}
 		return line, nil
 	}
-	if err := h.scanner.Err(); err != nil {
-		return "", err
-	}
-	return "", io.EOF
 }
 
 func (h *daytonaPtyHandle) Wait() (int, error) {

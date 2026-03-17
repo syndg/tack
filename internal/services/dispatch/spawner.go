@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/syndg/deck/internal/credentials"
 	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
 	"github.com/syndg/deck/internal/harness/blueprint"
 	"github.com/syndg/deck/internal/harness/rules"
 	"github.com/syndg/deck/internal/harness/tools"
+	"github.com/syndg/deck/internal/naming"
 	"github.com/syndg/deck/internal/runtime"
 	"github.com/syndg/deck/internal/sandbox"
 	"github.com/syndg/deck/internal/services/agents"
@@ -22,17 +24,16 @@ import (
 
 // SpawnRequest describes what agent to create.
 type SpawnRequest struct {
-	Objective      *domain.Objective
-	Stream         *domain.Stream             // nil for planner agents
-	Role           string                     // "planner", "lead", "builder", "reviewer", "scout"
-	TaskSpec       string                     // task description or spec content
-	ParentAgent    string                     // name of parent agent (empty for top-level)
-	Guidance       string                     // project-level guidance from config
-	CommitMode     string                     // "auto", "agent", "none" — controls commit behavior
-	Messages       *blueprint.MessageRequests // delivery messages the agent should generate
-	ExecutionID    string                     // sub-execution ID (used to label sandbox for branch lookup)
-	ReuseSandboxID string                     // if set, reuse this sandbox instead of creating a new one
-	FixContext     string                     // quality gate errors from a previous fix-loop iteration
+	Objective   *domain.Objective
+	Stream      *domain.Stream             // nil for planner agents
+	Role        string                     // "planner", "lead", "builder", "reviewer", "scout"
+	TaskSpec    string                     // task description or spec content
+	ParentAgent string                     // name of parent agent (empty for top-level)
+	Guidance    string                     // project-level guidance from config
+	CommitMode  string                     // "auto", "agent", "none" — controls commit behavior
+	Messages    *blueprint.MessageRequests // delivery messages the agent should generate
+	ExecutionID string                     // sub-execution ID (used to label sandbox for branch lookup)
+	FixContext  string                     // quality gate errors from a previous fix-loop iteration
 }
 
 // SpawnResult contains the created agent session, process, and sandbox.
@@ -40,6 +41,22 @@ type SpawnResult struct {
 	Session *domain.AgentSession
 	Process runtime.AgentProcess
 	Sandbox sandbox.Sandbox
+}
+
+// providerEnvVars maps model provider names to the env var used to inject the key.
+var providerEnvVars = map[string]string{
+	"anthropic": "ANTHROPIC_API_KEY",
+	"openai":    "OPENAI_API_KEY",
+	"gemini":    "GEMINI_API_KEY",
+	"groq":      "GROQ_API_KEY",
+	"mistral":   "MISTRAL_API_KEY",
+	"xai":       "XAI_API_KEY",
+}
+
+// gitHostEnvVars maps git host names to the env var used to inject the token.
+var gitHostEnvVars = map[string]string{
+	"github.com": "GITHUB_TOKEN",
+	"gitlab.com": "GITLAB_TOKEN",
 }
 
 // Spawner creates and manages agent processes.
@@ -50,6 +67,8 @@ type Spawner struct {
 	rulesEngine *rules.Engine
 	toolCurator *tools.Curator
 	eventBus    *events.PersistentBus
+	creds       *credentials.Store
+	provider    string // model provider name (e.g., "anthropic")
 	logger      *slog.Logger
 	daemonURL   string
 }
@@ -62,6 +81,8 @@ func NewSpawner(
 	rulesEngine *rules.Engine,
 	toolCurator *tools.Curator,
 	eventBus *events.PersistentBus,
+	creds *credentials.Store,
+	provider string,
 	logger *slog.Logger,
 	daemonURL string,
 ) *Spawner {
@@ -72,6 +93,8 @@ func NewSpawner(
 		rulesEngine: rulesEngine,
 		toolCurator: toolCurator,
 		eventBus:    eventBus,
+		creds:       creds,
+		provider:    provider,
 		logger:      logger,
 		daemonURL:   daemonURL,
 	}
@@ -111,7 +134,7 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 		return nil, fmt.Errorf("creating agent session: %w", err)
 	}
 
-	// 3. Provision sandbox (or reuse existing one for fix-loop iterations).
+	// 3. Provision sandbox: one sandbox per stream, reused across agents.
 	objShort := req.Objective.ID
 	if len(objShort) > 8 {
 		objShort = objShort[:8]
@@ -123,29 +146,44 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 
 	var sb sandbox.Sandbox
 	var err error
-	if req.ReuseSandboxID != "" {
-		sb, err = s.sp.Get(ctx, req.ReuseSandboxID)
-		if err != nil {
-			s.logger.Warn("failed to reuse sandbox, creating new one",
-				"sandbox_id", req.ReuseSandboxID,
-				"error", err,
+
+	if req.Stream != nil {
+		// Stream agent (scout/builder/reviewer): reuse existing stream sandbox.
+		existing, listErr := s.sp.List(ctx, map[string]string{
+			"deck.stream": req.Stream.ID,
+		})
+		if listErr == nil && len(existing) > 0 {
+			sb = existing[0]
+			s.logger.Info("reusing stream sandbox",
+				"sandbox_id", sb.ID(),
+				"stream", req.Stream.ID,
+				"role", req.Role,
 			)
 		}
 	}
+
 	if sb == nil {
-		sandboxName := fmt.Sprintf("deck-%s-%s-%s", objShort, req.Role, sessShort)
+		// Create new sandbox with stream-based or planner naming.
+		var sandboxName, branch string
 		labels := map[string]string{
 			"deck.objective": req.Objective.ID,
-			"deck.role":      req.Role,
 		}
 		if req.Stream != nil {
+			slug := naming.StreamSlug(req.Stream.Title)
+			sandboxName = fmt.Sprintf("deck-%s-%s", objShort, slug)
+			branch = fmt.Sprintf("deck/%s/%s", objShort, slug)
 			labels["deck.stream"] = req.Stream.ID
+		} else {
+			// Planner or other non-stream agent.
+			sandboxName = fmt.Sprintf("deck-%s-%s", objShort, req.Role)
+			branch = fmt.Sprintf("deck/%s/%s", objShort, req.Role)
 		}
 		if req.ExecutionID != "" {
 			labels["deck.execution"] = req.ExecutionID
 		}
 		sb, err = s.sp.Create(ctx, sandbox.CreateOpts{
 			Name:      sandboxName,
+			Branch:    branch,
 			Labels:    labels,
 			Ephemeral: !role.Persistent,
 		})
@@ -221,6 +259,9 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	if req.TaskSpec != "" {
 		envVars["DECK_TASK_SPEC"] = req.TaskSpec
 	}
+
+	// Inject model provider credential (only the configured provider).
+	s.injectCredentials(envVars)
 
 	process, err := s.rt.Spawn(ctx, sb, runtime.AgentOpts{
 		Role:    req.Role,
@@ -366,19 +407,51 @@ func (s *Spawner) Kill(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// FindMergerSandbox returns the merger sandbox for an objective, if one exists.
-func (s *Spawner) FindMergerSandbox(ctx context.Context, objectiveID string) (sandbox.Sandbox, error) {
-	sandboxes, err := s.sp.List(ctx, map[string]string{
-		"deck.objective": objectiveID,
-		"deck.role":      "merger",
-	})
-	if err != nil {
-		return nil, err
+// injectCredentials adds model provider and git credentials to the env map.
+func (s *Spawner) injectCredentials(envVars map[string]string) {
+	if s.creds == nil {
+		return
 	}
-	if len(sandboxes) == 0 {
-		return nil, nil
+
+	// Model provider: only inject the one matching the configured provider.
+	if s.provider != "" {
+		resolved, err := s.creds.ModelProvider(s.provider)
+		if err != nil {
+			s.logger.Warn("credential injection: model provider not found", "provider", s.provider, "error", err)
+		} else {
+			envName, ok := providerEnvVars[s.provider]
+			if ok {
+				envVars[envName] = resolved.Value
+			} else {
+				s.logger.Warn("credential injection: no env var mapping for provider", "provider", s.provider)
+			}
+		}
 	}
-	return sandboxes[0], nil
+
+	// Git token: always inject if configured.
+	host := s.creds.GitHost()
+	if host != "" {
+		tok, err := s.creds.GitToken("")
+		if err != nil {
+			s.logger.Warn("credential injection: git token resolution failed", "error", err)
+		} else {
+			envName, ok := gitHostEnvVars[host]
+			if !ok {
+				envName = "GIT_TOKEN" // fallback for unknown hosts
+			}
+			envVars[envName] = tok
+		}
+	}
+}
+
+// GetSandbox retrieves a sandbox by ID from the provider.
+func (s *Spawner) GetSandbox(ctx context.Context, sandboxID string) (sandbox.Sandbox, error) {
+	return s.sp.Get(ctx, sandboxID)
+}
+
+// DeleteSandbox deletes a single sandbox by ID.
+func (s *Spawner) DeleteSandbox(ctx context.Context, sandboxID string) error {
+	return s.sp.Delete(ctx, sandboxID)
 }
 
 // CleanupObjective deletes all sandboxes (worktrees + branches) for an objective.

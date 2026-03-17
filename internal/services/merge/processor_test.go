@@ -98,7 +98,7 @@ func setupProcessor(t *testing.T) *processorFixture {
 	processor := NewProcessor(
 		queueStore, streamStore, planStore,
 		merger, differ, gateRunner, sbProvider,
-		bus, logger,
+		bus, "main", logger,
 	)
 
 	return &processorFixture{

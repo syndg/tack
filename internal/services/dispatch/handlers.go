@@ -564,17 +564,14 @@ func (h *Handlers) findSandboxForObjective(ctx context.Context, objectiveID stri
 
 // findMergerSandbox locates the merger sandbox for creating a PR.
 // After multi-stream blueprints, the merger sandbox contains the final merged code.
-// The merge processor creates the sandbox directly (not as an agent session), so
-// we first check sandbox labels, then fall back to agent sessions and finally
-// findSandboxForObjective for single-stream/hotfix blueprints.
+// The merge processor tracks which stream sandbox was repurposed as the merger.
 func (h *Handlers) findMergerSandbox(ctx context.Context, objectiveID string) (sandbox.Sandbox, error) {
-	// Primary: find the merger sandbox created by the merge processor via labels.
-	sandboxes, err := h.sandboxProvider.List(ctx, map[string]string{
-		"deck.objective": objectiveID,
-		"deck.role":      "merger",
-	})
-	if err == nil && len(sandboxes) > 0 {
-		return sandboxes[0], nil
+	// Primary: ask the merge processor for the tracked merger sandbox.
+	if mergerID := h.mergeProcessor.MergerSandboxID(objectiveID); mergerID != "" {
+		sb, err := h.sandboxProvider.Get(ctx, mergerID)
+		if err == nil {
+			return sb, nil
+		}
 	}
 
 	// Secondary: check agent sessions for a merger role (future agent-based mergers).
