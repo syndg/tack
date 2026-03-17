@@ -61,17 +61,55 @@ func (r *Runtime) uploadExtensionToSandbox(ctx context.Context, sb sandbox.Sandb
 	}
 
 	// Exclude .deck-ext from git inside the sandbox so auto-commit doesn't
-	// include runtime artifacts. Works for both local worktrees and remote
-	// sandboxes (Daytona). Appends to .git/info/exclude which is outside
+	// include runtime artifacts. Appends to .git/info/exclude which is outside
 	// the working tree and won't show up as a change.
-	excludeCmd := `mkdir -p "$(git rev-parse --git-dir)/info" && ` +
-		`grep -q '.deck-ext' "$(git rev-parse --git-dir)/info/exclude" 2>/dev/null || ` +
-		`echo '.deck-ext' >> "$(git rev-parse --git-dir)/info/exclude"`
-	if _, err := sb.Exec(ctx, excludeCmd, sandbox.ExecOpts{}); err != nil {
-		r.logger.Warn("failed to add .deck-ext to git exclude", "error", err)
-	}
+	// Commands are broken into separate calls because Daytona's ExecuteCommand
+	// uses exec.Command directly (no shell) — &&, ||, $() don't work.
+	r.addGitExclude(ctx, sb, extDir)
 
 	return extDir, nil
+}
+
+// addGitExclude appends a path to .git/info/exclude if not already present.
+// Each step is a separate sb.Exec call for Daytona compatibility (no shell).
+func (r *Runtime) addGitExclude(ctx context.Context, sb sandbox.Sandbox, pattern string) {
+	// 1. Get the git directory path.
+	res, err := sb.Exec(ctx, "git rev-parse --git-dir", sandbox.ExecOpts{})
+	if err != nil || res.ExitCode != 0 {
+		r.logger.Warn("failed to get git dir for exclude", "error", err)
+		return
+	}
+	gitDir := strings.TrimSpace(res.Stdout)
+	if gitDir == "" {
+		return
+	}
+
+	infoDir := gitDir + "/info"
+	excludePath := infoDir + "/exclude"
+
+	// 2. Ensure info directory exists.
+	sb.Exec(ctx, fmt.Sprintf("mkdir -p %s", infoDir), sandbox.ExecOpts{})
+
+	// 3. Check if pattern is already excluded.
+	checkRes, _ := sb.Exec(ctx, fmt.Sprintf("grep -q %s %s", pattern, excludePath), sandbox.ExecOpts{})
+	if checkRes.ExitCode == 0 {
+		return // already excluded
+	}
+
+	// 4. Append the pattern. Use Upload since >> redirect doesn't work
+	// with Daytona's exec.Command (no shell).
+	// Read existing content first, then upload with the new line appended.
+	catRes, _ := sb.Exec(ctx, fmt.Sprintf("cat %s", excludePath), sandbox.ExecOpts{})
+	existing := ""
+	if catRes.ExitCode == 0 {
+		existing = catRes.Stdout
+	}
+	if existing != "" && !strings.HasSuffix(existing, "\n") {
+		existing += "\n"
+	}
+	if err := sb.Upload(ctx, []byte(existing+pattern+"\n"), excludePath); err != nil {
+		r.logger.Warn("failed to write git exclude", "error", err)
+	}
 }
 
 func (r *Runtime) Name() string        { return "pi" }

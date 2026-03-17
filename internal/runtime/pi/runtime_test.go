@@ -54,6 +54,14 @@ func (m *mockSandbox) ID() string                    { return "mock-sb" }
 func (m *mockSandbox) Status() sandbox.SandboxStatus { return sandbox.SandboxStatusRunning }
 func (m *mockSandbox) Exec(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
 	m.execCmds = append(m.execCmds, cmd)
+	// Simulate git rev-parse --git-dir for addGitExclude.
+	if strings.Contains(cmd, "rev-parse --git-dir") {
+		return sandbox.ExecResult{ExitCode: 0, Stdout: ".git"}, nil
+	}
+	// grep for exclude pattern — return exit 1 (not found) so the upload path runs.
+	if strings.Contains(cmd, "grep") {
+		return sandbox.ExecResult{ExitCode: 1}, nil
+	}
 	return sandbox.ExecResult{ExitCode: 0, Stdout: "ok"}, nil
 }
 func (m *mockSandbox) ExecStreaming(ctx context.Context, cmd string, opts sandbox.ExecOpts) (sandbox.ProcessHandle, error) {
@@ -155,15 +163,12 @@ func TestRuntime_Spawn_UploadsExtension(t *testing.T) {
 		t.Errorf("expected success, got: %+v", result)
 	}
 
-	// Should have run a git exclude command for .deck-ext
-	foundExclude := false
-	for _, cmd := range sb.execCmds {
-		if strings.Contains(cmd, ".deck-ext") && strings.Contains(cmd, "exclude") {
-			foundExclude = true
-		}
-	}
-	if !foundExclude {
-		t.Error("expected git exclude command for .deck-ext to be run in sandbox")
+	// Should have uploaded .git/info/exclude with .deck-ext pattern
+	excludeContent, ok := sb.uploaded[".git/info/exclude"]
+	if !ok {
+		t.Error("expected .git/info/exclude to be uploaded with .deck-ext pattern")
+	} else if !strings.Contains(string(excludeContent), ".deck-ext") {
+		t.Errorf("exclude file content %q should contain .deck-ext", string(excludeContent))
 	}
 }
 
