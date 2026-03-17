@@ -9,6 +9,10 @@
 /deck
 /deck-daemon
 /daemon
+/daytona-cleanup
+/daytona-pi-probe
+/pi-debug
+/snapshot-create
 /bin/
 /dist/
 
