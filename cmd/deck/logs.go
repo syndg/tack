@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/deck/internal/config"
 	"github.com/syndg/deck/internal/services/agents"
 )
 
@@ -30,11 +29,10 @@ var logsCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		agentID := args[0]
 
-		cfg, err := config.Load(cfgPath)
+		cfg, err := loadConfig()
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
 		}
-		cfg.ExpandPaths()
 
 		logDir := filepath.Join(cfg.Daemon.DataDir, "activity")
 

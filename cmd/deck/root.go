@@ -31,21 +31,35 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "~/.config/deck/config.yaml", "config file path")
+	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "", "project config path override (default: walk up for .deck/config.yaml)")
 	rootCmd.PersistentFlags().StringVar(&daemonURL, "daemon-url", "http://localhost:9800", "daemon HTTP address")
 
 	rootCmd.AddCommand(daemonCmd)
+}
+
+// loadConfig resolves the two-layer config: project (walk-up or --config override) + user.
+func loadConfig() (*config.Config, error) {
+	projectCfg := config.ResolveProjectConfig(cfgPath)
+	userCfg := config.UserConfigPath
+	if v := os.Getenv("DECK_USER_CONFIG_PATH"); v != "" {
+		userCfg = v
+	}
+	cfg, err := config.Load(projectCfg, userCfg)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ExpandPaths()
+	return cfg, nil
 }
 
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
 	Short: "Start the Deck daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load(cfgPath)
+		cfg, err := loadConfig()
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
 		}
-		cfg.ExpandPaths()
 
 		d, err := daemon.New(cfg)
 		if err != nil {

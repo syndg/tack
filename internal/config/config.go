@@ -10,6 +10,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// UserConfigPath is the default location for user-level config.
+const UserConfigPath = "~/.config/deck/config.yaml"
+
+// ProjectConfigDir is the directory name Deck looks for in project roots.
+const ProjectConfigDir = ".deck"
+
 type Config struct {
 	Daemon       DaemonConfig   `yaml:"daemon"`
 	Sandbox      SandboxConfig  `yaml:"sandbox"`
@@ -21,9 +27,10 @@ type Config struct {
 }
 
 type DaemonConfig struct {
-	Listen     string `yaml:"listen"`
-	DataDir    string `yaml:"data_dir"`
-	BaseBranch string `yaml:"base_branch"`
+	Listen      string `yaml:"listen"`
+	ExternalURL string `yaml:"external_url"` // public URL for agent callbacks (required for remote sandboxes)
+	DataDir     string `yaml:"data_dir"`
+	BaseBranch  string `yaml:"base_branch"`
 }
 
 type SandboxConfig struct {
@@ -49,13 +56,13 @@ type ResourceConfig struct {
 }
 
 type AgentsConfig struct {
-	Runtime            string         `yaml:"runtime"`
-	MaxConcurrent      int            `yaml:"max_concurrent"`
-	MaxDepth           int            `yaml:"max_depth"`
-	StaggerDelayMs     int            `yaml:"stagger_delay_ms"`
-	IdleTimeoutMinutes int            `yaml:"idle_timeout_minutes"`
-	Timeouts           TimeoutConfig  `yaml:"timeouts"`
-	Pi                 PiConfig       `yaml:"pi"`
+	Runtime            string        `yaml:"runtime"`
+	MaxConcurrent      int           `yaml:"max_concurrent"`
+	MaxDepth           int           `yaml:"max_depth"`
+	StaggerDelayMs     int           `yaml:"stagger_delay_ms"`
+	IdleTimeoutMinutes int           `yaml:"idle_timeout_minutes"`
+	Timeouts           TimeoutConfig `yaml:"timeouts"`
+	Pi                 PiConfig      `yaml:"pi"`
 }
 
 // TimeoutConfig holds per-role timeout settings.
@@ -119,26 +126,91 @@ type ToolsConfig struct {
 	AlwaysExclude []string `yaml:"always_exclude"`
 }
 
-// Load reads a YAML config file at path and returns the parsed Config.
-// If the file does not exist, it returns Default().
-func Load(path string) (*Config, error) {
-	// Expand ~ in the path itself before reading
+// Load reads config with two-layer merge: defaults → user config → project config.
+// Either path can be empty to skip that layer.
+func Load(projectPath, userPath string) (*Config, error) {
+	cfg := Default()
+
+	// Layer 1: user config (fallback)
+	if err := mergeFromFile(cfg, userPath); err != nil {
+		return nil, fmt.Errorf("loading user config: %w", err)
+	}
+
+	// Layer 2: project config (wins)
+	if err := mergeFromFile(cfg, projectPath); err != nil {
+		return nil, fmt.Errorf("loading project config: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// LoadFile reads a single YAML config file and merges it over defaults.
+// This is the legacy single-file loader — prefer Load() for layered config.
+func LoadFile(path string) (*Config, error) {
+	return Load("", path)
+}
+
+// mergeFromFile reads a YAML file and deep-merges it into cfg.
+// Missing files are silently skipped.
+func mergeFromFile(cfg *Config, path string) error {
+	if path == "" {
+		return nil
+	}
 	path = expandTilde(path)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Default(), nil
+			return nil
 		}
-		return nil, fmt.Errorf("reading config file: %w", err)
+		return fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	cfg := Default()
+	// Unmarshal into cfg directly — yaml.v3 leaves unset fields unchanged,
+	// giving us the scalar-replace, map-merge behavior we want.
+	// Slices are replaced entirely (not appended), which matches design spec.
 	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parsing config file: %w", err)
+		return fmt.Errorf("parsing %s: %w", path, err)
+	}
+	return nil
+}
+
+// FindProjectRoot walks up from startDir looking for a .deck/ directory.
+// Returns the directory containing .deck/, or empty string if not found.
+func FindProjectRoot(startDir string) string {
+	dir, err := filepath.Abs(startDir)
+	if err != nil {
+		return ""
 	}
 
-	return cfg, nil
+	for {
+		candidate := filepath.Join(dir, ProjectConfigDir)
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "" // reached filesystem root
+		}
+		dir = parent
+	}
+}
+
+// ResolveProjectConfig finds the project config path by either using the
+// explicit override or walking up from cwd to find .deck/config.yaml.
+func ResolveProjectConfig(override string) string {
+	if override != "" {
+		return override
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	root := FindProjectRoot(cwd)
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, ProjectConfigDir, "config.yaml")
 }
 
 // Default returns a Config with sensible defaults.

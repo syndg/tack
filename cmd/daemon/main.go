@@ -14,10 +14,11 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "~/.config/deck/config.yaml", "path to config file")
+	configPath := flag.String("config", "", "project config path override")
 	flag.Parse()
 
-	cfg, err := config.Load(*configPath)
+	projectCfg := config.ResolveProjectConfig(*configPath)
+	cfg, err := config.Load(projectCfg, config.UserConfigPath)
 	if err != nil {
 		slog.Error("loading config", "error", err)
 		os.Exit(1)
