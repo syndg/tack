@@ -51,17 +51,19 @@ Complete the task. Follow existing patterns in the codebase:
 - Run `go test ./...` for full test suite
 - Ensure no regressions
 
-# COMMIT
+# COMMIT AND PUSH
 
-Make a git commit. The commit message must:
+After verification passes, you MUST commit AND push:
 
-1. Start with `RALPH:` prefix
-2. Reference the issue number(s) with `#N`
-3. Summarize what was done
-4. Note key decisions made
-5. List any blockers or notes for next iteration
+1. `git add` the changed files (specific files, not `-A`)
+2. `git commit` with a message that:
+   - Starts with `RALPH:` prefix
+   - References the issue number with `#N`
+   - Summarizes what was done
+   - Notes key decisions made
+3. `git push origin main`
 
-Keep it concise.
+Do NOT skip the push. The commit is not done until it is pushed.
 
 # THE ISSUE
 
@@ -71,4 +73,13 @@ If the task is not complete, leave a comment on the GitHub issue with what was d
 
 # FINAL RULES
 
-ONLY WORK ON A SINGLE TASK.
+**CRITICAL: You MUST follow this exact workflow. Violations waste work.**
+
+1. Pick EXACTLY ONE issue. Do NOT work on multiple issues.
+2. Implement ONLY what that one issue asks for. Stop when its acceptance criteria are met.
+3. Run `go build ./...` and `go test ./...`. Both must pass.
+4. Commit with `RALPH:` prefix and `#N` issue reference. Push to origin.
+5. Close the issue (if complete) or comment on it (if partial).
+6. Then output your result and EXIT.
+
+Do NOT start a second issue. The loop script handles iteration — each run = one issue.
