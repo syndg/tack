@@ -51,7 +51,7 @@ type Daemon struct {
 	agentRuntime    runtime.AgentRuntime
 	spawner         *dispatch.Spawner
 	scheduler       *dispatch.Scheduler
-	coordinator     *dispatch.Coordinator
+	coordinator     dispatch.Orchestrator
 
 	mergeQueueStore *db.MergeQueueStore
 	mergeProcessor  *merge.Processor
@@ -63,7 +63,6 @@ type Daemon struct {
 	planningService  *planner.Service
 
 	blueprintRegistry *blueprint.Registry
-	blueprintEngine   *blueprint.Engine
 	rulesEngine       *rules.Engine
 	toolCurator       *tools.Curator
 	gateRunner        *gates.Runner
@@ -293,9 +292,27 @@ func New(cfg *config.Config) (*Daemon, error) {
 	}
 
 	// Create coordinator.
-	coordinator := dispatch.NewCoordinator(bpEngine, scheduler, spawner, lifecycleMgr, mergeProcessor, planningService, mailBroker, executionStore, objectiveStore, planStore, streamStore, eventBus, activityLogger, cfg.Agents.Timeouts, logger)
-	bpEngine.RegisterHandler(blueprint.StepTypeAgent, coordinator.HandleAgentStep)
-	bpEngine.RegisterHandler(blueprint.StepTypeBlueprintRef, coordinator.HandleBlueprintRefStep)
+	coordinator, err := dispatch.NewCoordinator(dispatch.Config{
+		Engine:         bpEngine,
+		Scheduler:      scheduler,
+		Spawner:        spawner,
+		Lifecycle:      lifecycleMgr,
+		MergeEnqueuer:  mergeProcessor,
+		PlanCreator:    planningService,
+		MailSender:     mailBroker,
+		Executions:     executionStore,
+		Objectives:     objectiveStore,
+		Plans:          planStore,
+		Streams:        streamStore,
+		EventBus:       eventBus,
+		ActivityLogger: activityLogger,
+		Timeouts:       cfg.Agents.Timeouts,
+		Logger:         logger,
+	})
+	if err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("creating coordinator: %w", err)
+	}
 
 	// Create daemon lifecycle context (cancelled in Shutdown).
 	daemonCtx, daemonCancel := context.WithCancel(context.Background())
@@ -327,7 +344,6 @@ func New(cfg *config.Config) (*Daemon, error) {
 		planningService:  planningService,
 
 		blueprintRegistry: bpRegistry,
-		blueprintEngine:   bpEngine,
 		rulesEngine:       rulesEng,
 		toolCurator:       toolCur,
 		gateRunner:        gateRun,

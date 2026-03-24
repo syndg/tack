@@ -570,6 +570,30 @@ exit 0
 		t.Fatalf("ApprovePlan: %v", err)
 	}
 
+	// Wait for execution to reach waiting_human at the approve step, then explicitly approve.
+	// The auto-resume in handleApprovePlan can race with the execution goroutine.
+	var execID string
+	waitForCondition(t, 10*time.Second, func() bool {
+		execs := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
+		for _, e := range execs {
+			if e["objective_id"] == obj.ID && (e["parent_id"] == nil || e["parent_id"] == "") && e["status"] == "waiting_human" {
+				execID, _ = e["id"].(string)
+				return true
+			}
+		}
+		// Also check if it already completed (auto-resume won the race).
+		got, err := c.GetObjective(context.Background(), obj.ID)
+		return err == nil && (got.Status == "completed" || got.Status == "failed")
+	})
+
+	if execID != "" {
+		resp, err := http.Post(baseURL+"/executions/"+execID+"/approve", "application/json", nil)
+		if err != nil {
+			t.Fatalf("ApproveExecution: %v", err)
+		}
+		resp.Body.Close()
+	}
+
 	waitForCondition(t, 10*time.Second, func() bool {
 		got, err := c.GetObjective(context.Background(), obj.ID)
 		return err == nil && got.Status == "completed"

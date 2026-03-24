@@ -13,6 +13,7 @@ import (
 	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
 	"github.com/syndg/deck/internal/harness/blueprint"
+	"github.com/syndg/deck/internal/services/dispatch"
 	"github.com/syndg/deck/internal/services/planner"
 )
 
@@ -408,14 +409,12 @@ func (d *Daemon) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 	if d.coordinator != nil {
 		exec, err := d.executions.GetByObjective(r.Context(), plan.ObjectiveID)
 		if err == nil && exec.Status == "waiting_human" {
-			exec, err = d.blueprintEngine.ApproveHuman(r.Context(), exec)
-			if err == nil {
-				_ = d.executions.Update(r.Context(), exec)
-				d.coordinator.ResumeExecution(exec)
+			if err := d.coordinator.Approve(r.Context(), exec.ID); err != nil {
+				d.logger.Warn("auto-resume after plan approval failed",
+					"execution_id", exec.ID, "plan_id", id, "error", err)
+			} else {
 				d.logger.Info("auto-resumed execution after plan approval",
-					"execution_id", exec.ID,
-					"plan_id", id,
-				)
+					"execution_id", exec.ID, "plan_id", id)
 			}
 		}
 	}
@@ -641,8 +640,6 @@ func (d *Daemon) handleMarkAllMailRead(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleApproveExecution approves a human gate step in a blueprint execution.
-// Calls engine.ApproveHuman to mark the step completed, persists the state, and
-// triggers the coordinator to resume the execution loop.
 func (d *Daemon) handleApproveExecution(w http.ResponseWriter, r *http.Request) {
 	if d.coordinator == nil {
 		writeError(w, http.StatusServiceUnavailable, "coordinator not available")
@@ -650,33 +647,20 @@ func (d *Daemon) handleApproveExecution(w http.ResponseWriter, r *http.Request) 
 	}
 
 	id := r.PathValue("id")
-
-	exec, err := d.executions.Get(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+	if err := d.coordinator.Approve(r.Context(), id); err != nil {
+		switch {
+		case errors.Is(err, dispatch.ErrNotFound):
 			writeError(w, http.StatusNotFound, "execution not found")
-			return
+		case errors.Is(err, dispatch.ErrInvalidState):
+			writeError(w, http.StatusConflict, err.Error())
+		default:
+			d.logger.Error("approving execution", "execution_id", id, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to approve execution")
 		}
-		d.logger.Error("getting execution for approve", "id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to get execution")
 		return
 	}
 
-	exec, err = d.blueprintEngine.ApproveHuman(r.Context(), exec)
-	if err != nil {
-		d.logger.Error("approving human step", "execution_id", id, "error", err)
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if err := d.executions.Update(r.Context(), exec); err != nil {
-		d.logger.Error("updating execution after approval", "execution_id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to persist execution")
-		return
-	}
-
-	d.coordinator.ResumeExecution(exec)
-	writeJSON(w, http.StatusOK, exec)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "approved", "execution_id": id})
 }
 
 // handleRetryExecution retries a failed stream sub-execution with optional human guidance.
@@ -696,17 +680,16 @@ func (d *Daemon) handleRetryExecution(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
 
-	if err := d.coordinator.RetryStreamExecution(r.Context(), id, req.Guidance); err != nil {
-		if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "not found") {
+	if err := d.coordinator.Retry(r.Context(), id, req.Guidance); err != nil {
+		switch {
+		case errors.Is(err, dispatch.ErrNotFound):
 			writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		if strings.Contains(err.Error(), "not failed") || strings.Contains(err.Error(), "not a stream") {
+		case errors.Is(err, dispatch.ErrInvalidState):
 			writeError(w, http.StatusConflict, err.Error())
-			return
+		default:
+			d.logger.Error("retrying stream execution", "execution_id", id, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to retry execution")
 		}
-		d.logger.Error("retrying stream execution", "execution_id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to retry execution")
 		return
 	}
 
@@ -756,7 +739,7 @@ func (d *Daemon) handleKillAgent(w http.ResponseWriter, r *http.Request) {
 
 	id := r.PathValue("id")
 
-	if err := d.coordinator.KillAgent(r.Context(), id); err != nil {
+	if err := d.coordinator.Kill(r.Context(), id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "agent session not found")
 			return
@@ -769,9 +752,7 @@ func (d *Daemon) handleKillAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleExecuteObjective manually triggers blueprint execution for an approved objective.
-// Verifies the objective exists and is in "approved" status before delegating to
-// coordinator.StartExecution.
+// handleExecuteObjective manually triggers blueprint execution for an objective.
 func (d *Daemon) handleExecuteObjective(w http.ResponseWriter, r *http.Request) {
 	if d.coordinator == nil {
 		writeError(w, http.StatusServiceUnavailable, "coordinator not available")
@@ -779,26 +760,16 @@ func (d *Daemon) handleExecuteObjective(w http.ResponseWriter, r *http.Request) 
 	}
 
 	id := r.PathValue("id")
-
-	obj, err := d.objectives.Get(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+	if err := d.coordinator.Execute(r.Context(), id); err != nil {
+		switch {
+		case errors.Is(err, dispatch.ErrNotFound):
 			writeError(w, http.StatusNotFound, "objective not found")
-			return
+		case errors.Is(err, dispatch.ErrInvalidState):
+			writeError(w, http.StatusConflict, err.Error())
+		default:
+			d.logger.Error("starting execution", "objective_id", id, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to start execution")
 		}
-		d.logger.Error("getting objective for execute", "id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to get objective")
-		return
-	}
-
-	if obj.Status != domain.ObjectiveStatusApproved {
-		writeError(w, http.StatusConflict, "objective is not in approved status")
-		return
-	}
-
-	if err := d.coordinator.StartExecution(r.Context(), id); err != nil {
-		d.logger.Error("starting execution", "objective_id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to start execution")
 		return
 	}
 

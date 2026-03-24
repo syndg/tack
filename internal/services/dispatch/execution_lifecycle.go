@@ -89,20 +89,19 @@ func (c *Coordinator) escalateStreamFailure(ctx context.Context, exec *blueprint
 	)
 }
 
-// RetryStreamExecution retries a failed stream's sub-execution with optional
-// human guidance. Creates a fresh sub-execution of the same blueprint and
-// injects the previous error + guidance as fix_context on the first agent step.
-func (c *Coordinator) RetryStreamExecution(ctx context.Context, failedExecID string, guidance string) error {
-	// 1. Get the failed sub-execution.
+// Retry retries a failed stream's sub-execution with optional human guidance.
+// Creates a fresh sub-execution of the same blueprint and injects the previous
+// error + guidance as fix_context on the first agent step.
+func (c *Coordinator) Retry(ctx context.Context, failedExecID string, guidance string) error {
 	failedExec, err := c.executions.Get(ctx, failedExecID)
 	if err != nil {
-		return fmt.Errorf("getting execution %s: %w", failedExecID, err)
+		return fmt.Errorf("getting execution %s: %w", failedExecID, ErrNotFound)
 	}
 	if failedExec.Status != "failed" {
-		return fmt.Errorf("execution %s is not failed (status: %s)", failedExecID, failedExec.Status)
+		return fmt.Errorf("execution %s is not failed (status: %s): %w", failedExecID, failedExec.Status, ErrInvalidState)
 	}
 	if failedExec.StreamID == "" {
-		return fmt.Errorf("execution %s is not a stream sub-execution", failedExecID)
+		return fmt.Errorf("execution %s is not a stream sub-execution: %w", failedExecID, ErrInvalidState)
 	}
 
 	// 2. Get the stream and verify it's failed.
@@ -198,14 +197,25 @@ func (c *Coordinator) RetryStreamExecution(ctx context.Context, failedExecID str
 	}
 
 	// 10. Launch the sub-execution in a goroutine and handle completion.
+	// Register the cancel func in activeExecs so Stop() can cancel retry goroutines.
 	baseCtx := c.ctx
 	if baseCtx == nil {
 		baseCtx = ctx
 	}
 	execCtx, cancel := context.WithCancel(baseCtx)
 
+	retryKey := "retry:" + subExec.ID
+	c.mu.Lock()
+	c.activeExecs[retryKey] = cancel
+	c.mu.Unlock()
+
 	go func() {
-		defer cancel()
+		defer func() {
+			c.mu.Lock()
+			delete(c.activeExecs, retryKey)
+			c.mu.Unlock()
+			cancel()
+		}()
 
 		results := make(chan streamResult, 1)
 		c.advanceSubExecution(execCtx, subExec, stream, plan.ID, results)

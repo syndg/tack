@@ -99,10 +99,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 	}
 
 	// Track the spawn result.
-	c.mu.Lock()
-	c.agentMap[result.Session.ID] = result
-	delete(c.terminated, result.Session.ID)
-	c.mu.Unlock()
+	c.tracker.Track(result.Session, result.Process)
 
 	c.logger.Info("agent spawned for step",
 		"session_id", result.Session.ID,
@@ -111,13 +108,10 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		"execution_id", exec.ID,
 	)
 
-	// Drain agent activity events to logger + event bus.
-	c.drainAgentActivity(result.Session, result.Process)
-
 	// Block until agent completes.
 	agentResult, waitErr := result.Process.Wait()
 
-	wasKilled := c.finishTrackedAgent(result.Session.ID)
+	wasKilled := c.tracker.Finish(result.Session.ID)
 	if wasKilled {
 		if stream != nil {
 			_ = c.scheduler.MarkFailed(ctx, stream.ID)
@@ -534,17 +528,11 @@ func (c *Coordinator) spawnAndMonitor(ctx context.Context, req SpawnRequest) (*S
 		return nil, fmt.Errorf("spawning agent: %w", err)
 	}
 
-	c.mu.Lock()
-	c.agentMap[result.Session.ID] = result
-	delete(c.terminated, result.Session.ID)
-	c.mu.Unlock()
-
-	// Drain agent activity events to logger + event bus.
-	c.drainAgentActivity(result.Session, result.Process)
+	c.tracker.Track(result.Session, result.Process)
 
 	go func() {
 		agentResult, waitErr := result.Process.Wait()
-		wasKilled := c.finishTrackedAgent(result.Session.ID)
+		wasKilled := c.tracker.Finish(result.Session.ID)
 
 		if wasKilled {
 			c.spawner.MarkFailed(ctx, result.Session, "killed")

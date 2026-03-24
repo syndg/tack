@@ -26,8 +26,10 @@ func NewPersistentBus(store *db.EventStore, logger *slog.Logger) *PersistentBus 
 // Publish persists the event to the database and then broadcasts it
 // to all subscribers. Database errors are logged but do not prevent broadcasting.
 func (pb *PersistentBus) Publish(event domain.Event) {
-	if err := pb.store.Insert(context.Background(), &event); err != nil {
-		pb.logger.Error("failed to persist event", "type", event.Type, "error", err)
+	if pb.store != nil {
+		if err := pb.store.Insert(context.Background(), &event); err != nil {
+			pb.logger.Error("failed to persist event", "type", event.Type, "error", err)
+		}
 	}
 
 	pb.Bus.Publish(event)
