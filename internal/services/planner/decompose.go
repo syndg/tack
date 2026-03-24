@@ -201,7 +201,7 @@ func ToDomain(raw *RawPlan, objectiveID string) (*domain.Plan, []domain.Stream) 
 			Description:  rs.Description,
 			FileScope:    scope,
 			Dependencies: deps,
-			Status:       "pending",
+			Status:       domain.StreamStatusPending,
 			CreatedAt:    now,
 		}
 	}

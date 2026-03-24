@@ -126,7 +126,7 @@ func TestMarkExecuting_UpdatesStreamStatusAndTracksInActiveSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get stream: %v", err)
 	}
-	if got.Status != "executing" {
+	if got.Status != domain.StreamStatusExecuting {
 		t.Errorf("stream status = %q, want executing", got.Status)
 	}
 }
@@ -191,8 +191,36 @@ func TestMarkFailed_UpdatesStatusAndRemovesFromActiveSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get stream: %v", err)
 	}
-	if got.Status != "failed" {
+	if got.Status != domain.StreamStatusFailed {
 		t.Errorf("stream status = %q, want failed", got.Status)
+	}
+}
+
+func TestMarkCompleted_MergeReadyStreamDoesNotError(t *testing.T) {
+	sched, streamStore, _, planID := setupSchedulerTest(t, 5)
+	ctx := context.Background()
+
+	stream := &domain.Stream{PlanID: planID, Title: "X", Dependencies: []string{}}
+	streamStore.Create(ctx, stream)
+	sched.MarkExecuting(ctx, stream.ID)
+
+	// Advance stream to merge_ready (executing → completed → merge_ready).
+	streamStore.UpdateStatus(ctx, stream.ID, domain.StreamStatusCompleted)
+	streamStore.UpdateStatus(ctx, stream.ID, domain.StreamStatusMergeReady)
+
+	// MarkCompleted on a merge_ready stream should not error — the
+	// InvalidTransitionError is handled as a debug log.
+	if err := sched.MarkCompleted(ctx, stream.ID, planID); err != nil {
+		t.Fatalf("MarkCompleted on merge_ready stream should not error: %v", err)
+	}
+
+	// Stream should still be merge_ready (not downgraded).
+	got, err := streamStore.Get(ctx, stream.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != domain.StreamStatusMergeReady {
+		t.Errorf("status = %q, want merge_ready (should not be downgraded)", got.Status)
 	}
 }
 

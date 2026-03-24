@@ -316,7 +316,7 @@ func (h *Handlers) signalMergeReady(ctx context.Context, exec *blueprint.Executi
 	}
 
 	for _, stream := range streamList {
-		if stream.Status != "completed" {
+		if stream.Status != domain.StreamStatusCompleted {
 			continue
 		}
 		if _, err := h.signalStreamMergeReady(ctx, stream.ID, plan.ID, exec.ObjectiveID); err != nil {
@@ -332,7 +332,7 @@ func (h *Handlers) signalMergeReady(ctx context.Context, exec *blueprint.Executi
 
 // signalStreamMergeReady marks a single stream as merge_ready and publishes EventMergeQueued.
 func (h *Handlers) signalStreamMergeReady(ctx context.Context, streamID, planID, objectiveID string) (blueprint.StepResult, error) {
-	if err := h.streams.UpdateStatus(ctx, streamID, "merge_ready"); err != nil {
+	if err := h.streams.UpdateStatus(ctx, streamID, domain.StreamStatusMergeReady); err != nil {
 		return blueprint.StepResult{
 			Status: blueprint.StepStatusFailed,
 			Error:  fmt.Sprintf("updating stream %s to merge_ready: %s", streamID, err),
@@ -364,7 +364,7 @@ func (h *Handlers) markComplete(ctx context.Context, exec *blueprint.Execution) 
 		streams, err := h.streams.ListByPlan(ctx, plan.ID)
 		if err == nil {
 			for _, s := range streams {
-				if s.Status == "failed" {
+				if s.Status == domain.StreamStatusFailed {
 					targetStatus = domain.ObjectiveStatusPartial
 					break
 				}
@@ -457,9 +457,9 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 			var succeeded, failed []string
 			for _, s := range streamList {
 				switch s.Status {
-				case domain.StreamStatusMerged, domain.StreamStatusMergeReady, "completed":
+				case domain.StreamStatusMerged, domain.StreamStatusMergeReady, domain.StreamStatusCompleted:
 					succeeded = append(succeeded, s.Title)
-				case "failed":
+				case domain.StreamStatusFailed:
 					failed = append(failed, s.Title)
 				}
 			}
@@ -738,11 +738,11 @@ func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (b
 			// Also reset the merge entry back to pending so the processor picks it up.
 			h.resetMergingEntry(ctx, s.ID)
 			toMerge = append(toMerge, s.ID)
-		case "failed":
+		case domain.StreamStatusFailed:
 			failed = append(failed, s.ID)
-		case "executing", "pending":
+		case domain.StreamStatusExecuting, domain.StreamStatusPending:
 			active = append(active, s.ID)
-		case domain.StreamStatusMerged, "completed":
+		case domain.StreamStatusMerged, domain.StreamStatusCompleted:
 			// Already merged or completed — nothing to do.
 		}
 	}
@@ -801,7 +801,7 @@ func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (b
 					if stream.Status == domain.StreamStatusMergeReady {
 						delete(activeSet, event.Stream)
 						toMerge = append(toMerge, event.Stream)
-					} else if stream.Status == "failed" {
+					} else if stream.Status == domain.StreamStatusFailed {
 						delete(activeSet, event.Stream)
 						failed = append(failed, event.Stream)
 					}

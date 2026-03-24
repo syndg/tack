@@ -3,6 +3,8 @@ package planner
 import (
 	"strings"
 	"testing"
+
+	"github.com/syndg/deck/internal/domain"
 )
 
 func TestParsePlan_WithCodeBlock(t *testing.T) {
@@ -196,7 +198,7 @@ func TestToDomain_InitialStatuses(t *testing.T) {
 	if plan.Status != "draft" {
 		t.Errorf("plan status = %q, want draft", plan.Status)
 	}
-	if streams[0].Status != "pending" {
+	if streams[0].Status != domain.StreamStatusPending {
 		t.Errorf("stream status = %q, want pending", streams[0].Status)
 	}
 }

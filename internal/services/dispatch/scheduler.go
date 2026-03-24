@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -77,7 +78,7 @@ func (s *Scheduler) GetReadyStreams(ctx context.Context, planID string) ([]domai
 // MarkExecuting marks a stream as actively executing and tracks it.
 // Updates stream status to "executing" via StreamStore.UpdateStatus().
 func (s *Scheduler) MarkExecuting(ctx context.Context, streamID string) error {
-	if err := s.streams.UpdateStatus(ctx, streamID, "executing"); err != nil {
+	if err := s.streams.UpdateStatus(ctx, streamID, domain.StreamStatusExecuting); err != nil {
 		return fmt.Errorf("updating stream %s to executing: %w", streamID, err)
 	}
 
@@ -90,16 +91,18 @@ func (s *Scheduler) MarkExecuting(ctx context.Context, streamID string) error {
 }
 
 // MarkCompleted marks a stream as completed and removes from active set.
-// 1. Update stream status to "completed" (unless already merge_ready)
+// 1. Update stream status to "completed" (InvalidTransitionError is non-fatal —
+//    means the stream already advanced past completed, e.g. to merge_ready)
 // 2. Remove from activeStreams map
 // 3. Check for newly unblocked streams in the same plan
 // 4. Publish EventStreamReady for each newly ready stream
 func (s *Scheduler) MarkCompleted(ctx context.Context, streamID string, planID string) error {
-	// Don't downgrade merge_ready back to completed — the stream was already
-	// signaled for merge by signal_merge_ready inside its sub-execution.
-	current, err := s.streams.Get(ctx, streamID)
-	if err != nil || (current.Status != "merge_ready" && current.Status != "merged") {
-		if err := s.streams.UpdateStatus(ctx, streamID, "completed"); err != nil {
+	if err := s.streams.UpdateStatus(ctx, streamID, domain.StreamStatusCompleted); err != nil {
+		var ite *db.InvalidTransitionError
+		if errors.As(err, &ite) {
+			s.logger.Debug("stream already advanced past completed",
+				"stream_id", streamID, "current_status", ite.From)
+		} else {
 			return fmt.Errorf("updating stream %s to completed: %w", streamID, err)
 		}
 	}
@@ -135,7 +138,7 @@ func (s *Scheduler) MarkCompleted(ctx context.Context, streamID string, planID s
 
 // MarkFailed marks a stream as failed and removes from active set.
 func (s *Scheduler) MarkFailed(ctx context.Context, streamID string) error {
-	if err := s.streams.UpdateStatus(ctx, streamID, "failed"); err != nil {
+	if err := s.streams.UpdateStatus(ctx, streamID, domain.StreamStatusFailed); err != nil {
 		return fmt.Errorf("updating stream %s to failed: %w", streamID, err)
 	}
 

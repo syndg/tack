@@ -109,7 +109,7 @@ func (c *Coordinator) Retry(ctx context.Context, failedExecID string, guidance s
 	if err != nil {
 		return fmt.Errorf("getting stream %s: %w", failedExec.StreamID, err)
 	}
-	if stream.Status != "failed" {
+	if stream.Status != domain.StreamStatusFailed {
 		return fmt.Errorf("stream %s is not failed (status: %s)", stream.ID, stream.Status)
 	}
 
@@ -138,7 +138,7 @@ func (c *Coordinator) Retry(ctx context.Context, failedExecID string, guidance s
 	}
 
 	// 6. Reset stream to pending.
-	if err := c.streams.UpdateStatus(ctx, stream.ID, "pending"); err != nil {
+	if err := c.streams.UpdateStatus(ctx, stream.ID, domain.StreamStatusPending); err != nil {
 		return fmt.Errorf("resetting stream %s to pending: %w", stream.ID, err)
 	}
 	if err := c.scheduler.MarkExecuting(ctx, stream.ID); err != nil {
@@ -270,7 +270,7 @@ func (c *Coordinator) checkPartialToCompleted(ctx context.Context, objectiveID s
 	}
 
 	for _, s := range streams {
-		if s.Status != "completed" && s.Status != domain.StreamStatusMerged {
+		if s.Status != domain.StreamStatusCompleted && s.Status != domain.StreamStatusMerged {
 			return // still have non-terminal streams (merge_ready/merging not final)
 		}
 	}
@@ -362,7 +362,7 @@ func (c *Coordinator) completeExecution(ctx context.Context, objectiveID string)
 
 	hasFailedStreams := false
 	for _, s := range streams {
-		if s.Status == "failed" {
+		if s.Status == domain.StreamStatusFailed {
 			hasFailedStreams = true
 			break
 		}
@@ -371,7 +371,7 @@ func (c *Coordinator) completeExecution(ctx context.Context, objectiveID string)
 	// For single-stream executions, mark the stream completed if still active.
 	if len(streams) == 1 {
 		s := streams[0]
-		if s.Status == "pending" || s.Status == "executing" {
+		if s.Status == domain.StreamStatusPending || s.Status == domain.StreamStatusExecuting {
 			if err := c.scheduler.MarkCompleted(ctx, s.ID, plan.ID); err != nil {
 				c.logger.Error("failed to mark single stream completed", "stream_id", s.ID, "error", err)
 			}
@@ -430,7 +430,7 @@ func (c *Coordinator) failExecution(ctx context.Context, objectiveID, reason str
 	stream, streamErr := c.singleStreamForObjective(ctx, objectiveID)
 	if streamErr != nil {
 		c.logger.Error("failed to load single stream on execution failure", "objective_id", objectiveID, "error", streamErr)
-	} else if stream != nil && (stream.Status == "pending" || stream.Status == "executing") {
+	} else if stream != nil && (stream.Status == domain.StreamStatusPending || stream.Status == domain.StreamStatusExecuting) {
 		if err := c.scheduler.MarkFailed(ctx, stream.ID); err != nil {
 			c.logger.Error("failed to mark single stream failed", "stream_id", stream.ID, "error", err)
 		}

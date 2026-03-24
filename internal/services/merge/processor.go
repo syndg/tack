@@ -294,7 +294,7 @@ func (p *Processor) processEntry(ctx context.Context, entry *domain.MergeEntry) 
 			p.logger.Error("updating entry to conflict", "entry", entry.ID, "error", err)
 		}
 		// Move stream out of "merging" so it doesn't orphan in status APIs.
-		if err := p.streams.UpdateStatus(ctx, entry.StreamID, "failed"); err != nil {
+		if err := p.streams.UpdateStatus(ctx, entry.StreamID, domain.StreamStatusFailed); err != nil {
 			p.logger.Error("updating stream to failed after conflict", "stream", entry.StreamID, "error", err)
 		}
 		p.publishMergeFailed(entry, result.Error)
@@ -403,7 +403,7 @@ func (p *Processor) failEntry(ctx context.Context, entry *domain.MergeEntry, tie
 	if err := p.queue.UpdateStatus(ctx, entry.ID, domain.MergeStatusFailed, tier, errMsg, ""); err != nil {
 		p.logger.Error("updating entry to failed", "entry", entry.ID, "error", err)
 	}
-	if err := p.streams.UpdateStatus(ctx, entry.StreamID, "failed"); err != nil {
+	if err := p.streams.UpdateStatus(ctx, entry.StreamID, domain.StreamStatusFailed); err != nil {
 		p.logger.Error("updating stream to failed after merge failure", "stream", entry.StreamID, "error", err)
 	}
 	p.publishMergeFailed(entry, errMsg)

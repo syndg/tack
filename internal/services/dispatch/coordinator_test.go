@@ -358,7 +358,7 @@ func TestRetry_TrackedInActiveExecs(t *testing.T) {
 		ID:        "stream-retry",
 		PlanID:    "plan-retry",
 		Title:     "test stream",
-		Status:    "failed",
+		Status:    domain.StreamStatusFailed,
 		CreatedAt: time.Now(),
 	}
 	if err := env.streams.Create(ctx, stream); err != nil {
@@ -444,7 +444,7 @@ func TestStop_CancelsRetryGoroutines(t *testing.T) {
 		ID:        "stream-stop",
 		PlanID:    "plan-stop",
 		Title:     "stop test stream",
-		Status:    "failed",
+		Status:    domain.StreamStatusFailed,
 		CreatedAt: time.Now(),
 	}
 	_ = env.streams.Create(ctx, stream)

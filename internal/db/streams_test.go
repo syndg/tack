@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/syndg/deck/internal/domain"
@@ -37,7 +38,7 @@ func TestStreamStore_Create_JSONSerialization(t *testing.T) {
 	if stream.ID == "" {
 		t.Error("expected UUID to be generated")
 	}
-	if stream.Status != "pending" {
+	if stream.Status != domain.StreamStatusPending {
 		t.Errorf("status = %q, want pending", stream.Status)
 	}
 }
@@ -130,15 +131,147 @@ func TestStreamStore_UpdateStatus(t *testing.T) {
 	}
 	store.Create(ctx, stream)
 
-	if err := store.UpdateStatus(ctx, stream.ID, "completed"); err != nil {
-		t.Fatalf("UpdateStatus: %v", err)
+	// Walk valid path: pending → executing → completed
+	if err := store.UpdateStatus(ctx, stream.ID, domain.StreamStatusExecuting); err != nil {
+		t.Fatalf("UpdateStatus to executing: %v", err)
+	}
+	if err := store.UpdateStatus(ctx, stream.ID, domain.StreamStatusCompleted); err != nil {
+		t.Fatalf("UpdateStatus to completed: %v", err)
 	}
 	got, err := store.Get(ctx, stream.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Status != "completed" {
+	if got.Status != domain.StreamStatusCompleted {
 		t.Errorf("status = %q, want completed", got.Status)
+	}
+}
+
+// advanceStream walks a stream through valid transitions to reach the target status.
+func advanceStream(t *testing.T, store *StreamStore, ctx context.Context, id string, target domain.StreamStatus) {
+	t.Helper()
+	paths := map[domain.StreamStatus][]domain.StreamStatus{
+		domain.StreamStatusExecuting:  {domain.StreamStatusExecuting},
+		domain.StreamStatusCompleted:  {domain.StreamStatusExecuting, domain.StreamStatusCompleted},
+		domain.StreamStatusFailed:     {domain.StreamStatusExecuting, domain.StreamStatusFailed},
+		domain.StreamStatusMergeReady: {domain.StreamStatusExecuting, domain.StreamStatusCompleted, domain.StreamStatusMergeReady},
+		domain.StreamStatusMerging:    {domain.StreamStatusExecuting, domain.StreamStatusCompleted, domain.StreamStatusMergeReady, domain.StreamStatusMerging},
+		domain.StreamStatusMerged:     {domain.StreamStatusExecuting, domain.StreamStatusCompleted, domain.StreamStatusMergeReady, domain.StreamStatusMerging, domain.StreamStatusMerged},
+	}
+	for _, step := range paths[target] {
+		if err := store.UpdateStatus(ctx, id, step); err != nil {
+			t.Fatalf("advancing stream to %s (step %s): %v", target, step, err)
+		}
+	}
+}
+
+func TestUpdateStatus_ValidTransition(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	obj := createTestObjective(t, NewObjectiveStore(d.Conn()), "test")
+	plan := createTestPlan(t, NewPlanStore(d.Conn()), obj.ID)
+	store := NewStreamStore(d.Conn())
+
+	stream := &domain.Stream{PlanID: plan.ID, Title: "s", FileScope: []string{"**"}, Dependencies: []string{}}
+	store.Create(ctx, stream)
+
+	if err := store.UpdateStatus(ctx, stream.ID, domain.StreamStatusExecuting); err != nil {
+		t.Fatalf("pending → executing should succeed: %v", err)
+	}
+	got, _ := store.Get(ctx, stream.ID)
+	if got.Status != domain.StreamStatusExecuting {
+		t.Errorf("status = %q, want executing", got.Status)
+	}
+}
+
+func TestUpdateStatus_InvalidTransition(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	obj := createTestObjective(t, NewObjectiveStore(d.Conn()), "test")
+	plan := createTestPlan(t, NewPlanStore(d.Conn()), obj.ID)
+	store := NewStreamStore(d.Conn())
+
+	stream := &domain.Stream{PlanID: plan.ID, Title: "s", FileScope: []string{"**"}, Dependencies: []string{}}
+	store.Create(ctx, stream)
+
+	err := store.UpdateStatus(ctx, stream.ID, domain.StreamStatusCompleted)
+	if err == nil {
+		t.Fatal("pending → completed should fail")
+	}
+	var ite *InvalidTransitionError
+	if !errors.As(err, &ite) {
+		t.Fatalf("expected InvalidTransitionError, got %T: %v", err, err)
+	}
+	if ite.From != domain.StreamStatusPending || ite.To != domain.StreamStatusCompleted {
+		t.Errorf("error = %s → %s, want pending → completed", ite.From, ite.To)
+	}
+}
+
+func TestUpdateStatus_TerminalState(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	obj := createTestObjective(t, NewObjectiveStore(d.Conn()), "test")
+	plan := createTestPlan(t, NewPlanStore(d.Conn()), obj.ID)
+	store := NewStreamStore(d.Conn())
+
+	stream := &domain.Stream{PlanID: plan.ID, Title: "s", FileScope: []string{"**"}, Dependencies: []string{}}
+	store.Create(ctx, stream)
+	advanceStream(t, store, ctx, stream.ID, domain.StreamStatusMerged)
+
+	err := store.UpdateStatus(ctx, stream.ID, domain.StreamStatusPending)
+	if err == nil {
+		t.Fatal("merged → pending should fail")
+	}
+	var ite *InvalidTransitionError
+	if !errors.As(err, &ite) {
+		t.Fatalf("expected InvalidTransitionError, got %T: %v", err, err)
+	}
+}
+
+func TestUpdateStatus_StreamNotFound(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	store := NewStreamStore(d.Conn())
+
+	err := store.UpdateStatus(ctx, "nonexistent-id", domain.StreamStatusExecuting)
+	if err == nil {
+		t.Fatal("expected error for nonexistent stream")
+	}
+	var ite *InvalidTransitionError
+	if errors.As(err, &ite) {
+		t.Fatal("expected non-InvalidTransitionError for not-found stream")
+	}
+}
+
+func TestUpdateStatus_RetryPath(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	obj := createTestObjective(t, NewObjectiveStore(d.Conn()), "test")
+	plan := createTestPlan(t, NewPlanStore(d.Conn()), obj.ID)
+	store := NewStreamStore(d.Conn())
+
+	stream := &domain.Stream{PlanID: plan.ID, Title: "s", FileScope: []string{"**"}, Dependencies: []string{}}
+	store.Create(ctx, stream)
+	advanceStream(t, store, ctx, stream.ID, domain.StreamStatusFailed)
+
+	if err := store.UpdateStatus(ctx, stream.ID, domain.StreamStatusPending); err != nil {
+		t.Fatalf("failed → pending should succeed: %v", err)
+	}
+}
+
+func TestUpdateStatus_RecoveryPath(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	obj := createTestObjective(t, NewObjectiveStore(d.Conn()), "test")
+	plan := createTestPlan(t, NewPlanStore(d.Conn()), obj.ID)
+	store := NewStreamStore(d.Conn())
+
+	stream := &domain.Stream{PlanID: plan.ID, Title: "s", FileScope: []string{"**"}, Dependencies: []string{}}
+	store.Create(ctx, stream)
+	advanceStream(t, store, ctx, stream.ID, domain.StreamStatusMerging)
+
+	if err := store.UpdateStatus(ctx, stream.ID, domain.StreamStatusMergeReady); err != nil {
+		t.Fatalf("merging → merge_ready should succeed: %v", err)
 	}
 }
 
@@ -187,9 +320,7 @@ func TestStreamStore_ListReady_DependencyResolution(t *testing.T) {
 	}
 
 	// Mark s1 completed — s3 still not ready (s2 still pending).
-	if err := store.UpdateStatus(ctx, s1.ID, "completed"); err != nil {
-		t.Fatalf("UpdateStatus s1: %v", err)
-	}
+	advanceStream(t, store, ctx, s1.ID, domain.StreamStatusCompleted)
 	ready, err = store.ListReady(ctx, plan.ID)
 	if err != nil {
 		t.Fatalf("ListReady (after s1 done): %v", err)
@@ -200,9 +331,7 @@ func TestStreamStore_ListReady_DependencyResolution(t *testing.T) {
 	}
 
 	// Mark s2 completed — s3 is now ready.
-	if err := store.UpdateStatus(ctx, s2.ID, "completed"); err != nil {
-		t.Fatalf("UpdateStatus s2: %v", err)
-	}
+	advanceStream(t, store, ctx, s2.ID, domain.StreamStatusCompleted)
 	ready, err = store.ListReady(ctx, plan.ID)
 	if err != nil {
 		t.Fatalf("ListReady (after s2 done): %v", err)

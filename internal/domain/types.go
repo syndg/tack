@@ -54,7 +54,7 @@ type Stream struct {
 	Description  string    `json:"description"`
 	FileScope    []string  `json:"file_scope"`
 	Dependencies []string  `json:"dependencies"`
-	Status       string    `json:"status"`
+	Status       StreamStatus `json:"status"`
 	ExecutionID  string    `json:"execution_id,omitempty"` // sub-execution driving this stream
 	CreatedAt    time.Time `json:"created_at"`
 }
@@ -124,15 +124,40 @@ type MailMessage struct {
 }
 
 
-// Stream statuses for merge lifecycle
+// Stream statuses
 
-type StreamStatus = string
+type StreamStatus string
 
 const (
+	StreamStatusPending    StreamStatus = "pending"
+	StreamStatusExecuting  StreamStatus = "executing"
+	StreamStatusCompleted  StreamStatus = "completed"
+	StreamStatusFailed     StreamStatus = "failed"
 	StreamStatusMergeReady StreamStatus = "merge_ready"
 	StreamStatusMerging    StreamStatus = "merging"
 	StreamStatusMerged     StreamStatus = "merged"
 )
+
+// streamValidTransitions defines all valid state transitions for streams.
+var streamValidTransitions = map[StreamStatus][]StreamStatus{
+	StreamStatusPending:    {StreamStatusExecuting, StreamStatusFailed},
+	StreamStatusExecuting:  {StreamStatusCompleted, StreamStatusFailed, StreamStatusMergeReady},
+	StreamStatusCompleted:  {StreamStatusMergeReady, StreamStatusFailed},
+	StreamStatusMergeReady: {StreamStatusMerging, StreamStatusFailed},
+	StreamStatusMerging:    {StreamStatusMerged, StreamStatusFailed, StreamStatusMergeReady},
+	StreamStatusFailed:     {StreamStatusPending},
+	// StreamStatusMerged is terminal — no outbound transitions.
+}
+
+// IsValidStreamTransition returns true if transitioning from → to is allowed.
+func IsValidStreamTransition(from, to StreamStatus) bool {
+	for _, valid := range streamValidTransitions[from] {
+		if valid == to {
+			return true
+		}
+	}
+	return false
+}
 
 // Merge queue
 

@@ -133,7 +133,7 @@ func (s *Service) CreateSimplePlan(ctx context.Context, objectiveID string) (*do
 		Description:  obj.Description,
 		FileScope:    []string{"**/*"},
 		Dependencies: []string{},
-		Status:       "pending",
+		Status:       domain.StreamStatusPending,
 		CreatedAt:    now,
 	}
 

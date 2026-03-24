@@ -13,6 +13,24 @@ import (
 	events "github.com/syndg/deck/internal/services/events"
 )
 
+// advanceStreamTo walks a stream through valid transitions from pending to the target status.
+func advanceStreamTo(t *testing.T, store *db.StreamStore, ctx context.Context, id string, target domain.StreamStatus) {
+	t.Helper()
+	paths := map[domain.StreamStatus][]domain.StreamStatus{
+		domain.StreamStatusExecuting:  {domain.StreamStatusExecuting},
+		domain.StreamStatusCompleted:  {domain.StreamStatusExecuting, domain.StreamStatusCompleted},
+		domain.StreamStatusFailed:     {domain.StreamStatusExecuting, domain.StreamStatusFailed},
+		domain.StreamStatusMergeReady: {domain.StreamStatusExecuting, domain.StreamStatusCompleted, domain.StreamStatusMergeReady},
+		domain.StreamStatusMerging:    {domain.StreamStatusExecuting, domain.StreamStatusCompleted, domain.StreamStatusMergeReady, domain.StreamStatusMerging},
+		domain.StreamStatusMerged:     {domain.StreamStatusExecuting, domain.StreamStatusCompleted, domain.StreamStatusMergeReady, domain.StreamStatusMerging, domain.StreamStatusMerged},
+	}
+	for _, step := range paths[target] {
+		if err := store.UpdateStatus(ctx, id, step); err != nil {
+			t.Fatalf("advancing stream to %s (step %s): %v", target, step, err)
+		}
+	}
+}
+
 // mockSandboxProvider implements sandbox.SandboxProvider for testing.
 type mockSandboxProvider struct {
 	sandboxes []sandbox.Sandbox
@@ -384,13 +402,13 @@ func TestCheckObjectiveComplete(t *testing.T) {
 		PlanID: plan.ID, Title: "s1", FileScope: []string{"a/**"}, Dependencies: []string{},
 	}
 	f.streams.Create(ctx, s1)
-	f.streams.UpdateStatus(ctx, s1.ID, domain.StreamStatusMerged)
+	advanceStreamTo(t, f.streams, ctx, s1.ID, domain.StreamStatusMerged)
 
 	s2 := &domain.Stream{
 		PlanID: plan.ID, Title: "s2", FileScope: []string{"b/**"}, Dependencies: []string{},
 	}
 	f.streams.Create(ctx, s2)
-	f.streams.UpdateStatus(ctx, s2.ID, domain.StreamStatusMerged)
+	advanceStreamTo(t, f.streams, ctx, s2.ID, domain.StreamStatusMerged)
 
 	if err := f.processor.checkObjectiveComplete(ctx, obj.ID); err != nil {
 		t.Fatalf("checkObjectiveComplete: %v", err)
@@ -420,7 +438,7 @@ func TestCheckObjectiveComplete_NotAllMerged(t *testing.T) {
 		PlanID: plan.ID, Title: "s1", FileScope: []string{"a/**"}, Dependencies: []string{},
 	}
 	f.streams.Create(ctx, s1)
-	f.streams.UpdateStatus(ctx, s1.ID, domain.StreamStatusMerged)
+	advanceStreamTo(t, f.streams, ctx, s1.ID, domain.StreamStatusMerged)
 
 	// s2 is still pending — not merged.
 	s2 := &domain.Stream{

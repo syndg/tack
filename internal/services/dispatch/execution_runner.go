@@ -56,7 +56,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 			}, nil
 		}
 	}
-	if stream != nil && stream.Status == "pending" {
+	if stream != nil && stream.Status == domain.StreamStatusPending {
 		if err := c.scheduler.MarkExecuting(ctx, stream.ID); err != nil {
 			return blueprint.StepResult{
 				Status: blueprint.StepStatusFailed,
@@ -264,9 +264,9 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 	for _, s := range allStreams {
 		streamSet[s.ID] = true
 		switch s.Status {
-		case "completed", domain.StreamStatusMergeReady, domain.StreamStatusMerged:
+		case domain.StreamStatusCompleted, domain.StreamStatusMergeReady, domain.StreamStatusMerged:
 			resolvedCount++
-		case "failed":
+		case domain.StreamStatusFailed:
 			resolvedCount++
 			failures = append(failures, fmt.Sprintf("stream %s: previously failed", s.ID))
 		}
@@ -362,7 +362,7 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 				continue
 			}
 			stream, err := c.streams.Get(ctx, streamID)
-			if err != nil || stream.Status != "pending" {
+			if err != nil || stream.Status != domain.StreamStatusPending {
 				continue
 			}
 			if err := c.startStreamSubExecution(ctx, exec, refBP, stream, plan.ID, results); err != nil {

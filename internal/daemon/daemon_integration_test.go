@@ -512,7 +512,7 @@ func TestSimpleHotfixExecution_CompletesWithNormalizedBlueprintAndQualityGates(t
 	if plan.Plan.Status != "completed" {
 		t.Fatalf("plan status = %q, want completed", plan.Plan.Status)
 	}
-	if len(plan.Streams) != 1 || plan.Streams[0].Status != "completed" {
+	if len(plan.Streams) != 1 || plan.Streams[0].Status != domain.StreamStatusCompleted {
 		t.Fatalf("streams = %#v, want one completed stream", plan.Streams)
 	}
 
@@ -639,7 +639,7 @@ exit 0
 		t.Fatalf("plan status = %q, want completed", plan.Plan.Status)
 	}
 	ss := plan.Streams[0].Status
-	if len(plan.Streams) != 1 || (ss != "completed" && ss != "merge_ready" && ss != "merged") {
+	if len(plan.Streams) != 1 || (ss != domain.StreamStatusCompleted && ss != domain.StreamStatusMergeReady && ss != domain.StreamStatusMerged) {
 		t.Fatalf("streams = %#v, want one completed/merge_ready/merged stream", plan.Streams)
 	}
 }
@@ -672,7 +672,7 @@ func TestExecutionFailure_TransitionsObjectiveAndPlanFailed(t *testing.T) {
 	if plan.Plan.Status != "failed" {
 		t.Fatalf("plan status = %q, want failed", plan.Plan.Status)
 	}
-	if len(plan.Streams) != 1 || plan.Streams[0].Status != "failed" {
+	if len(plan.Streams) != 1 || plan.Streams[0].Status != domain.StreamStatusFailed {
 		t.Fatalf("streams = %#v, want one failed stream", plan.Streams)
 	}
 }
@@ -791,20 +791,20 @@ exit 0
 
 	// Verify stream statuses.
 	plan = mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+obj.ID+"/plan")
-	statusByTitle := make(map[string]string)
+	statusByTitle := make(map[string]domain.StreamStatus)
 	for _, s := range plan.Streams {
 		statusByTitle[s.Title] = s.Status
 	}
 
 	// Successful streams may be "completed", "merge_ready", or "merged" depending on
 	// how far the merge queue got before the assertion runs.
-	isSuccess := func(status string) bool {
-		return status == "completed" || status == "merge_ready" || status == "merged"
+	isSuccess := func(status domain.StreamStatus) bool {
+		return status == domain.StreamStatusCompleted || status == domain.StreamStatusMergeReady || status == domain.StreamStatusMerged
 	}
 	if !isSuccess(statusByTitle["stream one"]) {
 		t.Fatalf("stream one status = %q, want completed/merge_ready/merged", statusByTitle["stream one"])
 	}
-	if statusByTitle["fail-stream two"] != "failed" {
+	if statusByTitle["fail-stream two"] != domain.StreamStatusFailed {
 		t.Fatalf("fail-stream two status = %q, want failed", statusByTitle["fail-stream two"])
 	}
 	if !isSuccess(statusByTitle["stream three"]) {
@@ -939,7 +939,7 @@ exit 0
 	// not just enqueued. The objective should follow (partial -> completed).
 	waitForCondition(t, 30*time.Second, func() bool {
 		p := mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+obj.ID+"/plan")
-		return len(p.Streams) == 1 && p.Streams[0].Status == "merged"
+		return len(p.Streams) == 1 && p.Streams[0].Status == domain.StreamStatusMerged
 	})
 
 	// Objective must also be completed now that the stream is fully merged.
