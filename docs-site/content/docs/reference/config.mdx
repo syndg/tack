@@ -1,0 +1,79 @@
+---
+title: Configuration Reference
+description: Full reference for .deck/config.yaml options.
+---
+
+## Complete Config
+
+```yaml
+daemon:
+  listen: "127.0.0.1:9800"       # HTTP listen address
+  external_url: ""                # Public URL for agent callbacks (required for Daytona)
+  data_dir: ".deck/data"          # SQLite database and activity logs
+  base_branch: "main"             # Branch to merge into
+
+sandbox:
+  provider: "local"               # "local" or "daytona"
+  worktree_dir: ""                # Override worktree directory (default: $TMPDIR/deck-worktrees)
+  post_create:                    # Commands to run after sandbox creation
+    - "bun install"
+  default_resources:
+    cpu: 2
+    memory: "4Gi"
+    disk: "20Gi"
+  auto_stop_interval: 30          # Minutes before idle sandbox auto-stops (Daytona)
+  auto_delete_interval: 60        # Minutes before stopped sandbox auto-deletes (Daytona)
+
+agents:
+  runtime: "pi"                   # "pi" or "claude-code"
+  max_concurrent: 4               # Max parallel agents
+  stagger_delay_ms: 1000          # Delay between agent spawns
+  pi:
+    provider: "anthropic"         # Model provider
+    model: "claude-opus-4-6"    # Model name
+    thinking_level: "medium"      # "low", "medium", "high"
+  timeouts:
+    default:
+      max_duration_minutes: 30    # Max wall-clock time per agent
+      idle_minutes: 10            # Kill agent after N minutes of no output
+    builder:
+      max_duration_minutes: 45
+    reviewer:
+      max_duration_minutes: 15
+    planner:
+      max_duration_minutes: 20
+
+planning:
+  max_streams: 8                  # Cap on parallel streams per plan
+
+tools:
+  max_per_agent: 15               # Tool cap per agent
+  always_include: []              # Tools always available
+  always_exclude: []              # Tools never available
+
+quality_gates:                    # Shell commands run after each agent change
+  - "bun test"
+  - "bunx tsc --noEmit"
+  - "bun run lint"
+```
+
+## Credentials
+
+Stored in `~/.config/deck/credentials.yaml`:
+
+```yaml
+anthropic:
+  setup_token: "sk-ant-..."
+github:
+  pat: "ghp_..."
+daytona:
+  api_key: "..."
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `ANTHROPIC_API_KEY` | Anthropic API key (alternative to credentials file) |
+| `GITHUB_TOKEN` | GitHub token (alternative to credentials file) |
+| `DAYTONA_API_KEY` | Daytona API key (alternative to credentials file) |

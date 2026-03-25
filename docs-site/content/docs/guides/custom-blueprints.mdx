@@ -1,0 +1,70 @@
+---
+title: Custom Blueprints
+description: Design your own agent workflows with YAML state machines.
+---
+
+## Override Default Blueprints
+
+Place custom blueprints in `.deck/blueprints/`. Files with the same name as a default blueprint override it.
+
+## Example: Skip Review
+
+Remove the reviewer step for faster iteration:
+
+```yaml
+# .deck/blueprints/stream.yaml
+steps:
+  - id: build
+    type: agent
+    role: builder
+    commit: auto
+    next: lint
+
+  - id: lint
+    type: deterministic
+    action: run_quality_gates
+    retry: 3
+    on_fail: build
+    max_fix_iterations: 5
+    next: merge_ready
+
+  - id: merge_ready
+    type: deterministic
+    action: signal_merge_ready
+```
+
+## Example: Add Scout Step
+
+Add a reconnaissance step before building:
+
+```yaml
+# .deck/blueprints/stream.yaml
+steps:
+  - id: scout
+    type: agent
+    role: scout
+    optional: true
+    next: build
+
+  - id: build
+    type: agent
+    role: builder
+    commit: auto
+    next: lint
+
+  - id: lint
+    type: deterministic
+    action: run_quality_gates
+    retry: 2
+    on_fail: build
+    max_fix_iterations: 3
+    next: merge_ready
+
+  - id: merge_ready
+    type: deterministic
+    action: signal_merge_ready
+```
+
+## Step Reference
+
+See the [Blueprints concept page](/docs/concepts/blueprints) for the full list of step types and options.

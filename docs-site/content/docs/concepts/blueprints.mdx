@@ -1,0 +1,100 @@
+---
+title: Blueprints
+description: YAML state machines that define agent workflows.
+---
+
+## What is a Blueprint?
+
+A blueprint is a YAML file that defines the step-by-step workflow for an objective or stream. Steps can be:
+
+| Type | Description |
+|------|-------------|
+| `agent` | Spawns an AI agent (planner, builder, reviewer) |
+| `deterministic` | Runs infrastructure logic (gates, merge, PR creation) |
+| `human` | Pauses for human approval |
+| `blueprint_ref` | Runs another blueprint (nesting) |
+
+## Default Blueprints
+
+Deck ships two default blueprints:
+
+### Feature Implementation (top-level)
+
+Runs the full pipeline: plan → approve → execute streams → merge → PR.
+
+### Stream (per-stream)
+
+Runs the agent workflow within a stream:
+
+```yaml
+steps:
+  - id: build
+    type: agent
+    role: builder
+    commit: auto
+    next: lint
+
+  - id: lint
+    type: deterministic
+    action: run_quality_gates
+    retry: 2
+    on_fail: build
+    max_fix_iterations: 3
+    next: review
+
+  - id: review
+    type: agent
+    role: reviewer
+    next: merge_ready
+
+  - id: merge_ready
+    type: deterministic
+    action: signal_merge_ready
+```
+
+## Customizing Blueprints
+
+Override defaults by placing your own in `.deck/blueprints/`:
+
+```yaml
+# .deck/blueprints/stream.yaml
+steps:
+  - id: build
+    type: agent
+    role: builder
+    commit: auto
+    next: lint
+
+  - id: lint
+    type: deterministic
+    action: run_quality_gates
+    retry: 3
+    on_fail: build
+    max_fix_iterations: 5
+    next: merge_ready
+
+  - id: merge_ready
+    type: deterministic
+    action: signal_merge_ready
+```
+
+This example removes the reviewer step and increases fix-loop iterations.
+
+## Step Options
+
+### Agent Steps
+
+- `role` — agent role (planner, builder, reviewer)
+- `commit` — commit mode: `auto` (default), `agent`, or `none`
+- `messages` — structured outputs the agent should generate (PR title, commit message)
+
+### Deterministic Steps
+
+- `action` — the action to run: `dispatch_streams`, `run_quality_gates`, `signal_merge_ready`, `merge_queue`, `create_pr`, `mark_complete`
+- `retry` — number of retries on failure
+- `on_fail` — step to jump to on failure (fix-loop)
+- `max_fix_iterations` — cap on fix-loop cycles
+
+### Human Steps
+
+Pause execution until a human approves via `deck approve` or the API.

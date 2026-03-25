@@ -1,0 +1,43 @@
+---
+title: Quality Gates
+description: Deterministic checks that enforce code quality on every change.
+---
+
+## What are Quality Gates?
+
+Quality gates are shell commands that run after an agent makes changes. They enforce lint, type checks, tests, and any other deterministic validation.
+
+```yaml
+quality_gates:
+  - "bun test"
+  - "bunx tsc --noEmit"
+  - "bun run lint"
+```
+
+## File-Attribution
+
+Quality gates run against the **full project**, but Deck only fails a stream for errors in **its own files**.
+
+```
+Stream 1 (backend):  bunx tsc --noEmit → fails on frontend error → PASS (not in scope)
+Stream 2 (frontend): bunx tsc --noEmit → fails on frontend error → FAIL (in scope)
+```
+
+Pre-existing errors in other files don't block progress. Cross-file breakage is caught at merge time when post-merge gates run against the combined result.
+
+## Fix-Loops
+
+When gates fail for errors in the stream's file scope, Deck sends the errors back to the builder agent with a "fix this" instruction. The agent iterates until gates pass or the max iteration limit is reached.
+
+```yaml
+- id: lint
+  type: deterministic
+  action: run_quality_gates
+  retry: 2
+  on_fail: build
+  max_fix_iterations: 3
+```
+
+## Post-Merge Gates
+
+After streams are merged, quality gates run again against the merged result. This catches integration issues that individual streams couldn't detect.

@@ -1,0 +1,59 @@
+---
+title: Scoped Rules
+description: Inject project conventions into agent prompts based on file scope.
+---
+
+## What are Rules?
+
+Rules are markdown files with YAML frontmatter that inject project-specific guidance into agent prompts. Every rule you add makes all future agents smarter about your codebase.
+
+Rules are scoped by file patterns — an agent working on `src/payments/**` gets payment-specific rules, while an agent on `src/ui/**` gets UI rules.
+
+## Creating Rules
+
+Place rule files in `.deck/rules/`:
+
+```yaml
+---
+scope: "src/payments/**"
+priority: high
+---
+
+## Payment Module Conventions
+
+- Use integer cents for all monetary amounts, never floating point
+- All payment mutations must be wrapped in a database transaction
+- Log every payment state change to the audit table
+```
+
+## Rule Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `scope` | glob | File pattern this rule applies to (e.g., `src/**`, `*.ts`) |
+| `priority` | string | `high` or `normal` (default). High-priority rules are injected first. |
+| `tools` | object | Optional tool restrictions (`include`/`exclude` lists) |
+
+## Tool Restrictions
+
+Rules can restrict which tools agents have access to:
+
+```yaml
+---
+scope: "src/database/**"
+tools:
+  include:
+    - "mcp:postgres:*"
+  exclude:
+    - "mcp:filesystem:delete"
+---
+
+Database modules should use the Postgres MCP tools.
+```
+
+## How Rules Are Applied
+
+1. When an agent spawns, Deck collects all rules whose `scope` matches the stream's file scope
+2. Rules are sorted by priority (high first), then by source path
+3. Rule bodies are injected into the agent's system prompt
+4. Tool restrictions are applied to the agent's available tool set

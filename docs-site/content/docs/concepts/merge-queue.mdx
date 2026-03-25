@@ -1,0 +1,40 @@
+---
+title: Merge Queue
+description: Tiered conflict resolution and dependency-aware merging.
+---
+
+## How Merging Works
+
+When a stream completes and passes quality gates, it enters the merge queue. The merge processor integrates stream branches into the base branch.
+
+Merges are **cumulative** — stream 1 merges first, then stream 2 merges on top of the result.
+
+## Tiered Conflict Resolution
+
+| Tier | Strategy | When |
+|------|----------|------|
+| 1 | Clean merge | No conflicts |
+| 2 | Auto-resolve (favor incoming) | Textual conflicts in isolated file scopes |
+| 3 | AI merge (planned) | Semantic conflicts |
+| 4 | Human escalation | All else fails |
+
+## Dependency Ordering
+
+Streams with dependencies are merged in order. Stream 2 won't merge until stream 1 is merged if it depends on it.
+
+## Post-Merge Quality Gates
+
+After each merge, quality gates run against the merged result. If gates fail, the merge is reverted and the stream is marked as failed with an opportunity to retry.
+
+## Retry
+
+Failed or conflicted merges can be retried:
+
+```bash
+deck merge                      # View merge queue
+deck merge retry <entry-id>     # Retry a failed merge
+```
+
+## Partial Completion
+
+When some streams fail to merge, Deck marks the objective as `partial`. Successfully merged streams are preserved. You can retry failed streams or accept the partial result.

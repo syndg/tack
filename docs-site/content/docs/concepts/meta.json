@@ -1,0 +1,4 @@
+{
+  "title": "Concepts",
+  "pages": ["index", "objectives", "streams", "blueprints", "quality-gates", "merge-queue", "isolation"]
+}

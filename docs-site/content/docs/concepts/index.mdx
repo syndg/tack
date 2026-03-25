@@ -1,0 +1,46 @@
+---
+title: How It Works
+description: The Deck pipeline from objective to PR.
+---
+
+## The Pipeline
+
+```
+Objective
+    │
+    ▼
+ Planner ──► Plan (streams, file scopes, dependencies)
+    │
+    ▼
+ Human Approval
+    │
+    ▼
+ Dispatch ──► Parallel Agents in Isolated Worktrees
+    │
+    ├── Stream 1: Build ──► Quality Gates ──► Merge Ready
+    ├── Stream 2: Build ──► Quality Gates ──► Merge Ready
+    └── Stream 3: Build ──► Quality Gates ──► Merge Ready
+    │
+    ▼
+ Merge Queue ──► Post-Merge Gates ──► PR Created
+    │
+    ▼
+ Objective Complete
+```
+
+Each step is either **deterministic** (quality gates, merge, scheduling) or **agentic** (planning, building, reviewing). The blueprint YAML defines which is which. You control the workflow.
+
+## Agent Roles
+
+| Role | What it does |
+|------|-------------|
+| **Planner** | Explores the codebase, decomposes the objective into parallel streams with file scopes and dependencies |
+| **Builder** | Implements the stream's task in an isolated worktree, commits changes |
+| **Reviewer** | Reviews the implementation for correctness and quality |
+
+## Key Principles
+
+- **Deterministic infrastructure.** Everything that isn't an LLM decision is deterministic: scheduling, gates, merge, scoped rules.
+- **Isolation by default.** Each agent works in its own sandbox. Agents never see each other's changes during execution.
+- **Human in the loop.** You approve the plan before execution begins. Escalations pause for your input.
+- **Partial completion.** When some streams fail, Deck merges what succeeded. You can retry failures without re-running everything.

@@ -1,0 +1,55 @@
+---
+title: Isolation
+description: How Deck isolates agents using sandboxes.
+---
+
+## Isolation Model
+
+Each agent works in its own isolated sandbox. Agents never see each other's changes during execution. Integration happens at merge time.
+
+## Sandbox Providers
+
+| Provider | Isolation | Use case |
+|----------|-----------|----------|
+| **Local** (git worktrees) | Process-level | Development, testing |
+| **Daytona** | VM-level | Production, remote |
+| Docker (planned) | Container-level | Self-hosted |
+| E2B (planned) | VM-level | Cloud |
+
+### Local Provider
+
+Creates git worktrees from the latest base branch. Each stream gets its own worktree directory with a unique branch name.
+
+```yaml
+sandbox:
+  provider: local
+```
+
+### Daytona Provider
+
+Creates remote sandboxes via the Daytona API. Full VM isolation with SSH access.
+
+```yaml
+sandbox:
+  provider: daytona
+```
+
+See the [Daytona setup guide](/docs/guides/daytona) for configuration details.
+
+## Copy-Ignored
+
+New sandboxes automatically receive gitignored files from the main repo — `node_modules`, build caches, `.env` files. No cold starts. Uses reflink (copy-on-write) on macOS where available.
+
+Control what gets copied with `.worktreeinclude`:
+
+```
+node_modules/
+.env
+.next/
+```
+
+If `.worktreeinclude` doesn't exist, all gitignored files are copied.
+
+## Cleanup
+
+Sandboxes are automatically deleted when an objective reaches a terminal state. No stale worktrees accumulating on disk.

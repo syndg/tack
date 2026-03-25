@@ -1,0 +1,49 @@
+---
+title: Daytona Setup
+description: Configure remote sandboxes with Daytona for production use.
+---
+
+## Overview
+
+Daytona provides VM-level sandbox isolation. Each agent gets its own remote development environment with full OS isolation.
+
+## Prerequisites
+
+- A Daytona account and API key
+- A GitHub personal access token (for repo cloning in sandboxes)
+
+## Configuration
+
+Add Daytona credentials to `~/.config/deck/credentials.yaml`:
+
+```yaml
+daytona:
+  api_key: "your-daytona-api-key"
+github:
+  pat: "ghp_your_github_pat"
+```
+
+Configure your project to use Daytona:
+
+```yaml
+# .deck/config.yaml
+sandbox:
+  provider: daytona
+  post_create:
+    - "bun install"
+
+daemon:
+  external_url: "http://your-machine:9800"  # required for agent callbacks
+```
+
+## How It Works
+
+1. Deck creates a Daytona sandbox for each stream
+2. The sandbox clones your repo and checks out a working branch
+3. Git credentials are embedded for push/pull within the sandbox
+4. Agents execute inside the sandbox via Daytona's API
+5. After completion, branches are pushed to origin for merging
+
+## Sandbox Reuse
+
+Deck reuses sandboxes within a stream — if a fix-loop retry occurs, the same sandbox is used. The merger sandbox is shared across all streams in an objective for cumulative merging.

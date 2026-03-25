@@ -1,0 +1,73 @@
+---
+title: First Objective
+description: Submit your first objective and watch Deck work.
+---
+
+## Start the Daemon
+
+```bash
+deck daemon --config .deck/config.yaml
+```
+
+The daemon runs in the foreground. Open a new terminal for CLI commands.
+
+## Submit an Objective
+
+```bash
+deck plan "Refactor the auth module to use JWT"
+```
+
+Deck creates an objective and spawns a planner agent. The planner explores your codebase and decomposes the objective into parallel streams with file scopes and dependencies.
+
+## Review the Plan
+
+```bash
+deck plans
+deck show <plan-id>
+```
+
+The plan shows each stream's title, description, file scope, and dependency chain. Review it before approving.
+
+## Approve
+
+```bash
+deck approve <plan-id>
+```
+
+Execution begins. Deck schedules streams based on dependencies and concurrency limits.
+
+## Watch Progress
+
+```bash
+deck watch
+```
+
+Live stream of agent activity — tool calls, file edits, test results, and status changes.
+
+```
+18:16:12 [stream-1] builder: read src/schemas.ts
+18:16:15 [stream-1] builder: edit src/routes/expenses.ts
+18:16:19 [stream-2] builder: $ bunx tsc --noEmit
+18:16:23 [stream-1] builder: done: Added PATCH endpoint
+18:16:25 [stream-1] lint passed
+18:47:35 [stream-1] merged ✓
+```
+
+## Check Results
+
+```bash
+deck status
+deck merge
+```
+
+When all streams complete, Deck merges everything and creates a PR.
+
+## Simple Mode
+
+For smaller tasks that don't need decomposition:
+
+```bash
+deck plan "Fix the typo in the README" --simple
+```
+
+Simple mode creates a single-stream plan and auto-approves it. One agent, no planning overhead.

@@ -1,0 +1,58 @@
+---
+title: Streams
+description: Parallel work units with file scopes and dependencies.
+---
+
+## What is a Stream?
+
+A stream is a unit of parallel work within a plan. Each stream has:
+
+- **Title** — what the stream does
+- **Description** — detailed task specification for the agent
+- **File scope** — glob patterns defining which files the stream can modify
+- **Dependencies** — other streams that must complete before this one starts
+
+## Parallel Execution
+
+Streams without dependencies run in parallel. Deck schedules streams based on:
+
+- **Dependencies** — stream B won't start until stream A completes
+- **Concurrency limit** — configurable max concurrent agents
+
+```yaml
+agents:
+  max_concurrent: 4
+```
+
+## File Scope
+
+Each stream gets a file scope — a set of glob patterns that define its territory:
+
+```
+Stream 1: ["src/api/routes/**", "src/api/middleware/**"]
+Stream 2: ["src/components/**", "src/hooks/**"]
+```
+
+File scope affects:
+- **Quality gates** — gate failures are only attributed to the stream if errors are in its files
+- **Agent guidance** — agents know their boundaries
+
+## Dependencies
+
+Streams can depend on other streams:
+
+```
+Stream 1: "Add database migration" (no dependencies)
+Stream 2: "Add API endpoint" (depends on Stream 1)
+Stream 3: "Add frontend form" (depends on Stream 2)
+```
+
+Deck respects dependencies at both execution time (scheduling) and merge time (merge ordering).
+
+## Stream Lifecycle
+
+```
+pending → executing → completed → merge_ready → merging → merged
+                  ↘                                        ↗
+                  failed ──────────── (retry) ── pending ─┘
+```

@@ -1,0 +1,97 @@
+---
+title: HTTP API
+description: REST API reference for the Deck daemon.
+---
+
+The daemon exposes a REST API on the configured listen address (default `127.0.0.1:9800`).
+
+## Objectives
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/objectives` | Create a new objective |
+| `GET` | `/objectives` | List all objectives |
+| `GET` | `/objectives/:id` | Get objective by ID |
+| `GET` | `/objectives/:id/plan` | Get plan for objective |
+| `POST` | `/objectives/:id/execute` | Trigger execution |
+
+### POST /objectives
+
+```json
+{
+  "description": "Add pagination to list endpoints",
+  "blueprint": "Feature Implementation",
+  "simple": false
+}
+```
+
+## Plans
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/plans` | Create plan from planner output |
+| `GET` | `/plans` | List all plans |
+| `GET` | `/plans/:id` | Get plan with streams |
+| `POST` | `/plans/:id/approve` | Approve plan |
+| `POST` | `/plans/:id/reject` | Reject plan |
+| `GET` | `/plans/:id/streams` | List streams for plan |
+
+## Streams
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/streams/:id` | Get stream by ID |
+| `GET` | `/streams/:id/diff` | Get merge diff for stream |
+
+## Executions
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/executions` | List all executions |
+| `GET` | `/executions/:id` | Get execution by ID |
+| `POST` | `/executions/:id/approve` | Approve human gate |
+| `POST` | `/executions/:id/retry` | Retry failed stream |
+
+### POST /executions/:id/retry
+
+```json
+{
+  "guidance": "Try using the existing helper function instead"
+}
+```
+
+## Agents
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/agents` | List agent sessions |
+| `GET` | `/agents/:id` | Get agent session |
+| `POST` | `/agents/:id/kill` | Kill running agent |
+
+## Mail
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/mail` | Send a message |
+| `GET` | `/mail` | List messages (filterable) |
+| `GET` | `/mail/:agent/unread` | Get unread messages |
+| `POST` | `/mail/:id/read` | Mark message read |
+| `POST` | `/mail/:agent/read-all` | Mark all read |
+
+## Merge Queue
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/merge-queue` | List merge entries |
+| `GET` | `/merge-queue/:id` | Get merge entry |
+| `POST` | `/merge-queue/:id/retry` | Retry failed merge |
+
+## System
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check |
+| `GET` | `/status` | Daemon status with uptime |
+| `GET` | `/blueprints` | List available blueprints |
+| `GET` | `/blueprints/:name` | Get blueprint by name |
+| `GET` | `/events` | SSE event stream |

@@ -1,0 +1,29 @@
+---
+title: Installation
+description: Install Deck from source and set up your first project.
+---
+
+## Install
+
+```bash
+git clone https://github.com/syndg/deck.git
+cd deck
+go build -o deck ./cmd/deck/
+```
+
+Move the binary to your `$PATH`:
+
+```bash
+mv deck /usr/local/bin/
+```
+
+## Verify
+
+```bash
+deck version
+```
+
+## Next Steps
+
+- [Configure your project](/docs/getting-started/configuration) with `.deck/config.yaml`
+- [Submit your first objective](/docs/getting-started/first-objective)

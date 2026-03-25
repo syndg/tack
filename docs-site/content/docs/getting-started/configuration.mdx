@@ -1,0 +1,69 @@
+---
+title: Configuration
+description: Configure Deck for your project with .deck/config.yaml
+---
+
+Create `.deck/config.yaml` in your project root:
+
+```yaml
+daemon:
+  listen: "127.0.0.1:9800"
+  data_dir: ".deck/data"
+  base_branch: "main"
+
+sandbox:
+  provider: local
+  # post_create:              # optional setup commands
+  #   - "bun install"
+
+agents:
+  runtime: pi
+  max_concurrent: 4
+  stagger_delay_ms: 1000
+  pi:
+    provider: anthropic
+    model: claude-opus-4-6
+    thinking_level: medium
+  timeouts:
+    default:
+      max_duration_minutes: 30
+      idle_minutes: 10
+    builder:
+      max_duration_minutes: 45
+    reviewer:
+      max_duration_minutes: 15
+
+quality_gates:
+  - "bun test"
+  - "bunx tsc --noEmit"
+  - "bun run lint"
+```
+
+## Credentials
+
+Store API keys in `~/.config/deck/credentials.yaml`:
+
+```yaml
+anthropic:
+  setup_token: "sk-ant-..."
+github:
+  pat: "ghp_..."
+```
+
+## Project Layout
+
+```
+.deck/
+  config.yaml          # Runtime config
+  blueprints/          # Workflow definitions (ships with defaults)
+    stream.yaml
+  rules/               # Project-specific agent guidance
+    project.yaml
+  data/                # Managed by Deck: SQLite, activity logs
+    deck.db
+    activity/
+```
+
+## Configuration Reference
+
+See the [full config reference](/docs/reference/config) for all available options.
