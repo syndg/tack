@@ -25,15 +25,14 @@ type Processor struct {
 	merger      *GitMerger
 	differ      *DiffExtractor
 	gateRunner  *gates.Runner
+	mergerPool  *MergerPool
 	sandboxProv sandbox.SandboxProvider
 	eventBus    *events.PersistentBus
-	baseBranch  string
 	logger      *slog.Logger
 
-	mu              sync.Mutex
-	processing      bool
-	cancel          context.CancelFunc
-	mergerSandboxes map[string]string // objectiveID → sandboxID for merger reuse
+	mu         sync.Mutex
+	processing bool
+	cancel     context.CancelFunc
 }
 
 // NewProcessor creates a new merge queue Processor.
@@ -52,18 +51,18 @@ func NewProcessor(
 	if baseBranch == "" {
 		baseBranch = "main"
 	}
+	procLogger := logger.With("component", "merge-processor")
 	return &Processor{
-		queue:           queue,
-		streams:         streams,
-		plans:           plans,
-		merger:          merger,
-		differ:          differ,
-		gateRunner:      gateRunner,
-		sandboxProv:     sandboxProv,
-		eventBus:        eventBus,
-		baseBranch:      baseBranch,
-		logger:          logger.With("component", "merge-processor"),
-		mergerSandboxes: make(map[string]string),
+		queue:       queue,
+		streams:     streams,
+		plans:       plans,
+		merger:      merger,
+		differ:      differ,
+		gateRunner:  gateRunner,
+		mergerPool:  NewMergerPool(sandboxProv, queue, baseBranch, procLogger),
+		sandboxProv: sandboxProv,
+		eventBus:    eventBus,
+		logger:      procLogger,
 	}
 }
 
@@ -269,7 +268,7 @@ func (p *Processor) processEntry(ctx context.Context, entry *domain.MergeEntry) 
 	}
 
 	// Get or create sandbox for merge operations.
-	sb, err := p.getMergerSandbox(ctx, entry.ObjectiveID)
+	sb, err := p.mergerPool.Acquire(ctx, entry.ObjectiveID)
 	if err != nil {
 		errMsg := fmt.Sprintf("getting merger sandbox: %s", err)
 		p.logger.Error(errMsg)
@@ -454,109 +453,7 @@ func (p *Processor) getStreamBranch(ctx context.Context, streamID, executionID s
 // MergerSandboxID returns the sandbox ID being used as the merger for an objective.
 // Checks in-memory cache first, then falls back to the database (survives restarts).
 func (p *Processor) MergerSandboxID(objectiveID string) string {
-	p.mu.Lock()
-	id := p.mergerSandboxes[objectiveID]
-	p.mu.Unlock()
-	if id != "" {
-		return id
-	}
-	// Recover from database (daemon restart case).
-	if dbID := p.queue.GetMergerSandboxID(context.Background(), objectiveID); dbID != "" {
-		p.mu.Lock()
-		p.mergerSandboxes[objectiveID] = dbID
-		p.mu.Unlock()
-		return dbID
-	}
-	return ""
-}
-
-// getMergerSandbox returns the merger sandbox for the objective.
-// On first call: picks any stream sandbox, resets to base branch.
-// On subsequent calls: returns the same sandbox WITHOUT resetting —
-// merges are cumulative (stream-1 merged, then stream-2 on top, etc.).
-func (p *Processor) getMergerSandbox(ctx context.Context, objectiveID string) (sandbox.Sandbox, error) {
-	// Check if we already initialized a merger sandbox for this objective.
-	p.mu.Lock()
-	mergerID := p.mergerSandboxes[objectiveID]
-	p.mu.Unlock()
-
-	if mergerID != "" {
-		sb, err := p.sandboxProv.Get(ctx, mergerID)
-		if err == nil {
-			// Already initialized — return as-is (cumulative merge state).
-			return sb, nil
-		}
-		p.logger.Warn("cached merger sandbox not found, will pick new one",
-			"sandbox_id", mergerID, "error", err)
-	}
-
-	// First merge for this objective — pick any stream sandbox to reuse.
-	allSandboxes, listErr := p.sandboxProv.List(ctx, map[string]string{
-		"deck.objective": objectiveID,
-	})
-
-	var sb sandbox.Sandbox
-	var err error
-	if listErr == nil && len(allSandboxes) > 0 {
-		sb = allSandboxes[0]
-		p.logger.Info("reusing stream sandbox for merge", "sandbox_id", sb.ID(), "objective", objectiveID)
-	} else {
-		// No sandboxes available — create a new one (shouldn't happen normally).
-		objShort := objectiveID
-		if len(objShort) > 8 {
-			objShort = objShort[:8]
-		}
-		sb, err = p.sandboxProv.Create(ctx, sandbox.CreateOpts{
-			Name:   fmt.Sprintf("deck-%s-merger", objShort),
-			Branch: fmt.Sprintf("deck/%s/merger", objShort),
-			Labels: map[string]string{
-				"deck.objective": objectiveID,
-			},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("creating merger sandbox: %w", err)
-		}
-	}
-
-	// Track this sandbox as the merger for subsequent entries.
-	p.mu.Lock()
-	p.mergerSandboxes[objectiveID] = sb.ID()
-	p.mu.Unlock()
-
-	// Persist to database so it survives daemon restarts.
-	if err := p.queue.UpdateMergerSandboxID(ctx, objectiveID, sb.ID()); err != nil {
-		p.logger.Warn("failed to persist merger sandbox ID", "objective", objectiveID, "error", err)
-	}
-
-	// Reset to base branch for a clean merge target (only on first entry).
-	// We create a dedicated merge branch because local worktrees can't checkout
-	// the base branch directly (it's already in use by the main worktree).
-	// Commands are separate because Daytona ExecuteCommand doesn't support && chains.
-	objShort := objectiveID
-	if len(objShort) > 8 {
-		objShort = objShort[:8]
-	}
-	mergeBranch := fmt.Sprintf("deck/%s/merge", objShort)
-
-	// Fetch all branches. Try full refspec first (needed for Daytona clones
-	// which default to HEAD-only), fall back to plain fetch for local worktrees.
-	if res, _ := sb.Exec(ctx, "git fetch origin '+refs/heads/*:refs/remotes/origin/*'", sandbox.ExecOpts{}); res.ExitCode != 0 {
-		sb.Exec(ctx, "git fetch origin", sandbox.ExecOpts{})
-	}
-
-	// Create merge branch at the base branch's commit. Try origin first, then local ref.
-	created := false
-	if res, err := sb.Exec(ctx, fmt.Sprintf("git checkout -B %s origin/%s", mergeBranch, p.baseBranch), sandbox.ExecOpts{}); err == nil && res.ExitCode == 0 {
-		created = true
-	}
-	if !created {
-		// No remote — resolve the base branch commit by ref (avoids "branch in use" error).
-		if res, err := sb.Exec(ctx, fmt.Sprintf("git checkout -B %s %s", mergeBranch, p.baseBranch), sandbox.ExecOpts{}); err != nil || res.ExitCode != 0 {
-			return nil, fmt.Errorf("creating merge branch from %s: exit=%d stderr=%s", p.baseBranch, res.ExitCode, res.Stderr)
-		}
-	}
-
-	return sb, nil
+	return p.mergerPool.SandboxID(objectiveID)
 }
 
 // checkDependencies verifies that all dependency streams for this stream
