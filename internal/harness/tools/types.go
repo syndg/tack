@@ -26,8 +26,8 @@ type CurationInput struct {
 
 // ToolScope specifies include/exclude lists for tool filtering.
 type ToolScope struct {
-	Include []string
-	Exclude []string
+	Include []string `yaml:"include,omitempty" json:"include,omitempty"`
+	Exclude []string `yaml:"exclude,omitempty" json:"exclude,omitempty"`
 }
 
 // ConfigToolScope specifies global always-include and always-exclude tool lists.

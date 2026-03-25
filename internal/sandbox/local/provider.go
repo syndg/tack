@@ -167,16 +167,7 @@ func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox
 	// Use explicit branch name if provided; otherwise derive from labels.
 	branch := opts.Branch
 	if branch == "" {
-		objective := opts.Labels["deck.objective"]
-		if len(objective) > 8 {
-			objective = objective[:8]
-		}
-		role := opts.Labels["deck.role"]
-		if role == "" {
-			role = "agent"
-		}
-		idShort := id[:8]
-		branch = fmt.Sprintf("deck/%s/%s-%s", objective, role, idShort)
+		branch = fmt.Sprintf("%s-%s", sandbox.DeriveBranchPrefix(opts), id[:8])
 	}
 
 	// Validate branch name to prevent path traversal and injection.
@@ -314,15 +305,8 @@ func (p *Provider) Delete(ctx context.Context, id string) error {
 	return branchErr
 }
 
-// matchesLabels returns true if all filter labels are present and equal in target.
-func matchesLabels(target, filter map[string]string) bool {
-	for k, v := range filter {
-		if target[k] != v {
-			return false
-		}
-	}
-	return true
-}
+// matchesLabels delegates to the shared sandbox.MatchesLabels helper.
+var matchesLabels = sandbox.MatchesLabels
 
 // envAllowlist contains host environment variable names (or prefixes ending in
 // '*') that are safe to pass into sandbox processes. Everything else is filtered.

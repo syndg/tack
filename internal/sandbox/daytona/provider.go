@@ -184,16 +184,7 @@ func (p *Provider) bootstrap(ctx context.Context, sb *daytona.Sandbox, opts sand
 	// Create and checkout the deck working branch.
 	branch := opts.Branch
 	if branch == "" {
-		// Derive branch name from labels (legacy fallback).
-		obj := opts.Labels["deck.objective"]
-		if len(obj) > 8 {
-			obj = obj[:8]
-		}
-		role := opts.Labels["deck.role"]
-		if role == "" {
-			role = "agent"
-		}
-		branch = fmt.Sprintf("deck/%s/%s", obj, role)
+		branch = sandbox.DeriveBranchPrefix(opts)
 	}
 
 	p.logger.Info("bootstrap: creating branch", "branch", branch)
@@ -315,14 +306,8 @@ func (p *Provider) listFromCache(labels map[string]string) []sandbox.Sandbox {
 	return result
 }
 
-func matchesLabels(target, filter map[string]string) bool {
-	for k, v := range filter {
-		if target[k] != v {
-			return false
-		}
-	}
-	return true
-}
+// matchesLabels delegates to the shared sandbox.MatchesLabels helper.
+var matchesLabels = sandbox.MatchesLabels
 
 // buildEffectiveCommand wraps a command with env exports when the Daytona
 // toolbox API doesn't support per-command env vars natively. The entire

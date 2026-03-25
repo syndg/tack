@@ -1,5 +1,7 @@
 package blueprint
 
+import "github.com/syndg/deck/internal/harness/tools"
+
 // StepType identifies the kind of step in a blueprint.
 type StepType string
 
@@ -73,7 +75,7 @@ type Step struct {
 	Next             string            `yaml:"next,omitempty" json:"next,omitempty"`
 	Retry            int               `yaml:"retry,omitempty" json:"retry,omitempty"`
 	Optional         bool              `yaml:"optional,omitempty" json:"optional,omitempty"`
-	Tools            *ToolScope        `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Tools            *tools.ToolScope  `yaml:"tools,omitempty" json:"tools,omitempty"`
 	Commit           CommitMode        `yaml:"commit,omitempty" json:"commit,omitempty"`
 	Messages         *MessageRequests  `yaml:"messages,omitempty" json:"messages,omitempty"`
 	MessageSource    string            `yaml:"message_source,omitempty" json:"message_source,omitempty"`
@@ -93,12 +95,6 @@ func (s *Step) EffectiveCommitMode() CommitMode {
 		return CommitModeAuto
 	}
 	return CommitModeNone
-}
-
-// ToolScope restricts which tools are available during a step.
-type ToolScope struct {
-	Include []string `yaml:"include,omitempty" json:"include,omitempty"`
-	Exclude []string `yaml:"exclude,omitempty" json:"exclude,omitempty"`
 }
 
 // StepStatus tracks the lifecycle state of a step during execution.

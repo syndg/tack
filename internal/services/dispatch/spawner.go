@@ -201,10 +201,7 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	ruleTools := make([]tools.ToolScope, 0, len(matchedRules))
 	for _, mr := range matchedRules {
 		if mr.Rule.Tools != nil {
-			ruleTools = append(ruleTools, tools.ToolScope{
-				Include: mr.Rule.Tools.Include,
-				Exclude: mr.Rule.Tools.Exclude,
-			})
+			ruleTools = append(ruleTools, *mr.Rule.Tools)
 		}
 	}
 	curationResult := s.toolCurator.Curate(tools.CurationInput{

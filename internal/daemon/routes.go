@@ -272,7 +272,7 @@ func isPlanNotFound(err error) bool {
 }
 
 // handleCreatePlan parses raw planner-agent output and persists the resulting plan
-// and streams. Intended for internal use by the planning service.
+// and streams. Delegates to planningService.CreatePlan for orchestration.
 func (d *Daemon) handleCreatePlan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ObjectiveID string `json:"objective_id"`
@@ -291,52 +291,18 @@ func (d *Daemon) handleCreatePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawPlan, err := planner.ParsePlan(req.Output)
+	plan, err := d.planningService.CreatePlan(r.Context(), req.ObjectiveID, req.Output)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "failed to parse plan: "+err.Error())
-		return
-	}
-	if err := planner.ValidatePlan(rawPlan); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid plan: "+err.Error())
-		return
-	}
-
-	plan, streams := planner.ToDomain(rawPlan, req.ObjectiveID)
-
-	if err := d.plans.Create(r.Context(), plan); err != nil {
+		if strings.Contains(err.Error(), "parsing plan") || strings.Contains(err.Error(), "validating plan") {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		d.logger.Error("creating plan", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create plan")
 		return
 	}
-	for i := range streams {
-		if err := d.streams.Create(r.Context(), &streams[i]); err != nil {
-			d.logger.Error("creating stream", "title", streams[i].Title, "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to create stream")
-			return
-		}
-	}
 
-	d.eventBus.Publish(domain.Event{
-		Type:      domain.EventPlanCreated,
-		Objective: req.ObjectiveID,
-		Payload:   plan.ID,
-		CreatedAt: time.Now(),
-	})
-
-	if err := d.lifecycleManager.MarkPlanReady(r.Context(), plan.ID); err != nil {
-		d.logger.Error("marking plan ready", "plan_id", plan.ID, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to mark plan ready")
-		return
-	}
-
-	updated, err := d.plans.Get(r.Context(), plan.ID)
-	if err != nil {
-		d.logger.Error("refreshing plan", "plan_id", plan.ID, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to refresh plan")
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, updated)
+	writeJSON(w, http.StatusCreated, plan)
 }
 
 // handleListPlans returns all plans as a JSON array.
