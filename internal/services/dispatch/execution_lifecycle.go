@@ -454,6 +454,9 @@ func (c *Coordinator) failExecution(ctx context.Context, objectiveID, reason str
 // cleanupObjectiveSandboxes removes all sandboxes and branches for a completed objective.
 // Runs in a background goroutine to avoid blocking the completion flow.
 func (c *Coordinator) cleanupObjectiveSandboxes(ctx context.Context, objectiveID string) {
+	if c.spawner == nil {
+		return
+	}
 	go func() {
 		c.spawner.CleanupObjective(ctx, objectiveID)
 	}()

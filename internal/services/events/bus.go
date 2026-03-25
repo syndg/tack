@@ -1,6 +1,7 @@
 package events
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 
@@ -63,4 +64,15 @@ func (b *Bus) Subscribe(buffer int) (Subscriber, func()) {
 	}
 
 	return sub, unsubscribe
+}
+
+// SubscribeWithContext registers a subscriber that auto-unsubscribes when
+// the context is cancelled. Returns the subscriber channel only.
+func (b *Bus) SubscribeWithContext(ctx context.Context, buffer int) Subscriber {
+	sub, unsub := b.Subscribe(buffer)
+	go func() {
+		<-ctx.Done()
+		unsub()
+	}()
+	return sub
 }
