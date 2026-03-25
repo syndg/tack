@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/syndg/deck/internal/config"
 	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
 	"github.com/syndg/deck/internal/harness/blueprint"
@@ -53,7 +54,7 @@ func NewHandlers(
 	logger *slog.Logger,
 ) *Handlers {
 	if baseBranch == "" {
-		baseBranch = "main"
+		baseBranch = config.DefaultBaseBranch
 	}
 	return &Handlers{
 		scheduler:       scheduler,

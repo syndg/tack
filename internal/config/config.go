@@ -16,6 +16,9 @@ const UserConfigPath = "~/.config/deck/config.yaml"
 // ProjectConfigDir is the directory name Deck looks for in project roots.
 const ProjectConfigDir = ".deck"
 
+// DefaultBaseBranch is the fallback base branch when not configured.
+const DefaultBaseBranch = "main"
+
 type Config struct {
 	Daemon       DaemonConfig   `yaml:"daemon"`
 	Sandbox      SandboxConfig  `yaml:"sandbox"`

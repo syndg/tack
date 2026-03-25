@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/syndg/deck/internal/config"
 	"github.com/syndg/deck/internal/db"
 	"github.com/syndg/deck/internal/domain"
 	"github.com/syndg/deck/internal/harness/gates"
@@ -49,7 +50,7 @@ func NewProcessor(
 	logger *slog.Logger,
 ) *Processor {
 	if baseBranch == "" {
-		baseBranch = "main"
+		baseBranch = config.DefaultBaseBranch
 	}
 	procLogger := logger.With("component", "merge-processor")
 	return &Processor{
