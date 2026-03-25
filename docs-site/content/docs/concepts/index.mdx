@@ -1,6 +1,6 @@
 ---
 title: How It Works
-description: The Deck pipeline from objective to PR.
+description: The Tack pipeline from objective to PR.
 ---
 
 ## The Pipeline
@@ -43,4 +43,4 @@ Each step is either **deterministic** (quality gates, merge, scheduling) or **ag
 - **Deterministic infrastructure.** Everything that isn't an LLM decision is deterministic: scheduling, gates, merge, scoped rules.
 - **Isolation by default.** Each agent works in its own sandbox. Agents never see each other's changes during execution.
 - **Human in the loop.** You approve the plan before execution begins. Escalations pause for your input.
-- **Partial completion.** When some streams fail, Deck merges what succeeded. You can retry failures without re-running everything.
+- **Partial completion.** When some streams fail, Tack merges what succeeded. You can retry failures without re-running everything.

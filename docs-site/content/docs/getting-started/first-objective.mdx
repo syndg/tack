@@ -1,6 +1,6 @@
 ---
 title: First Objective
-description: Submit your first objective and watch Deck work.
+description: Submit your first objective and watch Tack work.
 ---
 
 ## Start the Daemon
@@ -17,7 +17,7 @@ The daemon runs in the foreground. Open a new terminal for CLI commands.
 tack plan "Refactor the auth module to use JWT"
 ```
 
-Deck creates an objective and spawns a planner agent. The planner explores your codebase and decomposes the objective into parallel streams with file scopes and dependencies.
+Tack creates an objective and spawns a planner agent. The planner explores your codebase and decomposes the objective into parallel streams with file scopes and dependencies.
 
 ## Review the Plan
 
@@ -34,7 +34,7 @@ The plan shows each stream's title, description, file scope, and dependency chai
 tack approve <plan-id>
 ```
 
-Execution begins. Deck schedules streams based on dependencies and concurrency limits.
+Execution begins. Tack schedules streams based on dependencies and concurrency limits.
 
 ## Watch Progress
 
@@ -60,7 +60,7 @@ tack status
 tack merge
 ```
 
-When all streams complete, Deck merges everything and creates a PR.
+When all streams complete, Tack merges everything and creates a PR.
 
 ## Simple Mode
 

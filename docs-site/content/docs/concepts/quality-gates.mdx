@@ -16,7 +16,7 @@ quality_gates:
 
 ## File-Attribution
 
-Quality gates run against the **full project**, but Deck only fails a stream for errors in **its own files**.
+Quality gates run against the **full project**, but Tack only fails a stream for errors in **its own files**.
 
 ```
 Stream 1 (backend):  bunx tsc --noEmit → fails on frontend error → PASS (not in scope)
@@ -27,7 +27,7 @@ Pre-existing errors in other files don't block progress. Cross-file breakage is 
 
 ## Fix-Loops
 
-When gates fail for errors in the stream's file scope, Deck sends the errors back to the builder agent with a "fix this" instruction. The agent iterates until gates pass or the max iteration limit is reached.
+When gates fail for errors in the stream's file scope, Tack sends the errors back to the builder agent with a "fix this" instruction. The agent iterates until gates pass or the max iteration limit is reached.
 
 ```yaml
 - id: lint

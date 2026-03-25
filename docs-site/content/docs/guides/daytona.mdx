@@ -38,7 +38,7 @@ daemon:
 
 ## How It Works
 
-1. Deck creates a Daytona sandbox for each stream
+1. Tack creates a Daytona sandbox for each stream
 2. The sandbox clones your repo and checks out a working branch
 3. Git credentials are embedded for push/pull within the sandbox
 4. Agents execute inside the sandbox via Daytona's API
@@ -46,4 +46,4 @@ daemon:
 
 ## Sandbox Reuse
 
-Deck reuses sandboxes within a stream — if a fix-loop retry occurs, the same sandbox is used. The merger sandbox is shared across all streams in an objective for cumulative merging.
+Tack reuses sandboxes within a stream — if a fix-loop retry occurs, the same sandbox is used. The merger sandbox is shared across all streams in an objective for cumulative merging.

@@ -3,7 +3,7 @@ title: Introduction
 description: One objective in. Reviewed, tested, merged code out.
 ---
 
-Deck is an open-source orchestrator that runs AI coding agents at scale. You describe what you want built. Deck decomposes it into parallel work streams, assigns each to an isolated agent, enforces quality gates, reviews the output, merges everything, and opens a PR.
+Tack is an open-source orchestrator that runs AI coding agents at scale. You describe what you want built. Tack decomposes it into parallel work streams, assigns each to an isolated agent, enforces quality gates, reviews the output, merges everything, and opens a PR.
 
 You go from being the developer to being the team lead.
 
@@ -21,16 +21,16 @@ Plan approved. Execution will begin.
 Objective completed. PR created: github.com/you/project/pull/42
 ```
 
-## Why Deck
+## Why Tack
 
-**The harness matters more than the model.** LangChain improved from 52.8% to 66.5% on Terminal Bench 2.0 by modifying only the harness, not the model. Deck is that harness — open source and configurable.
+**The harness matters more than the model.** LangChain improved from 52.8% to 66.5% on Terminal Bench 2.0 by modifying only the harness, not the model. Tack is that harness — open source and configurable.
 
-Everything in Deck that isn't an LLM decision is deterministic infrastructure: the blueprint engine, quality gates, merge queue, scoped rules, file scope enforcement, timeout management. The LLM is the horse. Deck is the equipment.
+Everything in Tack that isn't an LLM decision is deterministic infrastructure: the blueprint engine, quality gates, merge queue, scoped rules, file scope enforcement, timeout management. The LLM is the horse. Tack is the equipment.
 
-## What Deck Is Not
+## What Tack Is Not
 
-- **Not an agent framework.** Pi and Claude Code do the thinking. Deck orchestrates them.
-- **Not a sandbox provider.** Local worktrees, Daytona, Docker provide isolation. Deck manages their lifecycle.
+- **Not an agent framework.** Pi and Claude Code do the thinking. Tack orchestrates them.
+- **Not a sandbox provider.** Local worktrees, Daytona, Docker provide isolation. Tack manages their lifecycle.
 - **Not an IDE.** Agents edit code. You review their work.
-- **Not a CI system.** Deck runs quality gates locally in sandboxes. CI is your existing pipeline.
+- **Not a CI system.** Tack runs quality gates locally in sandboxes. CI is your existing pipeline.
 - **Not locked to any model.** Bring your own runtime, provider, and model.

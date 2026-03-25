@@ -1,11 +1,11 @@
 ---
 title: Objectives & Planning
-description: How Deck decomposes objectives into parallel work streams.
+description: How Tack decomposes objectives into parallel work streams.
 ---
 
 ## Objectives
 
-An objective is a high-level description of what you want built. Deck takes the objective and runs it through a planning → approval → execution → merge pipeline.
+An objective is a high-level description of what you want built. Tack takes the objective and runs it through a planning → approval → execution → merge pipeline.
 
 ```bash
 tack plan "Add pagination to all list endpoints"
@@ -19,14 +19,14 @@ planning → approved → executing → completed | partial | failed
 
 ## The Planner
 
-When you submit an objective, Deck spawns a planner agent. The planner:
+When you submit an objective, Tack spawns a planner agent. The planner:
 
 1. Explores your codebase to understand its structure
 2. Identifies what needs to change
 3. Decomposes the objective into independent streams
 4. Assigns file scopes and dependencies to each stream
 
-The planner outputs a structured plan that Deck validates and presents for your review.
+The planner outputs a structured plan that Tack validates and presents for your review.
 
 ## Plan Approval
 

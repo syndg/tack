@@ -53,7 +53,7 @@ Database modules should use the Postgres MCP tools.
 
 ## How Rules Are Applied
 
-1. When an agent spawns, Deck collects all rules whose `scope` matches the stream's file scope
+1. When an agent spawns, Tack collects all rules whose `scope` matches the stream's file scope
 2. Rules are sorted by priority (high first), then by source path
 3. Rule bodies are injected into the agent's system prompt
 4. Tool restrictions are applied to the agent's available tool set

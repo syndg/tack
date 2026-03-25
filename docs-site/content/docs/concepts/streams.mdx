@@ -14,7 +14,7 @@ A stream is a unit of parallel work within a plan. Each stream has:
 
 ## Parallel Execution
 
-Streams without dependencies run in parallel. Deck schedules streams based on:
+Streams without dependencies run in parallel. Tack schedules streams based on:
 
 - **Dependencies** — stream B won't start until stream A completes
 - **Concurrency limit** — configurable max concurrent agents
@@ -47,7 +47,7 @@ Stream 2: "Add API endpoint" (depends on Stream 1)
 Stream 3: "Add frontend form" (depends on Stream 2)
 ```
 
-Deck respects dependencies at both execution time (scheduling) and merge time (merge ordering).
+Tack respects dependencies at both execution time (scheduling) and merge time (merge ordering).
 
 ## Stream Lifecycle
 
