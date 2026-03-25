@@ -2,7 +2,7 @@ import { RootProvider } from 'fumadocs-ui/provider/next';
 import './global.css';
 
 export const metadata = {
-  title: 'Deck Documentation',
+  title: 'Tack Documentation',
   description: 'One objective in. Reviewed, tested, merged code out.',
 };
 

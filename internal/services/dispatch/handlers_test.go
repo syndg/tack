@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/blueprint"
 )
 
 func TestHandleDeterministic_UnknownAction(t *testing.T) {

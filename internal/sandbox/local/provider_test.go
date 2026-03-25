@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 // initTestRepo creates a fresh git repository in a temp directory and makes an
@@ -24,7 +24,7 @@ func initTestRepo(t *testing.T) string {
 	dir := t.TempDir()
 	runGitInDir(t, dir, "init")
 	runGitInDir(t, dir,
-		"-c", "user.email=deck-test@example.com",
+		"-c", "user.email=tack-test@example.com",
 		"-c", "user.name=Deck Test",
 		"commit", "--allow-empty", "-m", "initial",
 	)
@@ -54,8 +54,8 @@ func TestCreate_CreatesGitWorktreeWithCorrectBranchName(t *testing.T) {
 
 	sb, err := p.Create(ctx, sandbox.CreateOpts{
 		Labels: map[string]string{
-			"deck.objective": "abcdef1234567890",
-			"deck.role":      "builder",
+			"tack.objective": "abcdef1234567890",
+			"tack.role":      "builder",
 		},
 	})
 	if err != nil {
@@ -67,9 +67,9 @@ func TestCreate_CreatesGitWorktreeWithCorrectBranchName(t *testing.T) {
 		t.Fatal("Create should return *LocalSandbox")
 	}
 
-	// Branch format: deck/{objective[:8]}/{role}-{id[:8]}
-	if !strings.HasPrefix(ls.branch, "deck/abcdef12/builder-") {
-		t.Errorf("branch = %q, want prefix deck/abcdef12/builder-", ls.branch)
+	// Branch format: tack/{objective[:8]}/{role}-{id[:8]}
+	if !strings.HasPrefix(ls.branch, "tack/abcdef12/builder-") {
+		t.Errorf("branch = %q, want prefix tack/abcdef12/builder-", ls.branch)
 	}
 	if ls.status != sandbox.SandboxStatusRunning {
 		t.Errorf("status = %q, want running", ls.status)
@@ -85,7 +85,7 @@ func TestExec_RunsCommandInWorktreeDirectory(t *testing.T) {
 	ctx := context.Background()
 
 	sb, err := p.Create(ctx, sandbox.CreateOpts{
-		Labels: map[string]string{"deck.objective": "obj-exec", "deck.role": "builder"},
+		Labels: map[string]string{"tack.objective": "obj-exec", "tack.role": "builder"},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -109,13 +109,13 @@ func TestUploadDownload_RoundTripFiles(t *testing.T) {
 	ctx := context.Background()
 
 	sb, err := p.Create(ctx, sandbox.CreateOpts{
-		Labels: map[string]string{"deck.objective": "obj-upload", "deck.role": "builder"},
+		Labels: map[string]string{"tack.objective": "obj-upload", "tack.role": "builder"},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	content := []byte("hello, deck!\n")
+	content := []byte("hello, tack!\n")
 	if err := sb.Upload(ctx, content, "sub/dir/file.txt"); err != nil {
 		t.Fatalf("Upload: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestDelete_RemovesWorktreeAndBranch(t *testing.T) {
 	ctx := context.Background()
 
 	sb, err := p.Create(ctx, sandbox.CreateOpts{
-		Labels: map[string]string{"deck.objective": "obj-delete", "deck.role": "builder"},
+		Labels: map[string]string{"tack.objective": "obj-delete", "tack.role": "builder"},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -158,20 +158,20 @@ func TestList_FiltersSandboxesByLabels(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := p.Create(ctx, sandbox.CreateOpts{
-		Labels: map[string]string{"deck.objective": "obj-one", "deck.role": "builder"},
+		Labels: map[string]string{"tack.objective": "obj-one", "tack.role": "builder"},
 	})
 	if err != nil {
 		t.Fatalf("Create sb1: %v", err)
 	}
 	_, err = p.Create(ctx, sandbox.CreateOpts{
-		Labels: map[string]string{"deck.objective": "obj-two", "deck.role": "reviewer"},
+		Labels: map[string]string{"tack.objective": "obj-two", "tack.role": "reviewer"},
 	})
 	if err != nil {
 		t.Fatalf("Create sb2: %v", err)
 	}
 
 	// Filter by objective — should return only one
-	results, err := p.List(ctx, map[string]string{"deck.objective": "obj-one"})
+	results, err := p.List(ctx, map[string]string{"tack.objective": "obj-one"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestList_FiltersSandboxesByLabels(t *testing.T) {
 	}
 
 	// Filter by role=builder — should return only one
-	byRole, err := p.List(ctx, map[string]string{"deck.role": "builder"})
+	byRole, err := p.List(ctx, map[string]string{"tack.role": "builder"})
 	if err != nil {
 		t.Fatalf("List by role: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestExec_DoesNotInheritHostSecrets(t *testing.T) {
 	ctx := context.Background()
 
 	sb, err := p.Create(ctx, sandbox.CreateOpts{
-		Labels: map[string]string{"deck.objective": "obj-env", "deck.role": "builder"},
+		Labels: map[string]string{"tack.objective": "obj-env", "tack.role": "builder"},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -260,9 +260,9 @@ func TestRediscover_RestoresFullLabelsAfterRestart(t *testing.T) {
 	fullObjectiveID := "abcdef12-3456-7890-abcd-ef1234567890"
 	sb1, err := p1.Create(ctx, sandbox.CreateOpts{
 		Labels: map[string]string{
-			"deck.objective": fullObjectiveID,
-			"deck.role":      "builder",
-			"deck.stream":    "stream-001",
+			"tack.objective": fullObjectiveID,
+			"tack.role":      "builder",
+			"tack.stream":    "stream-001",
 		},
 	})
 	if err != nil {
@@ -271,8 +271,8 @@ func TestRediscover_RestoresFullLabelsAfterRestart(t *testing.T) {
 
 	sb2, err := p1.Create(ctx, sandbox.CreateOpts{
 		Labels: map[string]string{
-			"deck.objective": fullObjectiveID,
-			"deck.role":      "merger",
+			"tack.objective": fullObjectiveID,
+			"tack.role":      "merger",
 		},
 	})
 	if err != nil {
@@ -280,7 +280,7 @@ func TestRediscover_RestoresFullLabelsAfterRestart(t *testing.T) {
 	}
 
 	// Sanity: the original provider can find them.
-	results, _ := p1.List(ctx, map[string]string{"deck.objective": fullObjectiveID})
+	results, _ := p1.List(ctx, map[string]string{"tack.objective": fullObjectiveID})
 	if len(results) != 2 {
 		t.Fatalf("pre-restart: expected 2 sandboxes, got %d", len(results))
 	}
@@ -289,7 +289,7 @@ func TestRediscover_RestoresFullLabelsAfterRestart(t *testing.T) {
 	p2 := newTestProvider(t, repoDir)
 
 	// Before Rediscover, the new provider knows nothing.
-	results, _ = p2.List(ctx, map[string]string{"deck.objective": fullObjectiveID})
+	results, _ = p2.List(ctx, map[string]string{"tack.objective": fullObjectiveID})
 	if len(results) != 0 {
 		t.Fatalf("pre-rediscover: expected 0 sandboxes, got %d", len(results))
 	}
@@ -316,7 +316,7 @@ func TestRediscover_RestoresFullLabelsAfterRestart(t *testing.T) {
 	// --- Phase 4: verify List with FULL objective ID matches ---
 	// This is the critical assertion: the full UUID must match, not just
 	// the truncated 8-char prefix that appears in the branch name.
-	results, err = p2.List(ctx, map[string]string{"deck.objective": fullObjectiveID})
+	results, err = p2.List(ctx, map[string]string{"tack.objective": fullObjectiveID})
 	if err != nil {
 		t.Fatalf("List by full objective: %v", err)
 	}
@@ -326,23 +326,23 @@ func TestRediscover_RestoresFullLabelsAfterRestart(t *testing.T) {
 
 	// List by role should also work.
 	builders, _ := p2.List(ctx, map[string]string{
-		"deck.objective": fullObjectiveID,
-		"deck.role":      "builder",
+		"tack.objective": fullObjectiveID,
+		"tack.role":      "builder",
 	})
 	if len(builders) != 1 {
 		t.Errorf("List builders: expected 1, got %d", len(builders))
 	}
 
 	mergers, _ := p2.List(ctx, map[string]string{
-		"deck.objective": fullObjectiveID,
-		"deck.role":      "merger",
+		"tack.objective": fullObjectiveID,
+		"tack.role":      "merger",
 	})
 	if len(mergers) != 1 {
 		t.Errorf("List mergers: expected 1, got %d", len(mergers))
 	}
 
-	// Extra labels (deck.stream) should also survive.
-	withStream, _ := p2.List(ctx, map[string]string{"deck.stream": "stream-001"})
+	// Extra labels (tack.stream) should also survive.
+	withStream, _ := p2.List(ctx, map[string]string{"tack.stream": "stream-001"})
 	if len(withStream) != 1 {
 		t.Errorf("List by stream: expected 1, got %d", len(withStream))
 	}

@@ -23,7 +23,7 @@ If all actionable tasks are complete, output <promise>COMPLETE</promise>.
 
 # CODEBASE CONTEXT
 
-This is a Go project. The main CLI is `cmd/deck/`, daemon is `cmd/daemon/`. Core logic lives in `internal/`.
+This is a Go project. The main CLI is `cmd/tack/`, daemon is `cmd/daemon/`. Core logic lives in `internal/`.
 
 - Use **Bun** for any JS tooling (not npm/pnpm) — but this is primarily Go
 - Build: `go build ./...`

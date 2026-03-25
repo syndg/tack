@@ -8,7 +8,7 @@ description: How Deck decomposes objectives into parallel work streams.
 An objective is a high-level description of what you want built. Deck takes the objective and runs it through a planning → approval → execution → merge pipeline.
 
 ```bash
-deck plan "Add pagination to all list endpoints"
+tack plan "Add pagination to all list endpoints"
 ```
 
 Objectives have a lifecycle:
@@ -33,9 +33,9 @@ The planner outputs a structured plan that Deck validates and presents for your 
 Plans require human approval before execution begins:
 
 ```bash
-deck show <plan-id>    # Review streams, file scopes, dependencies
-deck approve <plan-id> # Start execution
-deck reject <plan-id>  # Return to planning
+tack show <plan-id>    # Review streams, file scopes, dependencies
+tack approve <plan-id> # Start execution
+tack reject <plan-id>  # Return to planning
 ```
 
 ## Simple Mode
@@ -43,7 +43,7 @@ deck reject <plan-id>  # Return to planning
 For tasks that don't need decomposition — bug fixes, small changes:
 
 ```bash
-deck plan "Fix the typo in README.md" --simple
+tack plan "Fix the typo in README.md" --simple
 ```
 
 Simple mode creates a single-stream plan and auto-approves it. No planner agent, no approval step.

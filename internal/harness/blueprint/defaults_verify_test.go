@@ -1,7 +1,7 @@
 package blueprint_test
 
 import (
-	"github.com/syndg/deck/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/blueprint"
 	"testing"
 )
 

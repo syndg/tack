@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/tack/internal/domain"
 )
 
 // handleListAgents returns all agent sessions as a JSON array.

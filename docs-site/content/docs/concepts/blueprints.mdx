@@ -54,10 +54,10 @@ steps:
 
 ## Customizing Blueprints
 
-Override defaults by placing your own in `.deck/blueprints/`:
+Override defaults by placing your own in `.tack/blueprints/`:
 
 ```yaml
-# .deck/blueprints/stream.yaml
+# .tack/blueprints/stream.yaml
 steps:
   - id: build
     type: agent
@@ -97,4 +97,4 @@ This example removes the reviewer step and increases fix-loop iterations.
 
 ### Human Steps
 
-Pause execution until a human approves via `deck approve` or the API.
+Pause execution until a human approves via `tack approve` or the API.

@@ -1,14 +1,14 @@
 ---
 title: Configuration
-description: Configure Deck for your project with .deck/config.yaml
+description: Configure Tack for your project with .tack/config.yaml
 ---
 
-Create `.deck/config.yaml` in your project root:
+Create `.tack/config.yaml` in your project root:
 
 ```yaml
 daemon:
   listen: "127.0.0.1:9800"
-  data_dir: ".deck/data"
+  data_dir: ".tack/data"
   base_branch: "main"
 
 sandbox:
@@ -41,7 +41,7 @@ quality_gates:
 
 ## Credentials
 
-Store API keys in `~/.config/deck/credentials.yaml`:
+Store API keys in `~/.config/tack/credentials.yaml`:
 
 ```yaml
 anthropic:
@@ -53,14 +53,14 @@ github:
 ## Project Layout
 
 ```
-.deck/
+.tack/
   config.yaml          # Runtime config
   blueprints/          # Workflow definitions (ships with defaults)
     stream.yaml
   rules/               # Project-specific agent guidance
     project.yaml
   data/                # Managed by Deck: SQLite, activity logs
-    deck.db
+    tack.db
     activity/
 ```
 

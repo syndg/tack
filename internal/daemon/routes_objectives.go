@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/services/dispatch"
-	"github.com/syndg/deck/internal/services/planner"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/services/dispatch"
+	"github.com/syndg/tack/internal/services/planner"
 )
 
 // CreateObjectiveRequest is the JSON body for POST /objectives.

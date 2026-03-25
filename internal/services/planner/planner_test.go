@@ -5,10 +5,10 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/syndg/deck/internal/db"
-	"github.com/syndg/deck/internal/domain"
-	events "github.com/syndg/deck/internal/services/events"
-	"github.com/syndg/deck/internal/services/lifecycle"
+	"github.com/syndg/tack/internal/db"
+	"github.com/syndg/tack/internal/domain"
+	events "github.com/syndg/tack/internal/services/events"
+	"github.com/syndg/tack/internal/services/lifecycle"
 )
 
 // setupService builds a complete planner.Service backed by a fresh SQLite DB.

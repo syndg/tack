@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/syndg/deck/internal/runtime"
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/runtime"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 // Runtime spawns Pi agents in sandboxes with RPC-based communication.
@@ -44,15 +44,15 @@ func New(cfg RuntimeConfig, logger *slog.Logger) *Runtime {
 }
 
 // writeExtension uploads extension files into the sandbox filesystem via sb.Upload.
-// Uses .deck-ext/ inside the sandbox so the extension is accessible from the
+// Uses .tack-ext/ inside the sandbox so the extension is accessible from the
 // sandbox process regardless of whether it's local or remote.
-// The worktree (and .deck-ext/ with it) is cleaned up when the objective completes.
+// The worktree (and .tack-ext/ with it) is cleaned up when the objective completes.
 func (r *Runtime) writeExtension(ctx context.Context, sb sandbox.Sandbox, files map[string][]byte) (string, error) {
 	return r.uploadExtensionToSandbox(ctx, sb, files)
 }
 
 func (r *Runtime) uploadExtensionToSandbox(ctx context.Context, sb sandbox.Sandbox, files map[string][]byte) (string, error) {
-	extDir := ".deck-ext"
+	extDir := ".tack-ext"
 	for name, content := range files {
 		path := extDir + "/" + name
 		if err := sb.Upload(ctx, content, path); err != nil {
@@ -60,7 +60,7 @@ func (r *Runtime) uploadExtensionToSandbox(ctx context.Context, sb sandbox.Sandb
 		}
 	}
 
-	// Exclude .deck-ext from git inside the sandbox so auto-commit doesn't
+	// Exclude .tack-ext from git inside the sandbox so auto-commit doesn't
 	// include runtime artifacts. Appends to .git/info/exclude which is outside
 	// the working tree and won't show up as a change.
 	// Commands are broken into separate calls because Daytona's ExecuteCommand

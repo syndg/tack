@@ -4,15 +4,15 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/deck/internal/version"
+	"github.com/syndg/tack/internal/version"
 )
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Print the deck version",
+	Short: "Print the tack version",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("deck", version.Version)
+		fmt.Println("tack", version.Version)
 	},
 }
 

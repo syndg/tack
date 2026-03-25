@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/tack/internal/domain"
 )
 
 // planWithStreams is the response shape for plan endpoints that include streams.

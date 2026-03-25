@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/harness/blueprint"
-	"github.com/syndg/deck/internal/sandbox"
-	"github.com/syndg/deck/internal/services/lifecycle"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/sandbox"
+	"github.com/syndg/tack/internal/services/lifecycle"
 )
 
 // escalateStreamFailure publishes an EventEscalation with structured context
@@ -47,7 +47,7 @@ func (c *Coordinator) escalateStreamFailure(ctx context.Context, exec *blueprint
 	payloadJSON, _ := json.Marshal(payload)
 
 	// Route through mail broker so the escalation is persisted and visible
-	// via `deck mail` / unread-mail APIs, not just the event stream.
+	// via `tack mail` / unread-mail APIs, not just the event stream.
 	if c.mailSender != nil {
 		msg := &domain.MailMessage{
 			From:      "coordinator",

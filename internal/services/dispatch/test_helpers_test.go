@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/syndg/deck/internal/db"
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/harness/blueprint"
-	events "github.com/syndg/deck/internal/services/events"
-	"github.com/syndg/deck/internal/services/lifecycle"
+	"github.com/syndg/tack/internal/db"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/blueprint"
+	events "github.com/syndg/tack/internal/services/events"
+	"github.com/syndg/tack/internal/services/lifecycle"
 )
 
 // dispatchTestEnv extends testEnv with Handlers and shared test infrastructure.

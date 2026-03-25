@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/tack/internal/domain"
 )
 
 func TestParsePlan_WithCodeBlock(t *testing.T) {

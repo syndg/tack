@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/syndg/deck/internal/config"
-	"github.com/syndg/deck/internal/daemon"
+	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/daemon"
 )
 
 func main() {

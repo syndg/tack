@@ -1,6 +1,6 @@
 package blueprint
 
-import "github.com/syndg/deck/internal/harness/tools"
+import "github.com/syndg/tack/internal/harness/tools"
 
 // StepType identifies the kind of step in a blueprint.
 type StepType string

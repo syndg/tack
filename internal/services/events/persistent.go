@@ -4,8 +4,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/syndg/deck/internal/db"
-	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/tack/internal/db"
+	"github.com/syndg/tack/internal/domain"
 )
 
 // PersistentBus wraps Bus to persist events to the database before broadcasting.

@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/syndg/deck/internal/db"
-	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/tack/internal/db"
+	"github.com/syndg/tack/internal/domain"
 )
 
 // handleSendMail sends a mail message (used by agent extensions).

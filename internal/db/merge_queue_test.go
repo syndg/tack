@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/tack/internal/domain"
 )
 
 func TestMergeQueueStore_Enqueue(t *testing.T) {
@@ -17,7 +17,7 @@ func TestMergeQueueStore_Enqueue(t *testing.T) {
 		StreamID:    "stream-1",
 		PlanID:      "plan-1",
 		ObjectiveID: "obj-1",
-		Branch:      "deck/stream-1/builder-abc",
+		Branch:      "tack/stream-1/builder-abc",
 	}
 	if err := store.Enqueue(ctx, entry); err != nil {
 		t.Fatalf("Enqueue: %v", err)
@@ -50,8 +50,8 @@ func TestMergeQueueStore_Enqueue(t *testing.T) {
 	if got.ObjectiveID != "obj-1" {
 		t.Errorf("ObjectiveID = %q, want %q", got.ObjectiveID, "obj-1")
 	}
-	if got.Branch != "deck/stream-1/builder-abc" {
-		t.Errorf("Branch = %q, want %q", got.Branch, "deck/stream-1/builder-abc")
+	if got.Branch != "tack/stream-1/builder-abc" {
+		t.Errorf("Branch = %q, want %q", got.Branch, "tack/stream-1/builder-abc")
 	}
 }
 

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/syndg/deck/internal/naming"
-	"github.com/syndg/deck/internal/runtime"
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/naming"
+	"github.com/syndg/tack/internal/runtime"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 // Runtime spawns Claude Code agents in sandboxes via `claude -p`.

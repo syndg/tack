@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 const defaultTimeout = 120 * time.Second

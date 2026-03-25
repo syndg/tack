@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/syndg/deck/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/blueprint"
 )
 
 const (
 	MetadataKeyCommitMessage = "commit_message"
 	MetadataKeyPRTitle       = "pr_title"
 	MetadataKeyPRBody        = "pr_body"
-	MessageOutputPrefix      = "DECK_MESSAGES:"
+	MessageOutputPrefix      = "TACK_MESSAGES:"
 )
 
 // GeneratedMessages are agent-authored delivery messages consumed by later steps.
@@ -31,7 +31,7 @@ func ParseGeneratedMessages(data []byte) (GeneratedMessages, error) {
 	return msgs, nil
 }
 
-// ExtractGeneratedMessages looks for a trailing DECK_MESSAGES JSON line in an
+// ExtractGeneratedMessages looks for a trailing TACK_MESSAGES JSON line in an
 // agent summary/output, returning the cleaned summary and any parsed messages.
 func ExtractGeneratedMessages(output string) (cleaned string, msgs GeneratedMessages, found bool, err error) {
 	trimmedOutput := strings.TrimSpace(output)

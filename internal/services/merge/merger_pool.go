@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 // MergerSandboxPersister persists the merger sandbox ID for an objective
@@ -66,7 +66,7 @@ func (m *MergerPool) Acquire(ctx context.Context, objectiveID string) (sandbox.S
 
 	// First merge for this objective — pick any stream sandbox to reuse.
 	allSandboxes, listErr := m.sandboxProv.List(ctx, map[string]string{
-		"deck.objective": objectiveID,
+		"tack.objective": objectiveID,
 	})
 
 	var sb sandbox.Sandbox
@@ -81,10 +81,10 @@ func (m *MergerPool) Acquire(ctx context.Context, objectiveID string) (sandbox.S
 			objShort = objShort[:8]
 		}
 		sb, err = m.sandboxProv.Create(ctx, sandbox.CreateOpts{
-			Name:   fmt.Sprintf("deck-%s-merger", objShort),
-			Branch: fmt.Sprintf("deck/%s/merger", objShort),
+			Name:   fmt.Sprintf("tack-%s-merger", objShort),
+			Branch: fmt.Sprintf("tack/%s/merger", objShort),
 			Labels: map[string]string{
-				"deck.objective": objectiveID,
+				"tack.objective": objectiveID,
 			},
 		})
 		if err != nil {
@@ -110,7 +110,7 @@ func (m *MergerPool) Acquire(ctx context.Context, objectiveID string) (sandbox.S
 	if len(objShort) > 8 {
 		objShort = objShort[:8]
 	}
-	mergeBranch := fmt.Sprintf("deck/%s/merge", objShort)
+	mergeBranch := fmt.Sprintf("tack/%s/merge", objShort)
 
 	// Fetch all branches. Try full refspec first (needed for Daytona clones
 	// which default to HEAD-only), fall back to plain fetch for local worktrees.

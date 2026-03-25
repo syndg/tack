@@ -12,26 +12,26 @@ import (
 	"strings"
 	"time"
 
-	"github.com/syndg/deck/internal/config"
-	"github.com/syndg/deck/internal/credentials"
-	"github.com/syndg/deck/internal/db"
-	"github.com/syndg/deck/internal/harness/blueprint"
-	"github.com/syndg/deck/internal/harness/gates"
-	"github.com/syndg/deck/internal/harness/rules"
-	"github.com/syndg/deck/internal/harness/tools"
-	"github.com/syndg/deck/internal/runtime"
-	"github.com/syndg/deck/internal/runtime/claudecode"
-	"github.com/syndg/deck/internal/runtime/pi"
-	"github.com/syndg/deck/internal/sandbox"
-	"github.com/syndg/deck/internal/sandbox/daytona"
-	"github.com/syndg/deck/internal/sandbox/local"
-	"github.com/syndg/deck/internal/services/agents"
-	"github.com/syndg/deck/internal/services/dispatch"
-	"github.com/syndg/deck/internal/services/events"
-	"github.com/syndg/deck/internal/services/lifecycle"
-	mail "github.com/syndg/deck/internal/services/mail"
-	"github.com/syndg/deck/internal/services/merge"
-	"github.com/syndg/deck/internal/services/planner"
+	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/credentials"
+	"github.com/syndg/tack/internal/db"
+	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/gates"
+	"github.com/syndg/tack/internal/harness/rules"
+	"github.com/syndg/tack/internal/harness/tools"
+	"github.com/syndg/tack/internal/runtime"
+	"github.com/syndg/tack/internal/runtime/claudecode"
+	"github.com/syndg/tack/internal/runtime/pi"
+	"github.com/syndg/tack/internal/sandbox"
+	"github.com/syndg/tack/internal/sandbox/daytona"
+	"github.com/syndg/tack/internal/sandbox/local"
+	"github.com/syndg/tack/internal/services/agents"
+	"github.com/syndg/tack/internal/services/dispatch"
+	"github.com/syndg/tack/internal/services/events"
+	"github.com/syndg/tack/internal/services/lifecycle"
+	mail "github.com/syndg/tack/internal/services/mail"
+	"github.com/syndg/tack/internal/services/merge"
+	"github.com/syndg/tack/internal/services/planner"
 )
 
 // Daemon is the main HTTP server that orchestrates all Deck services.
@@ -110,11 +110,11 @@ func New(cfg *config.Config) (*Daemon, error) {
 		return nil, fmt.Errorf("loading default blueprints: %w", err)
 	}
 
-	// Optionally load user-level blueprints from ~/.config/deck/blueprints/
+	// Optionally load user-level blueprints from ~/.config/tack/blueprints/
 	// before project-local blueprints so project files take precedence.
 	home, _ := os.UserHomeDir()
 	if home != "" {
-		userBlueprintsDir := filepath.Join(home, ".config", "deck", "blueprints")
+		userBlueprintsDir := filepath.Join(home, ".config", "tack", "blueprints")
 		if info, err := os.Stat(userBlueprintsDir); err == nil && info.IsDir() {
 			if err := bpRegistry.LoadFromDir(userBlueprintsDir); err != nil {
 				logger.Warn("loading user blueprints", "dir", userBlueprintsDir, "error", err)
@@ -122,9 +122,9 @@ func New(cfg *config.Config) (*Daemon, error) {
 		}
 	}
 
-	// Optionally load project-local blueprints from .deck/blueprints/
+	// Optionally load project-local blueprints from .tack/blueprints/
 	// last so they override both defaults and user-level blueprints.
-	projectBlueprintsDir := filepath.Join(".deck", "blueprints")
+	projectBlueprintsDir := filepath.Join(".tack", "blueprints")
 	if info, err := os.Stat(projectBlueprintsDir); err == nil && info.IsDir() {
 		if err := bpRegistry.LoadFromDir(projectBlueprintsDir); err != nil {
 			logger.Warn("loading project blueprints", "dir", projectBlueprintsDir, "error", err)
@@ -136,17 +136,17 @@ func New(cfg *config.Config) (*Daemon, error) {
 	// Initialize rules engine
 	rulesEng := rules.NewEngine(logger)
 
-	// Optionally load project-local rules from .deck/rules/
-	projectRulesDir := filepath.Join(".deck", "rules")
+	// Optionally load project-local rules from .tack/rules/
+	projectRulesDir := filepath.Join(".tack", "rules")
 	if info, err := os.Stat(projectRulesDir); err == nil && info.IsDir() {
 		if err := rulesEng.LoadDir(projectRulesDir); err != nil {
 			logger.Warn("loading project rules", "dir", projectRulesDir, "error", err)
 		}
 	}
 
-	// Optionally load user-level rules from ~/.config/deck/rules/
+	// Optionally load user-level rules from ~/.config/tack/rules/
 	if home != "" {
-		userRulesDir := filepath.Join(home, ".config", "deck", "rules")
+		userRulesDir := filepath.Join(home, ".config", "tack", "rules")
 		if info, err := os.Stat(userRulesDir); err == nil && info.IsDir() {
 			if err := rulesEng.LoadDir(userRulesDir); err != nil {
 				logger.Warn("loading user rules", "dir", userRulesDir, "error", err)
@@ -183,7 +183,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 	mailBroker := mail.New(mailStore, agentStore, eventBus, logger)
 
 	// Load credentials store early for sandbox provider setup.
-	credsPath := filepath.Join(home, ".config", "deck", "credentials.yaml")
+	credsPath := filepath.Join(home, ".config", "tack", "credentials.yaml")
 	creds, err := credentials.Load(credsPath)
 	if err != nil {
 		logger.Warn("loading credentials store", "path", credsPath, "error", err)
@@ -391,7 +391,7 @@ func localWorktreeDir(cfg *config.Config) string {
 	if cfg.Sandbox.WorktreeDir != "" {
 		return cfg.Sandbox.WorktreeDir
 	}
-	return filepath.Join(os.TempDir(), "deck-worktrees")
+	return filepath.Join(os.TempDir(), "tack-worktrees")
 }
 
 // Shutdown gracefully shuts down the coordinator, HTTP server, and database.

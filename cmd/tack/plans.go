@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/deck/internal/client"
+	"github.com/syndg/tack/internal/client"
 )
 
 func init() {

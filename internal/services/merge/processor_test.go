@@ -6,11 +6,11 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/syndg/deck/internal/db"
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/harness/gates"
-	"github.com/syndg/deck/internal/sandbox"
-	events "github.com/syndg/deck/internal/services/events"
+	"github.com/syndg/tack/internal/db"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/gates"
+	"github.com/syndg/tack/internal/sandbox"
+	events "github.com/syndg/tack/internal/services/events"
 )
 
 // advanceStreamTo walks a stream through valid transitions from pending to the target status.
@@ -168,7 +168,7 @@ func TestEnqueueStream(t *testing.T) {
 	// Mock sandbox to return a branch name for the stream.
 	f.sb.execFn = func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
 		if cmd == "git rev-parse --abbrev-ref HEAD" {
-			return sandbox.ExecResult{ExitCode: 0, Stdout: "deck/stream-1/builder-abc\n"}, nil
+			return sandbox.ExecResult{ExitCode: 0, Stdout: "tack/stream-1/builder-abc\n"}, nil
 		}
 		return sandbox.ExecResult{ExitCode: 0}, nil
 	}
@@ -195,8 +195,8 @@ func TestEnqueueStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByStream: %v", err)
 	}
-	if entry.Branch != "deck/stream-1/builder-abc" {
-		t.Errorf("Branch = %q, want %q", entry.Branch, "deck/stream-1/builder-abc")
+	if entry.Branch != "tack/stream-1/builder-abc" {
+		t.Errorf("Branch = %q, want %q", entry.Branch, "tack/stream-1/builder-abc")
 	}
 	if entry.Status != domain.MergeStatusPending {
 		t.Errorf("Status = %q, want %q", entry.Status, domain.MergeStatusPending)

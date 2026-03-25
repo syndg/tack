@@ -3,8 +3,8 @@ import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
 export function baseOptions(): BaseLayoutProps {
   return {
     nav: {
-      title: 'Deck',
+      title: 'Tack',
     },
-    githubUrl: 'https://github.com/syndg/deck',
+    githubUrl: 'https://github.com/syndg/tack',
   };
 }

@@ -36,11 +36,11 @@ func main() {
 		Env("PATH", "/root/.bun/bin:/usr/local/bin:/usr/bin:/bin").
 		Workdir("/home/daytona/project")
 
-	log.Println("Creating snapshot 'deck-ledger'...")
+	log.Println("Creating snapshot 'tack-ledger'...")
 	log.Println("This will take a few minutes to build the image.")
 
 	snapshot, logChan, err := client.Snapshot.Create(ctx, &types.CreateSnapshotParams{
-		Name:  "deck-ledger",
+		Name:  "tack-ledger",
 		Image: image,
 		Resources: &types.Resources{
 			CPU:    2,
@@ -58,6 +58,6 @@ func main() {
 	}
 
 	log.Printf("Snapshot created: %s (ID: %s, State: %s)\n", snapshot.Name, snapshot.ID, snapshot.State)
-	log.Printf("\nAdd this to your .deck/config.yaml:")
+	log.Printf("\nAdd this to your .tack/config.yaml:")
 	log.Printf("  sandbox:\n    daytona:\n      snapshot: %s", snapshot.Name)
 }

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/syndg/deck/internal/runtime"
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/runtime"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 // mockProcessHandle simulates a ProcessHandle for testing.
@@ -163,12 +163,12 @@ func TestRuntime_Spawn_UploadsExtension(t *testing.T) {
 		t.Errorf("expected success, got: %+v", result)
 	}
 
-	// Should have uploaded .git/info/exclude with .deck-ext pattern
+	// Should have uploaded .git/info/exclude with .tack-ext pattern
 	excludeContent, ok := sb.uploaded[".git/info/exclude"]
 	if !ok {
-		t.Error("expected .git/info/exclude to be uploaded with .deck-ext pattern")
-	} else if !strings.Contains(string(excludeContent), ".deck-ext") {
-		t.Errorf("exclude file content %q should contain .deck-ext", string(excludeContent))
+		t.Error("expected .git/info/exclude to be uploaded with .tack-ext pattern")
+	} else if !strings.Contains(string(excludeContent), ".tack-ext") {
+		t.Errorf("exclude file content %q should contain .tack-ext", string(excludeContent))
 	}
 }
 

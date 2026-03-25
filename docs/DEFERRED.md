@@ -35,7 +35,7 @@ Items intentionally deferred from their original phase. Each entry tracks where 
 - **Reason:** No point shipping a default config until we know the real defaults.
 
 ### Single DB vs multi-DB
-- **Details:** Implementation uses one `deck.db`. Design doc describes logical DBs (`objectives.db`, `agents.db`, etc.)
+- **Details:** Implementation uses one `tack.db`. Design doc describes logical DBs (`objectives.db`, `agents.db`, etc.)
 - **Deferred to:** Revisit if performance requires it. Likely never — single DB is simpler.
 - **Reason:** Single SQLite file is correct for the current scale. Split only if needed.
 

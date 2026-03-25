@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Version is the current version of the deck CLI.
+// Version is the current version of the tack CLI.
 const Version = "0.1.0"
 
 // FormatDuration returns a human-friendly duration string.

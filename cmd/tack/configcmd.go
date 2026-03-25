@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/deck/internal/config"
+	"github.com/syndg/tack/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -14,8 +14,8 @@ var configUser bool
 var configProject bool
 
 func init() {
-	configCmd.PersistentFlags().BoolVar(&configUser, "user", false, "target user config (~/.config/deck/config.yaml)")
-	configCmd.PersistentFlags().BoolVar(&configProject, "project", false, "target project config (.deck/config.yaml)")
+	configCmd.PersistentFlags().BoolVar(&configUser, "user", false, "target user config (~/.config/tack/config.yaml)")
+	configCmd.PersistentFlags().BoolVar(&configProject, "project", false, "target project config (.tack/config.yaml)")
 	configGetCmd.Flags().BoolVar(&configUser, "user", false, "show user-layer value only")
 	configGetCmd.Flags().BoolVar(&configProject, "project", false, "show project-layer value only")
 	configListCmd.Flags().BoolVar(&configUser, "user", false, "show user config only")
@@ -37,7 +37,7 @@ var configSetCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path := targetConfigPath()
 		if path == "" {
-			return fmt.Errorf("no config path resolved (use --user or run from a project with .deck/)")
+			return fmt.Errorf("no config path resolved (use --user or run from a project with .tack/)")
 		}
 
 		data, err := readYAMLMap(path)
@@ -124,7 +124,7 @@ var configRemoveCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path := targetConfigPath()
 		if path == "" {
-			return fmt.Errorf("no config path resolved (use --user or run from a project with .deck/)")
+			return fmt.Errorf("no config path resolved (use --user or run from a project with .tack/)")
 		}
 
 		data, err := readYAMLMap(path)

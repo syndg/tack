@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/deck/internal/config"
-	"github.com/syndg/deck/internal/daemon"
+	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/daemon"
 )
 
 var (
@@ -20,7 +20,7 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "deck",
+	Use:   "tack",
 	Short: "Deck - agentic workflow orchestrator",
 }
 
@@ -31,7 +31,7 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "", "project config path override (default: walk up for .deck/config.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "", "project config path override (default: walk up for .tack/config.yaml)")
 	rootCmd.PersistentFlags().StringVar(&daemonURL, "daemon-url", "http://localhost:9800", "daemon HTTP address")
 
 	rootCmd.AddCommand(daemonCmd)

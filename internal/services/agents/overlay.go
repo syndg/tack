@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/harness/blueprint"
-	"github.com/syndg/deck/internal/harness/rules"
-	"github.com/syndg/deck/internal/harness/tools"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/rules"
+	"github.com/syndg/tack/internal/harness/tools"
 )
 
 // OverlayInput holds all inputs for constructing an agent's system overlay.
@@ -22,7 +22,7 @@ type OverlayInput struct {
 	CuratedTools tools.CurationResult       // resolved tool set
 	QualityGates []string                   // gate commands to run before completion
 	LeadAgent    string                     // name of this agent's lead (empty for planners)
-	Guidance     string                     // project-level guidance from .deck/config.yaml
+	Guidance     string                     // project-level guidance from .tack/config.yaml
 	CommitMode   string                     // "auto", "agent", "none" — controls commit behavior
 	Messages     *blueprint.MessageRequests // optional delivery messages to generate
 	FixContext   string                     // quality gate errors from a previous fix-loop iteration
@@ -105,18 +105,18 @@ func BuildOverlay(input OverlayInput) string {
 	if input.LeadAgent != "" {
 		fmt.Fprintf(&b, "- Your lead is: %s\n", input.LeadAgent)
 	}
-	b.WriteString("- Use deck.status() to report progress\n")
-	b.WriteString("- Use deck.escalate() if you're blocked\n")
-	b.WriteString("- Use deck.done() when finished\n\n")
+	b.WriteString("- Use tack.status() to report progress\n")
+	b.WriteString("- Use tack.escalate() if you're blocked\n")
+	b.WriteString("- Use tack.done() when finished\n\n")
 
 	// 7. Delivery metadata (optional, based on requested messages)
 	if input.Messages != nil && input.Messages.Any() {
 		b.WriteString("## Delivery Metadata\n")
-		b.WriteString("At the very end of your final response, emit exactly one line starting with `DECK_MESSAGES:` followed by compact JSON containing the requested fields below.\n")
+		b.WriteString("At the very end of your final response, emit exactly one line starting with `TACK_MESSAGES:` followed by compact JSON containing the requested fields below.\n")
 		b.WriteString("Do not wrap it in a code fence. Keep it on a single line so Deck can parse it reliably.\n")
-		b.WriteString("If your runtime supports deck.done(), include that same final `DECK_MESSAGES:` line in the summary you pass to deck.done().\n")
+		b.WriteString("If your runtime supports tack.done(), include that same final `TACK_MESSAGES:` line in the summary you pass to tack.done().\n")
 		if input.CommitMode == "agent" {
-			b.WriteString("If you are committing manually, you may write the commit first, then emit the final DECK_MESSAGES line in your response.\n")
+			b.WriteString("If you are committing manually, you may write the commit first, then emit the final TACK_MESSAGES line in your response.\n")
 		}
 		b.WriteString("\nRequested fields:\n")
 		if input.Messages.Commit {
@@ -128,7 +128,7 @@ func BuildOverlay(input OverlayInput) string {
 		}
 		b.WriteString("\nExample final line:\n")
 		fields := RequestedMessageFieldNames(input.Messages)
-		b.WriteString("`DECK_MESSAGES:{")
+		b.WriteString("`TACK_MESSAGES:{")
 		for i, field := range fields {
 			if i > 0 {
 				b.WriteString(",")

@@ -46,10 +46,10 @@ func TestExpandPaths(t *testing.T) {
 		t.Fatalf("UserHomeDir: %v", err)
 	}
 	cfg := Default()
-	cfg.Daemon.DataDir = "~/.deck/test-data"
+	cfg.Daemon.DataDir = "~/.tack/test-data"
 	cfg.ExpandPaths()
 
-	want := filepath.Join(home, ".deck/test-data")
+	want := filepath.Join(home, ".tack/test-data")
 	if cfg.Daemon.DataDir != want {
 		t.Fatalf("expected %q, got %q", want, cfg.Daemon.DataDir)
 	}
@@ -140,8 +140,8 @@ func TestLayeredLoad_EmptyPaths(t *testing.T) {
 func TestFindProjectRoot(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create .deck/ in the root
-	deckDir := filepath.Join(dir, ".deck")
+	// Create .tack/ in the root
+	deckDir := filepath.Join(dir, ".tack")
 	os.MkdirAll(deckDir, 0o755)
 	os.WriteFile(filepath.Join(deckDir, "config.yaml"), []byte("agents:\n  runtime: pi\n"), 0o644)
 
@@ -158,10 +158,10 @@ func TestFindProjectRoot(t *testing.T) {
 		t.Errorf("FindProjectRoot = %q, want %q", gotRoot, wantRoot)
 	}
 
-	// Walk-up from dir with no .deck/ should return empty
+	// Walk-up from dir with no .tack/ should return empty
 	empty := FindProjectRoot(t.TempDir())
 	if empty != "" {
-		t.Errorf("FindProjectRoot(no .deck) = %q, want empty", empty)
+		t.Errorf("FindProjectRoot(no .tack) = %q, want empty", empty)
 	}
 }
 

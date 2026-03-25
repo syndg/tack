@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 // mockSandbox implements sandbox.Sandbox for testing.

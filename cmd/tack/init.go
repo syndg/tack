@@ -7,8 +7,8 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
-	"github.com/syndg/deck/internal/config"
-	"github.com/syndg/deck/internal/credentials"
+	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/credentials"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,13 +28,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("getting working directory: %w", err)
 	}
-	deckDir := filepath.Join(cwd, ".deck")
+	deckDir := filepath.Join(cwd, ".tack")
 	configPath := filepath.Join(deckDir, "config.yaml")
 
 	if _, err := os.Stat(configPath); err == nil {
 		var overwrite bool
 		err := huh.NewConfirm().
-			Title(".deck/config.yaml already exists. Overwrite?").
+			Title(".tack/config.yaml already exists. Overwrite?").
 			Value(&overwrite).
 			Run()
 		if err != nil {
@@ -171,9 +171,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 		sandboxMap["post_create"] = []string{postCreate}
 	}
 
-	// --- Write .deck/config.yaml ---
+	// --- Write .tack/config.yaml ---
 	if err := os.MkdirAll(deckDir, 0o755); err != nil {
-		return fmt.Errorf("creating .deck directory: %w", err)
+		return fmt.Errorf("creating .tack directory: %w", err)
 	}
 
 	cfgYAML, err := yaml.Marshal(projectCfg)
@@ -293,7 +293,7 @@ func promptGitCredential(store *credentials.Store) error {
 	return nil
 }
 
-// ensureDeckConfig is a no-arg helper that checks .deck/ exists in the current project root.
+// ensureDeckConfig is a no-arg helper that checks .tack/ exists in the current project root.
 func ensureDeckConfig() string {
 	return config.ResolveProjectConfig("")
 }

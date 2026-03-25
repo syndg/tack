@@ -7,17 +7,17 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/syndg/deck/internal/credentials"
-	"github.com/syndg/deck/internal/db"
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/harness/blueprint"
-	"github.com/syndg/deck/internal/harness/rules"
-	"github.com/syndg/deck/internal/harness/tools"
-	"github.com/syndg/deck/internal/naming"
-	"github.com/syndg/deck/internal/runtime"
-	"github.com/syndg/deck/internal/sandbox"
-	"github.com/syndg/deck/internal/services/agents"
-	events "github.com/syndg/deck/internal/services/events"
+	"github.com/syndg/tack/internal/credentials"
+	"github.com/syndg/tack/internal/db"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/rules"
+	"github.com/syndg/tack/internal/harness/tools"
+	"github.com/syndg/tack/internal/naming"
+	"github.com/syndg/tack/internal/runtime"
+	"github.com/syndg/tack/internal/sandbox"
+	"github.com/syndg/tack/internal/services/agents"
+	events "github.com/syndg/tack/internal/services/events"
 )
 
 // SpawnRequest describes what agent to create.
@@ -148,7 +148,7 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	if req.Stream != nil {
 		// Stream agent (scout/builder/reviewer): reuse existing stream sandbox.
 		existing, listErr := s.sp.List(ctx, map[string]string{
-			"deck.stream": req.Stream.ID,
+			"tack.stream": req.Stream.ID,
 		})
 		if listErr == nil && len(existing) > 0 {
 			sb = existing[0]
@@ -164,20 +164,20 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 		// Create new sandbox with stream-based or planner naming.
 		var sandboxName, branch string
 		labels := map[string]string{
-			"deck.objective": req.Objective.ID,
+			"tack.objective": req.Objective.ID,
 		}
 		if req.Stream != nil {
 			slug := naming.StreamSlug(req.Stream.Title)
-			sandboxName = fmt.Sprintf("deck-%s-%s", objShort, slug)
-			branch = fmt.Sprintf("deck/%s/%s", objShort, slug)
-			labels["deck.stream"] = req.Stream.ID
+			sandboxName = fmt.Sprintf("tack-%s-%s", objShort, slug)
+			branch = fmt.Sprintf("tack/%s/%s", objShort, slug)
+			labels["tack.stream"] = req.Stream.ID
 		} else {
 			// Planner or other non-stream agent.
-			sandboxName = fmt.Sprintf("deck-%s-%s", objShort, req.Role)
-			branch = fmt.Sprintf("deck/%s/%s", objShort, req.Role)
+			sandboxName = fmt.Sprintf("tack-%s-%s", objShort, req.Role)
+			branch = fmt.Sprintf("tack/%s/%s", objShort, req.Role)
 		}
 		if req.ExecutionID != "" {
-			labels["deck.execution"] = req.ExecutionID
+			labels["tack.execution"] = req.ExecutionID
 		}
 		sb, err = s.sp.Create(ctx, sandbox.CreateOpts{
 			Name:      sandboxName,
@@ -424,7 +424,7 @@ func (s *Spawner) DeleteSandbox(ctx context.Context, sandboxID string) error {
 func (s *Spawner) CleanupObjective(ctx context.Context, objectiveID string) {
 	// Find all sandboxes for this objective
 	sandboxes, err := s.sp.List(ctx, map[string]string{
-		"deck.objective": objectiveID,
+		"tack.objective": objectiveID,
 	})
 	if err != nil {
 		s.logger.Error("listing sandboxes for cleanup", "objective", objectiveID, "error", err)

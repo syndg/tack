@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/syndg/deck/internal/db"
-	"github.com/syndg/deck/internal/domain"
-	events "github.com/syndg/deck/internal/services/events"
+	"github.com/syndg/tack/internal/db"
+	"github.com/syndg/tack/internal/domain"
+	events "github.com/syndg/tack/internal/services/events"
 )
 
 // validTransitions maps each objective status to the statuses it may transition to.

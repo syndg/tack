@@ -66,7 +66,7 @@ src/foo.ts(3,3): error`
 func TestExtractErrorFiles_SkipsFalsePositives(t *testing.T) {
 	output := `error: something went wrong
 at https://example.com/docs
-see github.com/syndg/deck for details`
+see github.com/syndg/tack for details`
 
 	files := ExtractErrorFiles(output)
 	if len(files) != 0 {

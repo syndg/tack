@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 // mockPersister implements MergerSandboxPersister for testing.

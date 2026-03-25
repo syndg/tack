@@ -1,4 +1,4 @@
-module github.com/syndg/deck
+module github.com/syndg/tack
 
 go 1.25.4
 

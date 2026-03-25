@@ -61,7 +61,7 @@ func main() {
 		fmt.Printf("   exit=%d\n   output:\n%s\n", resp.ExitCode, resp.Result)
 	}
 
-	fmt.Println("\n5. Testing PTY approach (what deck uses)...")
+	fmt.Println("\n5. Testing PTY approach (what tack uses)...")
 	pty, err := sb.Process.CreatePty(ctx, "pi-test",
 		options.WithCreatePtyEnv(map[string]string{
 			"ANTHROPIC_API_KEY": apiKey,
@@ -74,7 +74,7 @@ func main() {
 		log.Fatalf("WaitForConnection: %v", err)
 	}
 
-	// Send the same command deck uses
+	// Send the same command tack uses
 	cmd := `export PS1="" && stty -echo 2>/dev/null && cd /home/daytona/project && exec pi --mode rpc --provider anthropic --model claude-sonnet-4-20250514 --thinking low` + "\n"
 	if err := pty.SendInput([]byte(cmd)); err != nil {
 		log.Fatalf("SendInput: %v", err)

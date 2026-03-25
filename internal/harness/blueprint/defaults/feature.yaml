@@ -23,7 +23,7 @@ steps:
 
   - id: per_stream
     type: blueprint_ref
-    ref: ".deck/blueprints/stream.yaml"
+    ref: ".tack/blueprints/stream.yaml"
     on_stream_failure: escalate
     escalation:
       context: full

@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
-	"github.com/syndg/deck/internal/credentials"
+	"github.com/syndg/tack/internal/credentials"
 )
 
 func init() {
@@ -21,7 +21,7 @@ func loadCredentialsStore() (*credentials.Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting home directory: %w", err)
 	}
-	return credentials.Load(filepath.Join(home, ".config", "deck", "credentials.yaml"))
+	return credentials.Load(filepath.Join(home, ".config", "tack", "credentials.yaml"))
 }
 
 var authCmd = &cobra.Command{

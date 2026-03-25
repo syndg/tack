@@ -16,14 +16,14 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 // validBranchRe matches branch names that start with an alphanumeric char or
-// "deck/" and contain only alphanumeric, hyphen, underscore, dot, and slash.
+// "tack/" and contain only alphanumeric, hyphen, underscore, dot, and slash.
 var validBranchRe = regexp.MustCompile(`^[a-zA-Z0-9][-a-zA-Z0-9_.\/]*$`)
 
-const sandboxMetaFile = ".deck-sandbox.json"
+const sandboxMetaFile = ".tack-sandbox.json"
 
 // Provider creates sandboxes as local git worktrees.
 // Each sandbox is an isolated worktree with its own branch.
@@ -46,7 +46,7 @@ func New(repoRoot string, worktreeDir string, logger *slog.Logger) *Provider {
 }
 
 // Rediscover scans existing git worktrees and repopulates the in-memory
-// sandbox map. Labels are read from a .deck-sandbox.json metadata file
+// sandbox map. Labels are read from a .tack-sandbox.json metadata file
 // persisted inside each worktree at creation time, so full (un-truncated)
 // label values survive daemon restarts.
 func (p *Provider) Rediscover(ctx context.Context) {
@@ -78,7 +78,7 @@ func (p *Provider) Rediscover(ctx context.Context) {
 		case strings.HasPrefix(line, "branch "):
 			curBranch = strings.TrimPrefix(line, "branch refs/heads/")
 		case line == "": // end of entry
-			if curPath != "" && curBranch != "" && strings.HasPrefix(curBranch, "deck/") {
+			if curPath != "" && curBranch != "" && strings.HasPrefix(curBranch, "tack/") {
 				// Only recover worktrees that live under our worktreeDir.
 				rel, relErr := filepath.Rel(canonicalWorktreeDir, curPath)
 				if relErr != nil || strings.HasPrefix(rel, "..") {

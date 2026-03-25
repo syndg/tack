@@ -31,7 +31,7 @@ func main() {
 	fmt.Println("\nTesting sandbox creation...")
 	sb, err := client.Create(ctx, types.SnapshotParams{
 		SandboxBaseParams: types.SandboxBaseParams{
-			Name:      "deck-api-test",
+			Name:      "tack-api-test",
 			Ephemeral: true,
 		},
 	})

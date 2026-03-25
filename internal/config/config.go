@@ -11,10 +11,10 @@ import (
 )
 
 // UserConfigPath is the default location for user-level config.
-const UserConfigPath = "~/.config/deck/config.yaml"
+const UserConfigPath = "~/.config/tack/config.yaml"
 
 // ProjectConfigDir is the directory name Deck looks for in project roots.
-const ProjectConfigDir = ".deck"
+const ProjectConfigDir = ".tack"
 
 // DefaultBaseBranch is the fallback base branch when not configured.
 const DefaultBaseBranch = "main"
@@ -38,7 +38,7 @@ type DaemonConfig struct {
 
 type SandboxConfig struct {
 	Provider          string         `yaml:"provider"`
-	WorktreeDir       string         `yaml:"worktree_dir"` // override for local worktree directory (default: $TMPDIR/deck-worktrees)
+	WorktreeDir       string         `yaml:"worktree_dir"` // override for local worktree directory (default: $TMPDIR/tack-worktrees)
 	DefaultResources  ResourceConfig `yaml:"default_resources"`
 	AutoStopMinutes   int            `yaml:"auto_stop_interval"`
 	AutoDeleteMinutes int            `yaml:"auto_delete_interval"`
@@ -178,8 +178,8 @@ func mergeFromFile(cfg *Config, path string) error {
 	return nil
 }
 
-// FindProjectRoot walks up from startDir looking for a .deck/ directory.
-// Returns the directory containing .deck/, or empty string if not found.
+// FindProjectRoot walks up from startDir looking for a .tack/ directory.
+// Returns the directory containing .tack/, or empty string if not found.
 func FindProjectRoot(startDir string) string {
 	dir, err := filepath.Abs(startDir)
 	if err != nil {
@@ -200,7 +200,7 @@ func FindProjectRoot(startDir string) string {
 }
 
 // ResolveProjectConfig finds the project config path by either using the
-// explicit override or walking up from cwd to find .deck/config.yaml.
+// explicit override or walking up from cwd to find .tack/config.yaml.
 func ResolveProjectConfig(override string) string {
 	if override != "" {
 		return override
@@ -221,7 +221,7 @@ func Default() *Config {
 	return &Config{
 		Daemon: DaemonConfig{
 			Listen:     "0.0.0.0:9800",
-			DataDir:    "~/.config/deck/data",
+			DataDir:    "~/.config/tack/data",
 			BaseBranch: "main",
 		},
 		Sandbox: SandboxConfig{

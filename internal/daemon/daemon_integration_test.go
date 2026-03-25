@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/syndg/deck/internal/client"
-	"github.com/syndg/deck/internal/config"
-	"github.com/syndg/deck/internal/db"
-	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/tack/internal/client"
+	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/db"
+	"github.com/syndg/tack/internal/domain"
 )
 
 func TestDaemonIntegration(t *testing.T) {
@@ -324,7 +324,7 @@ func TestRetryMergePublishesQueuedEvent(t *testing.T) {
 		StreamID:    stream.ID,
 		PlanID:      plan.ID,
 		ObjectiveID: obj.ID,
-		Branch:      "deck/test-stream/builder-1",
+		Branch:      "tack/test-stream/builder-1",
 	}
 	if err := d.mergeQueueStore.Enqueue(ctx, entry); err != nil {
 		t.Fatalf("Enqueue merge entry: %v", err)
@@ -425,10 +425,10 @@ func TestProjectBlueprintOverridesUserBlueprint(t *testing.T) {
 	home := filepath.Join(root, "home")
 	project := filepath.Join(root, "project")
 
-	if err := os.MkdirAll(filepath.Join(home, ".config", "deck", "blueprints"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, ".config", "tack", "blueprints"), 0o755); err != nil {
 		t.Fatalf("MkdirAll home blueprints: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(project, ".deck", "blueprints"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(project, ".tack", "blueprints"), 0o755); err != nil {
 		t.Fatalf("MkdirAll project blueprints: %v", err)
 	}
 
@@ -449,10 +449,10 @@ steps:
     role: builder
 `
 
-	if err := os.WriteFile(filepath.Join(home, ".config", "deck", "blueprints", "hotfix.yaml"), []byte(userBlueprint), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".config", "tack", "blueprints", "hotfix.yaml"), []byte(userBlueprint), 0o644); err != nil {
 		t.Fatalf("WriteFile user blueprint: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(project, ".deck", "blueprints", "hotfix.yaml"), []byte(projectBlueprint), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(project, ".tack", "blueprints", "hotfix.yaml"), []byte(projectBlueprint), 0o644); err != nil {
 		t.Fatalf("WriteFile project blueprint: %v", err)
 	}
 

@@ -22,7 +22,7 @@ func Open(dataDir string) (*DB, error) {
 		return nil, fmt.Errorf("creating data directory: %w", err)
 	}
 
-	dbPath := filepath.Join(dataDir, "deck.db")
+	dbPath := filepath.Join(dataDir, "tack.db")
 	conn, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)

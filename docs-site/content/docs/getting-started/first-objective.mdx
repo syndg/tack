@@ -6,7 +6,7 @@ description: Submit your first objective and watch Deck work.
 ## Start the Daemon
 
 ```bash
-deck daemon --config .deck/config.yaml
+tack daemon --config .tack/config.yaml
 ```
 
 The daemon runs in the foreground. Open a new terminal for CLI commands.
@@ -14,7 +14,7 @@ The daemon runs in the foreground. Open a new terminal for CLI commands.
 ## Submit an Objective
 
 ```bash
-deck plan "Refactor the auth module to use JWT"
+tack plan "Refactor the auth module to use JWT"
 ```
 
 Deck creates an objective and spawns a planner agent. The planner explores your codebase and decomposes the objective into parallel streams with file scopes and dependencies.
@@ -22,8 +22,8 @@ Deck creates an objective and spawns a planner agent. The planner explores your 
 ## Review the Plan
 
 ```bash
-deck plans
-deck show <plan-id>
+tack plans
+tack show <plan-id>
 ```
 
 The plan shows each stream's title, description, file scope, and dependency chain. Review it before approving.
@@ -31,7 +31,7 @@ The plan shows each stream's title, description, file scope, and dependency chai
 ## Approve
 
 ```bash
-deck approve <plan-id>
+tack approve <plan-id>
 ```
 
 Execution begins. Deck schedules streams based on dependencies and concurrency limits.
@@ -39,7 +39,7 @@ Execution begins. Deck schedules streams based on dependencies and concurrency l
 ## Watch Progress
 
 ```bash
-deck watch
+tack watch
 ```
 
 Live stream of agent activity — tool calls, file edits, test results, and status changes.
@@ -56,8 +56,8 @@ Live stream of agent activity — tool calls, file edits, test results, and stat
 ## Check Results
 
 ```bash
-deck status
-deck merge
+tack status
+tack merge
 ```
 
 When all streams complete, Deck merges everything and creates a PR.
@@ -67,7 +67,7 @@ When all streams complete, Deck merges everything and creates a PR.
 For smaller tasks that don't need decomposition:
 
 ```bash
-deck plan "Fix the typo in the README" --simple
+tack plan "Fix the typo in the README" --simple
 ```
 
 Simple mode creates a single-stream plan and auto-approves it. One agent, no planning overhead.

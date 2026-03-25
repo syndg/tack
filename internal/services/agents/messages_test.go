@@ -3,7 +3,7 @@ package agents
 import "testing"
 
 func TestExtractGeneratedMessages(t *testing.T) {
-	output := "Implemented the fix and validated it.\nDECK_MESSAGES:{\"pr_title\":\"Fix dispatch race\",\"pr_body\":\"## Summary\\n- stabilize dispatch\\n\",\"commit_message\":\"fix: stabilize dispatch race\"}"
+	output := "Implemented the fix and validated it.\nTACK_MESSAGES:{\"pr_title\":\"Fix dispatch race\",\"pr_body\":\"## Summary\\n- stabilize dispatch\\n\",\"commit_message\":\"fix: stabilize dispatch race\"}"
 
 	clean, msgs, found, err := ExtractGeneratedMessages(output)
 	if err != nil {

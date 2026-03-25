@@ -13,11 +13,11 @@ import (
 
 	daytona "github.com/daytonaio/daytona/libs/sdk-go/pkg/daytona"
 	"github.com/daytonaio/daytona/libs/sdk-go/pkg/options"
-	"github.com/syndg/deck/internal/naming"
+	"github.com/syndg/tack/internal/naming"
 	"github.com/daytonaio/daytona/libs/sdk-go/pkg/types"
 
-	"github.com/syndg/deck/internal/credentials"
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/credentials"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 // ptyExecSetupDelay is the wait time after sending exec to a PTY before
@@ -181,7 +181,7 @@ func (p *Provider) bootstrap(ctx context.Context, sb *daytona.Sandbox, opts sand
 		}
 	}
 
-	// Create and checkout the deck working branch.
+	// Create and checkout the tack working branch.
 	branch := opts.Branch
 	if branch == "" {
 		branch = sandbox.DeriveBranchPrefix(opts)
@@ -371,7 +371,7 @@ func (s *DaytonaSandbox) Exec(ctx context.Context, cmd string, opts sandbox.Exec
 
 func (s *DaytonaSandbox) ExecStreaming(ctx context.Context, cmd string, opts sandbox.ExecOpts) (sandbox.ProcessHandle, error) {
 	// Use a unique session ID (not the command itself, which can be very long).
-	sessionID := fmt.Sprintf("deck-%d", time.Now().UnixNano())
+	sessionID := fmt.Sprintf("tack-%d", time.Now().UnixNano())
 
 	var ptyOpts []func(*options.CreatePty)
 	if len(opts.Env) > 0 || len(s.envVars) > 0 {

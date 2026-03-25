@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/tack/internal/domain"
 )
 
 // openTestDB opens a fresh SQLite DB with migrations applied.

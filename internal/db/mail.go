@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/tack/internal/domain"
 )
 
 // MailStore handles persistence of inter-agent mail messages.

@@ -5,14 +5,14 @@ description: Design your own agent workflows with YAML state machines.
 
 ## Override Default Blueprints
 
-Place custom blueprints in `.deck/blueprints/`. Files with the same name as a default blueprint override it.
+Place custom blueprints in `.tack/blueprints/`. Files with the same name as a default blueprint override it.
 
 ## Example: Skip Review
 
 Remove the reviewer step for faster iteration:
 
 ```yaml
-# .deck/blueprints/stream.yaml
+# .tack/blueprints/stream.yaml
 steps:
   - id: build
     type: agent
@@ -38,7 +38,7 @@ steps:
 Add a reconnaissance step before building:
 
 ```yaml
-# .deck/blueprints/stream.yaml
+# .tack/blueprints/stream.yaml
 steps:
   - id: scout
     type: agent

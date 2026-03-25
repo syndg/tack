@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 // These tests hit a real Daytona API. Skip when DAYTONA_API_KEY is not set.
@@ -40,8 +40,8 @@ func TestIntegration_CreateExecDelete(t *testing.T) {
 
 	// --- Create ---
 	sb, err := p.Create(ctx, sandbox.CreateOpts{
-		Name:      "deck-integ-test",
-		Labels:    map[string]string{"deck.objective": "integ-test-obj", "deck.role": "builder"},
+		Name:      "tack-integ-test",
+		Labels:    map[string]string{"tack.objective": "integ-test-obj", "tack.role": "builder"},
 		Ephemeral: true,
 	})
 	if err != nil {
@@ -101,12 +101,12 @@ func TestIntegration_CreateExecDelete(t *testing.T) {
 	t.Logf("exec env: %q", res.Stdout)
 
 	// --- Upload + Download ---
-	testContent := []byte("deck integration test content\n")
-	if err := sb.Upload(ctx, testContent, "/tmp/deck-test-file.txt"); err != nil {
+	testContent := []byte("tack integration test content\n")
+	if err := sb.Upload(ctx, testContent, "/tmp/tack-test-file.txt"); err != nil {
 		t.Fatalf("Upload: %v", err)
 	}
 
-	downloaded, err := sb.Download(ctx, "/tmp/deck-test-file.txt")
+	downloaded, err := sb.Download(ctx, "/tmp/tack-test-file.txt")
 	if err != nil {
 		t.Fatalf("Download: %v", err)
 	}
@@ -128,8 +128,8 @@ func TestIntegration_ListSurvivesNewProvider(t *testing.T) {
 	}
 
 	sb, err := p1.Create(ctx, sandbox.CreateOpts{
-		Name:      "deck-integ-list-test",
-		Labels:    map[string]string{"deck.objective": "integ-list-obj", "deck.role": "merger"},
+		Name:      "tack-integ-list-test",
+		Labels:    map[string]string{"tack.objective": "integ-list-obj", "tack.role": "merger"},
 		Ephemeral: true,
 	})
 	if err != nil {
@@ -151,7 +151,7 @@ func TestIntegration_ListSurvivesNewProvider(t *testing.T) {
 	}
 
 	// p2 has an empty in-memory map, but List should query the API.
-	results, err := p2.List(ctx, map[string]string{"deck.objective": "integ-list-obj"})
+	results, err := p2.List(ctx, map[string]string{"tack.objective": "integ-list-obj"})
 	if err != nil {
 		t.Fatalf("List on p2: %v", err)
 	}

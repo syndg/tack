@@ -3,7 +3,7 @@ package runtime
 import (
 	"context"
 
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 type AgentRuntime interface {

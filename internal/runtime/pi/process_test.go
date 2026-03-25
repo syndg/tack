@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/syndg/deck/internal/runtime"
+	"github.com/syndg/tack/internal/runtime"
 )
 
 func TestPiProcess_OutputEvent(t *testing.T) {
@@ -114,7 +114,7 @@ func TestPiProcess_ExtensionError_FailsResult(t *testing.T) {
 	// An extension_error event should make the final result a failure.
 	handle := &mockProcessHandle{
 		lines: []string{
-			`{"type":"extension_error","extensionPath":".deck-ext","event":"before_agent_start","error":"hook crashed"}`,
+			`{"type":"extension_error","extensionPath":".tack-ext","event":"before_agent_start","error":"hook crashed"}`,
 			`{"type":"agent_end"}`,
 		},
 	}

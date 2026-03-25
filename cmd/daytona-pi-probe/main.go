@@ -23,7 +23,7 @@ func main() {
 	fmt.Println("1. Creating sandbox...")
 	sb, err := client.Create(ctx, types.SnapshotParams{
 		SandboxBaseParams: types.SandboxBaseParams{
-			Name:      "deck-pi-probe",
+			Name:      "tack-pi-probe",
 			Ephemeral: true,
 		},
 	})

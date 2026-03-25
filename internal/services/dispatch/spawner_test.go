@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/syndg/deck/internal/db"
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/harness/rules"
-	"github.com/syndg/deck/internal/harness/tools"
-	"github.com/syndg/deck/internal/runtime"
-	"github.com/syndg/deck/internal/sandbox"
-	events "github.com/syndg/deck/internal/services/events"
+	"github.com/syndg/tack/internal/db"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/rules"
+	"github.com/syndg/tack/internal/harness/tools"
+	"github.com/syndg/tack/internal/runtime"
+	"github.com/syndg/tack/internal/sandbox"
+	events "github.com/syndg/tack/internal/services/events"
 )
 
 // mockRuntime records the opts passed to the last Spawn call.

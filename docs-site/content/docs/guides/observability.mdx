@@ -8,7 +8,7 @@ description: Monitor agent activity with watch, logs, and real-time events.
 Live stream of all agent activity:
 
 ```bash
-deck watch
+tack watch
 ```
 
 ```
@@ -23,8 +23,8 @@ deck watch
 ### Verbosity Levels
 
 ```bash
-deck watch --verbose   # Full tool arguments, message content, file diffs
-deck watch --summary   # Objective-level status changes only
+tack watch --verbose   # Full tool arguments, message content, file diffs
+tack watch --summary   # Objective-level status changes only
 ```
 
 ## Agent Logs
@@ -32,8 +32,8 @@ deck watch --summary   # Objective-level status changes only
 Replay what a specific agent did from JSONL activity logs:
 
 ```bash
-deck logs <agent-id>
-deck logs <agent-id> --follow  # Live tail
+tack logs <agent-id>
+tack logs <agent-id> --follow  # Live tail
 ```
 
 ## Escalations
@@ -41,7 +41,7 @@ deck logs <agent-id> --follow  # Live tail
 When an agent hits a blocker, Deck sends an escalation:
 
 ```bash
-deck mail   # View escalation and message history
+tack mail   # View escalation and message history
 ```
 
 Escalation dedup ensures you get one notification per unique blocker, not 50 copies of the same error across fix-loop iterations.

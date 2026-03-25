@@ -9,13 +9,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/syndg/deck/internal/config"
-	"github.com/syndg/deck/internal/db"
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/harness/gates"
-	"github.com/syndg/deck/internal/naming"
-	"github.com/syndg/deck/internal/sandbox"
-	events "github.com/syndg/deck/internal/services/events"
+	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/db"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/gates"
+	"github.com/syndg/tack/internal/naming"
+	"github.com/syndg/tack/internal/sandbox"
+	events "github.com/syndg/tack/internal/services/events"
 )
 
 // Processor manages the merge queue lifecycle.
@@ -415,7 +415,7 @@ func (p *Processor) failEntry(ctx context.Context, entry *domain.MergeEntry, tie
 func (p *Processor) getStreamBranch(ctx context.Context, streamID, executionID string) (string, error) {
 	// Try to get branch from the stream's sandbox (may be auto-stopped for remote sandboxes).
 	sandboxes, err := p.sandboxProv.List(ctx, map[string]string{
-		"deck.stream": streamID,
+		"tack.stream": streamID,
 	})
 	if err == nil && len(sandboxes) > 0 {
 		sb := sandboxes[0]
@@ -445,7 +445,7 @@ func (p *Processor) getStreamBranch(ctx context.Context, streamID, executionID s
 		objShort = objShort[:8]
 	}
 	slug := naming.StreamSlug(stream.Title)
-	branch := fmt.Sprintf("deck/%s/%s", objShort, slug)
+	branch := fmt.Sprintf("tack/%s/%s", objShort, slug)
 	p.logger.Info("derived stream branch from title (sandbox unavailable)",
 		"branch", branch, "stream", streamID)
 	return branch, nil

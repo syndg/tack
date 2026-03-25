@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/syndg/deck/internal/runtime"
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/runtime"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 // PiProcess implements runtime.AgentProcess with JSONL-based RPC over a ProcessHandle.

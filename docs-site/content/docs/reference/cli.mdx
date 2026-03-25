@@ -7,78 +7,78 @@ description: Complete reference for all Deck CLI commands.
 
 | Command | Description |
 |---------|-------------|
-| `deck daemon` | Start the orchestrator daemon |
-| `deck plan <description>` | Create an objective and generate a plan |
-| `deck plan <desc> --simple` | Single-agent mode (no decomposition) |
-| `deck plans` | List all plans |
-| `deck show <plan-id>` | Show plan details with streams |
-| `deck approve <plan-id>` | Approve a plan for execution |
-| `deck reject <plan-id>` | Reject a plan |
-| `deck exec <objective-id>` | Manually trigger execution |
-| `deck status` | Show daemon status |
-| `deck agents` | List active agent sessions |
-| `deck watch` | Live stream of agent activity |
-| `deck logs <agent-id>` | Replay agent activity log |
-| `deck mail` | View escalation and message history |
-| `deck merge` | View merge queue status |
-| `deck version` | Print version |
+| `tack daemon` | Start the orchestrator daemon |
+| `tack plan <description>` | Create an objective and generate a plan |
+| `tack plan <desc> --simple` | Single-agent mode (no decomposition) |
+| `tack plans` | List all plans |
+| `tack show <plan-id>` | Show plan details with streams |
+| `tack approve <plan-id>` | Approve a plan for execution |
+| `tack reject <plan-id>` | Reject a plan |
+| `tack exec <objective-id>` | Manually trigger execution |
+| `tack status` | Show daemon status |
+| `tack agents` | List active agent sessions |
+| `tack watch` | Live stream of agent activity |
+| `tack logs <agent-id>` | Replay agent activity log |
+| `tack mail` | View escalation and message history |
+| `tack merge` | View merge queue status |
+| `tack version` | Print version |
 
-## deck daemon
+## tack daemon
 
 Start the orchestrator daemon. Runs in the foreground.
 
 ```bash
-deck daemon --config .deck/config.yaml
+tack daemon --config .tack/config.yaml
 ```
 
 **Flags:**
-- `--config` — path to config file (default: `.deck/config.yaml`)
+- `--config` — path to config file (default: `.tack/config.yaml`)
 
-## deck plan
+## tack plan
 
 Create an objective and generate a plan.
 
 ```bash
-deck plan "Add pagination to all list endpoints"
-deck plan "Fix the typo" --simple
+tack plan "Add pagination to all list endpoints"
+tack plan "Fix the typo" --simple
 ```
 
 **Flags:**
 - `--simple` — single-agent mode, skip planning and auto-approve
 - `--blueprint` — override the blueprint name
 
-## deck show
+## tack show
 
 Show plan details including streams, file scopes, and dependencies.
 
 ```bash
-deck show <plan-id>
+tack show <plan-id>
 ```
 
-## deck approve / reject
+## tack approve / reject
 
 Approve or reject a plan.
 
 ```bash
-deck approve <plan-id>
-deck reject <plan-id>
+tack approve <plan-id>
+tack reject <plan-id>
 ```
 
-## deck watch
+## tack watch
 
 Live stream of agent activity with filtering.
 
 ```bash
-deck watch
-deck watch --verbose    # Full tool arguments and diffs
-deck watch --summary    # Objective-level status only
+tack watch
+tack watch --verbose    # Full tool arguments and diffs
+tack watch --summary    # Objective-level status only
 ```
 
-## deck logs
+## tack logs
 
 Replay agent activity from JSONL logs.
 
 ```bash
-deck logs <agent-id>
-deck logs <agent-id> --follow
+tack logs <agent-id>
+tack logs <agent-id> --follow
 ```

@@ -23,7 +23,7 @@ func main() {
 	fmt.Println("Creating sandbox from default snapshot...")
 	sb, err := client.Create(ctx, types.SnapshotParams{
 		SandboxBaseParams: types.SandboxBaseParams{
-			Name:      "deck-probe",
+			Name:      "tack-probe",
 			Ephemeral: true,
 		},
 	})

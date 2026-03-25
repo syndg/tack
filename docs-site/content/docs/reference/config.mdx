@@ -1,6 +1,6 @@
 ---
 title: Configuration Reference
-description: Full reference for .deck/config.yaml options.
+description: Full reference for .tack/config.yaml options.
 ---
 
 ## Complete Config
@@ -9,12 +9,12 @@ description: Full reference for .deck/config.yaml options.
 daemon:
   listen: "127.0.0.1:9800"       # HTTP listen address
   external_url: ""                # Public URL for agent callbacks (required for Daytona)
-  data_dir: ".deck/data"          # SQLite database and activity logs
+  data_dir: ".tack/data"          # SQLite database and activity logs
   base_branch: "main"             # Branch to merge into
 
 sandbox:
   provider: "local"               # "local" or "daytona"
-  worktree_dir: ""                # Override worktree directory (default: $TMPDIR/deck-worktrees)
+  worktree_dir: ""                # Override worktree directory (default: $TMPDIR/tack-worktrees)
   post_create:                    # Commands to run after sandbox creation
     - "bun install"
   default_resources:
@@ -59,7 +59,7 @@ quality_gates:                    # Shell commands run after each agent change
 
 ## Credentials
 
-Stored in `~/.config/deck/credentials.yaml`:
+Stored in `~/.config/tack/credentials.yaml`:
 
 ```yaml
 anthropic:

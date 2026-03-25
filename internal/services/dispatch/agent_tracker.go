@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/syndg/deck/internal/config"
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/runtime"
-	"github.com/syndg/deck/internal/services/agents"
-	events "github.com/syndg/deck/internal/services/events"
+	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/runtime"
+	"github.com/syndg/tack/internal/services/agents"
+	events "github.com/syndg/tack/internal/services/events"
 )
 
 // AgentTracker manages the lifecycle of live agent processes.

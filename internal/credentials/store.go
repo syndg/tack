@@ -28,7 +28,7 @@ var envVarPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 // shellTimeout is the maximum time for shell command value resolution.
 const shellTimeout = 10 * time.Second
 
-// Credentials is the top-level YAML structure of ~/.config/deck/credentials.yaml.
+// Credentials is the top-level YAML structure of ~/.config/tack/credentials.yaml.
 type Credentials struct {
 	ModelProviders map[string]ProviderCredential `yaml:"model_providers,omitempty"`
 	Git            *GitCredential                `yaml:"git,omitempty"`

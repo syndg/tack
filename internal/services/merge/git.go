@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 // MergeResult describes the outcome of a merge attempt.

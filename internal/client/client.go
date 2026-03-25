@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/harness/blueprint"
-	"github.com/syndg/deck/internal/services/merge"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/services/merge"
 )
 
 // Client communicates with the Deck daemon over HTTP.

@@ -60,12 +60,12 @@ var snapshotCreateCmd = &cobra.Command{
 			fmt.Printf("    --post-create %q \\\n", strings.Join(cfg.Sandbox.PostCreate, " && "))
 		}
 		if lockHash != "" {
-			fmt.Printf("    --label deck.lockfile-hash=%s \\\n", lockHash[:12])
+			fmt.Printf("    --label tack.lockfile-hash=%s \\\n", lockHash[:12])
 		}
-		fmt.Printf("    --name deck-snapshot\n")
+		fmt.Printf("    --name tack-snapshot\n")
 		fmt.Println()
 		fmt.Println("Then set the snapshot in your config:")
-		fmt.Println("  deck config set sandbox.daytona.snapshot <snapshot-id>")
+		fmt.Println("  tack config set sandbox.daytona.snapshot <snapshot-id>")
 
 		return nil
 	},
@@ -81,7 +81,7 @@ var snapshotUpdateCmd = &cobra.Command{
 		}
 
 		if cfg.Sandbox.Daytona.Snapshot == "" {
-			return fmt.Errorf("no snapshot configured — run `deck snapshot create` first")
+			return fmt.Errorf("no snapshot configured — run `tack snapshot create` first")
 		}
 
 		lockHash, lockFile := hashLockfile()
@@ -124,8 +124,8 @@ var snapshotCheckCmd = &cobra.Command{
 		fmt.Printf("Current lockfile:  %s\n", lockFile)
 		fmt.Printf("Lockfile hash:     %s\n", lockHash[:12])
 		fmt.Println()
-		fmt.Println("Compare this hash with the snapshot's deck.lockfile-hash label.")
-		fmt.Println("If they differ, run: deck snapshot update")
+		fmt.Println("Compare this hash with the snapshot's tack.lockfile-hash label.")
+		fmt.Println("If they differ, run: tack snapshot update")
 
 		return nil
 	},

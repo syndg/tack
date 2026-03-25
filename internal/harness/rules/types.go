@@ -1,6 +1,6 @@
 package rules
 
-import "github.com/syndg/deck/internal/harness/tools"
+import "github.com/syndg/tack/internal/harness/tools"
 
 // Rule represents a scoped rule loaded from a markdown file with YAML frontmatter.
 type Rule struct {

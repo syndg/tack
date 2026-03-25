@@ -8,13 +8,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/syndg/deck/internal/config"
-	"github.com/syndg/deck/internal/db"
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/harness/blueprint"
-	"github.com/syndg/deck/internal/services/agents"
-	events "github.com/syndg/deck/internal/services/events"
-	"github.com/syndg/deck/internal/services/lifecycle"
+	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/db"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/services/agents"
+	events "github.com/syndg/tack/internal/services/events"
+	"github.com/syndg/tack/internal/services/lifecycle"
 )
 
 // Sentinel errors for Orchestrator methods.

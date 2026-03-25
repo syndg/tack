@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/tack/internal/domain"
 )
 
 // createTestPlan inserts a minimal plan for the given objective and returns it.

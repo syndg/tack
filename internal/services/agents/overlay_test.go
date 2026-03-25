@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/harness/blueprint"
-	"github.com/syndg/deck/internal/harness/rules"
-	"github.com/syndg/deck/internal/harness/tools"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/rules"
+	"github.com/syndg/tack/internal/harness/tools"
 )
 
 func testObjective() *domain.Objective {
@@ -177,8 +177,8 @@ func TestBuildOverlay_MessageMetadataInstructions(t *testing.T) {
 	if !strings.Contains(result, "## Delivery Metadata") {
 		t.Fatal("missing delivery metadata section")
 	}
-	if !strings.Contains(result, "DECK_MESSAGES:") {
-		t.Fatal("missing DECK_MESSAGES output instructions")
+	if !strings.Contains(result, "TACK_MESSAGES:") {
+		t.Fatal("missing TACK_MESSAGES output instructions")
 	}
 	for _, field := range []string{"commit_message", "pr_title", "pr_body"} {
 		if !strings.Contains(result, field) {

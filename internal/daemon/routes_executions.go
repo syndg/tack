@@ -6,8 +6,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/syndg/deck/internal/harness/blueprint"
-	"github.com/syndg/deck/internal/services/dispatch"
+	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/services/dispatch"
 )
 
 // handleListExecutions returns all blueprint executions as a JSON array.

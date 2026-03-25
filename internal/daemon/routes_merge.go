@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/syndg/deck/internal/domain"
+	"github.com/syndg/tack/internal/domain"
 )
 
 // handleListMergeQueue returns merge queue entries as a JSON array.

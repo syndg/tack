@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/syndg/deck/internal/domain"
-	"github.com/syndg/deck/internal/harness/blueprint"
-	"github.com/syndg/deck/internal/naming"
-	"github.com/syndg/deck/internal/sandbox"
-	"github.com/syndg/deck/internal/services/agents"
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/naming"
+	"github.com/syndg/tack/internal/sandbox"
+	"github.com/syndg/tack/internal/services/agents"
 )
 
 // HandleAgentStep implements the StepHandler for agent-type blueprint steps.
@@ -387,13 +387,13 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
 }
 
-// resolveBlueprint resolves a blueprint ref (e.g., ".deck/blueprints/stream.yaml")
+// resolveBlueprint resolves a blueprint ref (e.g., ".tack/blueprints/stream.yaml")
 // to a loaded blueprint by trying the ref as-is and by base filename alias.
 func (c *Coordinator) resolveBlueprint(ref string) *blueprint.Blueprint {
 	if bp, ok := c.engine.GetBlueprint(ref); ok {
 		return bp
 	}
-	// Try base filename without extension: ".deck/blueprints/stream.yaml" → "stream"
+	// Try base filename without extension: ".tack/blueprints/stream.yaml" → "stream"
 	base := strings.TrimSuffix(filepath.Base(ref), filepath.Ext(ref))
 	if bp, ok := c.engine.GetBlueprint(base); ok {
 		return bp
@@ -614,7 +614,7 @@ func (c *Coordinator) autoCommit(ctx context.Context, sb sandbox.Sandbox, object
 
 		// Build commit message.
 		var msg strings.Builder
-		fmt.Fprintf(&msg, "deck: %s", objectiveDesc)
+		fmt.Fprintf(&msg, "tack: %s", objectiveDesc)
 		if strings.TrimSpace(diffResult.Stdout) != "" {
 			fmt.Fprintf(&msg, "\n\n%s", strings.TrimSpace(diffResult.Stdout))
 		}
@@ -627,7 +627,7 @@ func (c *Coordinator) autoCommit(ctx context.Context, sb sandbox.Sandbox, object
 		return fmt.Errorf("staging changes: %w (stderr: %s)", err, stageResult.Stderr)
 	}
 
-	const commitMessagePath = ".deck/tmp/auto-commit-message.txt"
+	const commitMessagePath = ".tack/tmp/auto-commit-message.txt"
 	if err := sb.Upload(ctx, []byte(commitMessage+"\n"), commitMessagePath); err != nil {
 		return fmt.Errorf("uploading commit message: %w", err)
 	}

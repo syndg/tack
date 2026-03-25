@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/syndg/deck/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/blueprint"
 )
 
 // ExecutionStore persists blueprint execution state.

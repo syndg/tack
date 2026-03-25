@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/syndg/deck/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/blueprint"
 )
 
 // registerRoutes sets up all HTTP route handlers on the daemon's mux.

@@ -7,11 +7,11 @@ Deck is an open-source orchestrator that runs AI coding agents at scale. You des
 You go from being the developer to being the team lead.
 
 ```
-$ deck plan "Add pagination to all list endpoints and a PATCH /expenses/:id endpoint"
+$ tack plan "Add pagination to all list endpoints and a PATCH /expenses/:id endpoint"
 
 Created objective fb68742b. Planner agent will decompose.
 
-$ deck approve e2b12fee
+$ tack approve e2b12fee
 
 Plan approved. Execution will begin.
   Stream 1: PATCH expenses endpoint        ██████████ merged
@@ -43,19 +43,19 @@ Everything in Deck that isn't an LLM decision is deterministic infrastructure: t
 ### Install
 
 ```bash
-git clone https://github.com/syndg/deck.git
-cd deck
-go build -o deck ./cmd/deck/
+git clone https://github.com/syndg/tack.git
+cd tack
+go build -o tack ./cmd/tack/
 ```
 
 ### Configure your project
 
-Create `.deck/config.yaml` in your project root:
+Create `.tack/config.yaml` in your project root:
 
 ```yaml
 daemon:
   listen: "127.0.0.1:9800"
-  data_dir: ".deck/data"
+  data_dir: ".tack/data"
   base_branch: "main"
 
 sandbox:
@@ -90,20 +90,20 @@ quality_gates:
 
 ```bash
 # Start the daemon
-deck daemon --config .deck/config.yaml
+tack daemon --config .tack/config.yaml
 
 # Submit an objective
-deck plan "Refactor the auth module to use JWT"
+tack plan "Refactor the auth module to use JWT"
 
 # Review and approve
-deck show <plan-id>
-deck approve <plan-id>
+tack show <plan-id>
+tack approve <plan-id>
 
 # Watch agents work in real time
-deck watch
+tack watch
 
 # Check what a specific agent did
-deck logs <agent-id>
+tack logs <agent-id>
 ```
 
 ---
@@ -170,10 +170,10 @@ Stream 2 (frontend components): bunx tsc --noEmit → fails on frontend error �
 
 Workflows are defined as YAML state machines. Steps can be `agent`, `deterministic`, `human`, or `blueprint_ref` (nested).
 
-Deck ships two defaults. Override by placing your own in `.deck/blueprints/`.
+Deck ships two defaults. Override by placing your own in `.tack/blueprints/`.
 
 ```yaml
-# .deck/blueprints/stream.yaml — per-stream execution
+# .tack/blueprints/stream.yaml — per-stream execution
 steps:
   - id: scout
     type: agent
@@ -210,7 +210,7 @@ steps:
 Project conventions injected into agent prompts based on file scope. Every rule you add makes all future agents smarter.
 
 ```yaml
-# .deck/rules/project.yaml
+# .tack/rules/project.yaml
 name: "Project conventions"
 scope: all
 rules:
@@ -224,7 +224,7 @@ rules:
 
 ### Observability
 
-**`deck watch`** — Live stream of all agent activity with filters and verbosity levels.
+**`tack watch`** — Live stream of all agent activity with filters and verbosity levels.
 
 ```
 18:16:12 [stream-1] builder: read src/schemas.ts
@@ -236,11 +236,11 @@ rules:
 18:47:35 [stream-1] merged ✓
 ```
 
-**`deck logs <agent-id>`** — Full replay of what an agent did from JSONL activity logs. Supports `--follow` for live tailing.
+**`tack logs <agent-id>`** — Full replay of what an agent did from JSONL activity logs. Supports `--follow` for live tailing.
 
-**`deck watch --verbose`** — Shows full tool arguments, message content, and file diffs.
+**`tack watch --verbose`** — Shows full tool arguments, message content, and file diffs.
 
-**`deck watch --summary`** — Objective-level status changes only.
+**`tack watch --summary`** — Objective-level status changes only.
 
 ### Escalation Dedup
 
@@ -313,35 +313,35 @@ tools:
 
 | Command | Description |
 |---------|-------------|
-| `deck daemon` | Start the orchestrator daemon |
-| `deck plan <description>` | Create an objective and generate a plan |
-| `deck plan <desc> --simple` | Single-agent mode (no decomposition) |
-| `deck plans` | List all plans |
-| `deck show <plan-id>` | Show plan details with streams |
-| `deck approve <plan-id>` | Approve a plan for execution |
-| `deck reject <plan-id>` | Reject a plan |
-| `deck exec <objective-id>` | Manually trigger execution |
-| `deck status` | Show daemon status |
-| `deck agents` | List active agent sessions |
-| `deck watch` | Live stream of agent activity |
-| `deck logs <agent-id>` | Replay agent activity log |
-| `deck mail` | View escalation and message history |
-| `deck merge` | View merge queue status |
-| `deck version` | Print version |
+| `tack daemon` | Start the orchestrator daemon |
+| `tack plan <description>` | Create an objective and generate a plan |
+| `tack plan <desc> --simple` | Single-agent mode (no decomposition) |
+| `tack plans` | List all plans |
+| `tack show <plan-id>` | Show plan details with streams |
+| `tack approve <plan-id>` | Approve a plan for execution |
+| `tack reject <plan-id>` | Reject a plan |
+| `tack exec <objective-id>` | Manually trigger execution |
+| `tack status` | Show daemon status |
+| `tack agents` | List active agent sessions |
+| `tack watch` | Live stream of agent activity |
+| `tack logs <agent-id>` | Replay agent activity log |
+| `tack mail` | View escalation and message history |
+| `tack merge` | View merge queue status |
+| `tack version` | Print version |
 
 ---
 
 ## Project Layout
 
 ```
-.deck/
+.tack/
   config.yaml          # Runtime config: model, gates, concurrency, timeouts
   blueprints/          # Workflow definitions (ships with sensible defaults)
     stream.yaml        #   Per-stream: scout → build → lint → review → merge_ready
   rules/               # Project-specific agent guidance, scoped by file patterns
     project.yaml
   data/                # Managed by Deck: SQLite, activity logs
-    deck.db
+    tack.db
     activity/          # Per-agent JSONL activity logs
 ```
 

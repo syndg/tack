@@ -76,7 +76,7 @@ func (r *Registry) LoadDefaults() error {
 	return nil
 }
 
-// LoadFromDir loads blueprints from a directory (e.g., .deck/blueprints/ or ~/.config/deck/blueprints/).
+// LoadFromDir loads blueprints from a directory (e.g., .tack/blueprints/ or ~/.config/tack/blueprints/).
 // Blueprints loaded later override earlier ones with the same name.
 func (r *Registry) LoadFromDir(dir string) error {
 	entries, err := LoadDir(dir)

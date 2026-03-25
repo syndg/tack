@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/deck/internal/services/agents"
+	"github.com/syndg/tack/internal/services/agents"
 )
 
 var logsVerbose bool

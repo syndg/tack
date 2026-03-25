@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/syndg/deck/internal/sandbox"
+	"github.com/syndg/tack/internal/sandbox"
 )
 
 func TestMatchesLabels(t *testing.T) {
@@ -60,16 +60,16 @@ func TestAnsiEscapeStripping(t *testing.T) {
 func TestProvider_ListFiltering(t *testing.T) {
 	p := &Provider{
 		sandboxes: map[string]*DaytonaSandbox{
-			"sb-1": {labels: map[string]string{"deck.role": "builder", "deck.objective": "obj-1"}},
-			"sb-2": {labels: map[string]string{"deck.role": "lead", "deck.objective": "obj-1"}},
-			"sb-3": {labels: map[string]string{"deck.role": "builder", "deck.objective": "obj-2"}},
+			"sb-1": {labels: map[string]string{"tack.role": "builder", "tack.objective": "obj-1"}},
+			"sb-2": {labels: map[string]string{"tack.role": "lead", "tack.objective": "obj-1"}},
+			"sb-3": {labels: map[string]string{"tack.role": "builder", "tack.objective": "obj-2"}},
 		},
 	}
 
 	ctx := context.Background()
 
 	// Filter by role
-	result, err := p.List(ctx, map[string]string{"deck.role": "builder"})
+	result, err := p.List(ctx, map[string]string{"tack.role": "builder"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestProvider_ListFiltering(t *testing.T) {
 	}
 
 	// Filter by role + objective
-	result, err = p.List(ctx, map[string]string{"deck.role": "builder", "deck.objective": "obj-1"})
+	result, err = p.List(ctx, map[string]string{"tack.role": "builder", "tack.objective": "obj-1"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestProvider_ListFiltering(t *testing.T) {
 	}
 
 	// No match
-	result, err = p.List(ctx, map[string]string{"deck.role": "reviewer"})
+	result, err = p.List(ctx, map[string]string{"tack.role": "reviewer"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestProvider_DeleteNotFound(t *testing.T) {
 
 func TestProvider_GetFromLocalMap(t *testing.T) {
 	sb := &DaytonaSandbox{
-		labels: map[string]string{"deck.role": "builder"},
+		labels: map[string]string{"tack.role": "builder"},
 	}
 	p := &Provider{
 		sandboxes: map[string]*DaytonaSandbox{"sb-1": sb},
