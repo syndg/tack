@@ -115,7 +115,7 @@ func TestRuntime_Spawn_UploadsExtension(t *testing.T) {
 
 	proc, err := r.Spawn(context.Background(), sb, runtime.AgentOpts{
 		Overlay: "test overlay",
-		EnvVars: map[string]string{"DECK_DAEMON_URL": "http://localhost:9800"},
+		EnvVars: map[string]string{"TACK_DAEMON_URL": "http://localhost:9800"},
 	})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
@@ -208,8 +208,8 @@ func TestRuntime_Spawn_EnvVarsPassedThrough(t *testing.T) {
 	}
 
 	envVars := map[string]string{
-		"DECK_DAEMON_URL":  "http://localhost:9800",
-		"DECK_AGENT_TOKEN": "token-123",
+		"TACK_DAEMON_URL":  "http://localhost:9800",
+		"TACK_AGENT_TOKEN": "token-123",
 	}
 	_, err := r.Spawn(context.Background(), sb, runtime.AgentOpts{
 		Overlay: "test",
@@ -219,10 +219,10 @@ func TestRuntime_Spawn_EnvVarsPassedThrough(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	if sb.streamOpts.Env["DECK_DAEMON_URL"] != "http://localhost:9800" {
-		t.Error("DECK_DAEMON_URL not passed through")
+	if sb.streamOpts.Env["TACK_DAEMON_URL"] != "http://localhost:9800" {
+		t.Error("TACK_DAEMON_URL not passed through")
 	}
-	if sb.streamOpts.Env["DECK_AGENT_TOKEN"] != "token-123" {
-		t.Error("DECK_AGENT_TOKEN not passed through")
+	if sb.streamOpts.Env["TACK_AGENT_TOKEN"] != "token-123" {
+		t.Error("TACK_AGENT_TOKEN not passed through")
 	}
 }

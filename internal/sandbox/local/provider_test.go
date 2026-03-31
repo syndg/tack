@@ -25,7 +25,7 @@ func initTestRepo(t *testing.T) string {
 	runGitInDir(t, dir, "init")
 	runGitInDir(t, dir,
 		"-c", "user.email=tack-test@example.com",
-		"-c", "user.name=Deck Test",
+		"-c", "user.name=Tack Test",
 		"commit", "--allow-empty", "-m", "initial",
 	)
 	return dir
@@ -234,8 +234,8 @@ func TestExec_DoesNotInheritHostSecrets(t *testing.T) {
 	}
 
 	// Explicitly injected vars should work.
-	res, err = sb.Exec(ctx, "echo $DECK_TEST", sandbox.ExecOpts{
-		Env: map[string]string{"DECK_TEST": "injected"},
+	res, err = sb.Exec(ctx, "echo $TACK_TEST", sandbox.ExecOpts{
+		Env: map[string]string{"TACK_TEST": "injected"},
 	})
 	if err != nil {
 		t.Fatalf("Exec with env: %v", err)

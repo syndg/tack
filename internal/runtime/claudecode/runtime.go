@@ -56,11 +56,11 @@ func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.Ag
 
 	// 5. Set up env vars
 	env := make(map[string]string)
-	if daemonURL, ok := opts.EnvVars["DECK_DAEMON_URL"]; ok {
-		env["DECK_DAEMON_URL"] = daemonURL
+	if daemonURL, ok := opts.EnvVars["TACK_DAEMON_URL"]; ok {
+		env["TACK_DAEMON_URL"] = daemonURL
 	}
-	if agentToken, ok := opts.EnvVars["DECK_AGENT_TOKEN"]; ok {
-		env["DECK_AGENT_TOKEN"] = agentToken
+	if agentToken, ok := opts.EnvVars["TACK_AGENT_TOKEN"]; ok {
+		env["TACK_AGENT_TOKEN"] = agentToken
 	}
 	for k, v := range opts.EnvVars {
 		env[k] = v

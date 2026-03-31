@@ -1,4 +1,4 @@
-# Deck Phase 1: Foundation — PRD & Implementation Plan
+# Tack Phase 1: Foundation — PRD & Implementation Plan
 
 Establish the Go project structure, core domain types, database layer, event bus, HTTP daemon, and basic CLI. This phase produces a running daemon that accepts HTTP requests, persists data to SQLite, streams events via SSE, and a CLI client that can query status and create objectives.
 
@@ -10,11 +10,11 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 ## Phase 1: Project Scaffolding
 
 - [x] **1.1** Initialize Go module and directory structure
-  Create `go.mod` with module path `github.com/syndg/deck` and minimum Go 1.22.
+  Create `go.mod` with module path `github.com/syndg/tack` and minimum Go 1.22.
   Create the directory tree (empty dirs with `.gitkeep` where needed):
   ```
   cmd/daemon/
-  cmd/deck/
+  cmd/tack/
   internal/daemon/
   internal/sandbox/
   internal/runtime/
@@ -25,7 +25,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   internal/client/
   configs/defaults/
   ```
-  Create `.gitignore` with Go defaults: `*.exe`, `*.exe~`, `*.dll`, `*.so`, `*.dylib`, `*.test`, `*.out`, `vendor/`, `.env`, `*.db`, `*.db-wal`, `*.db-shm`, `deck`, `deck-daemon`, `/bin/`, `/dist/`.
+  Create `.gitignore` with Go defaults: `*.exe`, `*.exe~`, `*.dll`, `*.so`, `*.dylib`, `*.test`, `*.out`, `vendor/`, `.env`, `*.db`, `*.db-wal`, `*.db-shm`, `tack`, `daemon`, `/bin/`, `/dist/`.
   Files: `go.mod`, `.gitignore`
 
 - [x] **1.2** Add core dependencies
@@ -45,21 +45,21 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   import "fmt"
 
   func main() {
-      fmt.Println("deck daemon starting...")
+      fmt.Println("tack daemon starting...")
   }
   ```
-  Create `cmd/deck/main.go`:
+  Create `cmd/tack/main.go`:
   ```go
   package main
 
   import "fmt"
 
   func main() {
-      fmt.Println("deck cli")
+      fmt.Println("tack cli")
   }
   ```
-  Both must compile: `go build ./cmd/daemon` and `go build ./cmd/deck`.
-  Files: `cmd/daemon/main.go`, `cmd/deck/main.go`
+  Both must compile: `go build ./cmd/daemon` and `go build ./cmd/tack`.
+  Files: `cmd/daemon/main.go`, `cmd/tack/main.go`
 
 ---
 
@@ -275,7 +275,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   }
   ```
 
-  Import the sandbox package for the Sandbox interface reference: `github.com/syndg/deck/internal/sandbox`.
+  Import the sandbox package for the Sandbox interface reference: `github.com/syndg/tack/internal/sandbox`.
   File: `internal/runtime/runtime.go`
 
 - [x] **2.4** Create configuration types and YAML loader
@@ -338,7 +338,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
   Functions:
   - `Load(path string) (*Config, error)` — reads YAML file at path using `gopkg.in/yaml.v3`, returns parsed Config. If file not found, return `Default()`.
-  - `Default() *Config` — returns sensible defaults: listen `"0.0.0.0:9800"`, data_dir `"~/.deck/data"`, provider `"daytona"`, max_concurrent `8`, max_depth `2`, etc.
+  - `Default() *Config` — returns sensible defaults: listen `"0.0.0.0:9800"`, data_dir `"~/.tack/data"`, provider `"daytona"`, max_concurrent `8`, max_depth `2`, etc.
   - `(c *Config) ExpandPaths()` — expands `~` in DataDir to actual home directory using `os.UserHomeDir()`.
 
   Use `os.ReadFile` + `yaml.Unmarshal`. Import `gopkg.in/yaml.v3` and `os`.
@@ -374,7 +374,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
   `Open` must:
   1. Create dataDir if it doesn't exist (`os.MkdirAll`)
-  2. Open SQLite at `{dataDir}/deck.db` using driver name `"sqlite"`
+  2. Open SQLite at `{dataDir}/tack.db` using driver name `"sqlite"`
   3. Set pragmas: `PRAGMA journal_mode=WAL`, `PRAGMA foreign_keys=ON`, `PRAGMA busy_timeout=5000`
   4. Return `&DB{conn: sqlDB}`
 
@@ -497,7 +497,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   ```
   Same patterns as ObjectiveStore. Generate UUID if ID empty. Store times as Unix seconds.
 
-  Import `github.com/syndg/deck/internal/domain` and `github.com/google/uuid`.
+  Import `github.com/syndg/tack/internal/domain` and `github.com/google/uuid`.
   Files: `internal/db/objectives.go`, `internal/db/agents.go`
 
 - [x] **3.4** Create mail and events stores
@@ -563,7 +563,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   - `NewPersistentBus`: creates inner Bus, stores reference to EventStore.
   - `Publish`: insert event into store via `pb.store.Insert(context.Background(), &event)`, then call `pb.Bus.Publish(event)` to broadcast to subscribers. Log errors from Insert but don't fail (event bus should be resilient).
 
-  Import `github.com/syndg/deck/internal/domain`, `github.com/syndg/deck/internal/db`, `sync`, `log/slog`.
+  Import `github.com/syndg/tack/internal/domain`, `github.com/syndg/tack/internal/db`, `sync`, `log/slog`.
   Files: `internal/services/events/bus.go`, `internal/services/events/persistent.go`
 
 ---
@@ -593,7 +593,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   func (d *Daemon) Shutdown(ctx context.Context) error
   ```
   - `New`: expand config paths, open DB, run migrations, create all stores, create PersistentBus, create `http.ServeMux`, call `d.registerRoutes()`, create `http.Server` with the mux, store start time.
-  - `Start`: log "Deck daemon listening on {addr}", call `d.server.ListenAndServe()`. Return `http.ErrServerClosed` as nil (expected on shutdown).
+  - `Start`: log "Tack daemon listening on {addr}", call `d.server.ListenAndServe()`. Return `http.ErrServerClosed` as nil (expected on shutdown).
   - `Shutdown`: call `d.server.Shutdown(ctx)`, then `d.db.Close()`.
 
   Use `log/slog` for structured logging. Create a named logger: `slog.Default().With("component", "daemon")`.
@@ -663,7 +663,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
 - [x] **4.5** Wire daemon entry point
   Rewrite `cmd/daemon/main.go` to:
-  1. Parse `--config` flag (default: `~/.config/deck/config.yaml`)
+  1. Parse `--config` flag (default: `~/.config/tack/config.yaml`)
   2. Load config via `config.Load(configPath)` — falls back to defaults if file missing
   3. Call `config.ExpandPaths()` to resolve `~` in paths
   4. Create daemon via `daemon.New(cfg)`
@@ -680,7 +680,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 ## Phase 5: CLI Client
 
 - [x] **5.1** Create cobra CLI root and daemon command
-  Rewrite `cmd/deck/main.go` to just call `Execute()`:
+  Rewrite `cmd/tack/main.go` to just call `Execute()`:
   ```go
   package main
 
@@ -689,7 +689,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   }
   ```
 
-  Create `cmd/deck/root.go` with:
+  Create `cmd/tack/root.go` with:
   ```go
   var (
       cfgPath   string
@@ -697,14 +697,14 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   )
 
   var rootCmd = &cobra.Command{
-      Use:   "deck",
-      Short: "Deck - agentic workflow orchestrator",
+      Use:   "tack",
+      Short: "Tack - agentic workflow orchestrator",
   }
 
   func Execute() { rootCmd.Execute() }
 
   func init() {
-      rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "~/.config/deck/config.yaml", "config file path")
+      rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "~/.config/tack/config.yaml", "config file path")
       rootCmd.PersistentFlags().StringVar(&daemonURL, "daemon-url", "http://localhost:9800", "daemon HTTP address")
   }
   ```
@@ -713,7 +713,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   ```go
   var daemonCmd = &cobra.Command{
       Use:   "daemon",
-      Short: "Start the Deck daemon",
+      Short: "Start the Tack daemon",
       RunE: func(cmd *cobra.Command, args []string) error {
           // Same logic as cmd/daemon/main.go:
           // load config, create daemon, signal handling, start
@@ -723,7 +723,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Register with `rootCmd.AddCommand(daemonCmd)` in init().
 
   Import `github.com/spf13/cobra` and internal packages.
-  Files: `cmd/deck/main.go`, `cmd/deck/root.go`
+  Files: `cmd/tack/main.go`, `cmd/tack/root.go`
 
 - [x] **5.2** Create HTTP client for daemon communication
   Create `internal/client/client.go` with:
@@ -756,11 +756,11 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Add helper: `(c *Client) do(ctx, method, path, body) (*http.Response, error)` for common request logic.
   Handle non-2xx responses by returning an error with the status code and body.
 
-  Import: `net/http`, `encoding/json`, `bytes`, `fmt`, `context`, `io`, and `github.com/syndg/deck/internal/domain`.
+  Import: `net/http`, `encoding/json`, `bytes`, `fmt`, `context`, `io`, and `github.com/syndg/tack/internal/domain`.
   File: `internal/client/client.go`
 
-- [x] **5.3** Create `deck status` command
-  Create `cmd/deck/status.go` with:
+- [x] **5.3** Create `tack status` command
+  Create `cmd/tack/status.go` with:
   ```go
   var statusCmd = &cobra.Command{
       Use:   "status",
@@ -777,7 +777,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   Format output as a simple table using `fmt.Printf` with alignment.
   Example output:
   ```
-  Deck Daemon Status
+  Tack Daemon Status
     URL:      http://localhost:9800
     Uptime:   2h15m
     Objectives:
@@ -785,10 +785,10 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
       executing:  1
       completed:  5
   ```
-  File: `cmd/deck/status.go`
+  File: `cmd/tack/status.go`
 
-- [x] **5.4** Create `deck plan` command stub
-  Create `cmd/deck/plan.go` with:
+- [x] **5.4** Create `tack plan` command stub
+  Create `cmd/tack/plan.go` with:
   ```go
   var planCmd = &cobra.Command{
       Use:   "plan [description]",
@@ -805,7 +805,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   ```
   Register with `rootCmd.AddCommand(planCmd)` in init().
   This is a stub — full planning with planner agents comes in a later phase.
-  File: `cmd/deck/plan.go`
+  File: `cmd/tack/plan.go`
 
 ---
 
@@ -832,5 +832,5 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 | 17 | 4.5 Wire daemon entry point | 4 |
 | 18 | 5.1 Create cobra CLI root and daemon command | 5 |
 | 19 | 5.2 Create HTTP client for daemon communication | 5 |
-| 20 | 5.3 Create deck status command | 5 |
-| 21 | 5.4 Create deck plan command stub | 5 |
+| 20 | 5.3 Create tack status command | 5 |
+| 21 | 5.4 Create tack plan command stub | 5 |

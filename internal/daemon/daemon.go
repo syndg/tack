@@ -34,7 +34,7 @@ import (
 	"github.com/syndg/tack/internal/services/planner"
 )
 
-// Daemon is the main HTTP server that orchestrates all Deck services.
+// Daemon is the main HTTP server that orchestrates all Tack services.
 type Daemon struct {
 	cfg        *config.Config
 	db         *db.DB
@@ -378,7 +378,7 @@ func (d *Daemon) Start() error {
 			return fmt.Errorf("starting merge processor: %w", err)
 		}
 	}
-	d.logger.Info("Deck daemon listening", "addr", d.cfg.Daemon.Listen)
+	d.logger.Info("Tack daemon listening", "addr", d.cfg.Daemon.Listen)
 	err := d.server.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil

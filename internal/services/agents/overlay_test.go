@@ -45,7 +45,7 @@ func TestBuildOverlay_AllSections(t *testing.T) {
 	result := BuildOverlay(input)
 
 	sections := []string{
-		"# Deck Agent: builder-auth-1",
+		"# Tack Agent: builder-auth-1",
 		"## Role",
 		"## Task",
 		"## File Scope",
@@ -192,7 +192,7 @@ func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 	result := BuildPlannerOverlay(obj, "use bun for JS")
 
 	expected := []string{
-		"# Deck Agent: planner",
+		"# Tack Agent: planner",
 		"## Role",
 		"## Objective",
 		"## Project Guidance",

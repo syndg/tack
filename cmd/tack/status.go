@@ -23,7 +23,7 @@ var statusCmd = &cobra.Command{
 			return err
 		}
 
-		fmt.Println("Deck Daemon Status")
+		fmt.Println("Tack Daemon Status")
 		fmt.Printf("  %-12s %s\n", "URL:", daemonURL)
 		fmt.Printf("  %-12s %s\n", "Uptime:", status.Uptime)
 

@@ -1,8 +1,8 @@
-# Ledger: E2E Test Project for Deck Core Loop
+# Ledger: E2E Test Project for Tack Core Loop
 
 **Date:** 2026-03-13
 **Status:** Approved
-**Context:** Need a small, real project to test deck's Phases 1-5 end-to-end with multiple agents.
+**Context:** Need a small, real project to test tack's Phases 1-5 end-to-end with multiple agents.
 
 ---
 
@@ -10,7 +10,7 @@
 
 **Ledger** — an expense & subscription tracker REST API. Hono on Bun, SQLite via `bun:sqlite`, TypeScript. Located at `/Volumes/External/Coding/ledger`.
 
-Exists solely to exercise deck's core loop: planning → approval → dispatch → sub-execution (build → lint → review → merge) → complete.
+Exists solely to exercise tack's core loop: planning → approval → dispatch → sub-execution (build → lint → review → merge) → complete.
 
 ## Scaffold (pre-built)
 
@@ -51,7 +51,7 @@ Streams 1 and 2 run in parallel (independent). Stream 3 cascades after both comp
 
 ## What This Tests
 
-| Deck capability | How it's exercised |
+| Tack capability | How it's exercised |
 |----------------|-------------------|
 | Planner agent | Decomposes objective into streams with file scopes and dependencies |
 | Human approval gate | User reviews and approves the plan |
@@ -73,7 +73,7 @@ Streams 1 and 2 run in parallel (independent). Stream 3 cascades after both comp
 - AI conflict resolution (tier 3 merge — streams have isolated file scopes)
 - Escalation to human (would need a deliberate failure)
 
-## Deck Configuration
+## Tack Configuration
 
 The daemon needs to run against the ledger repo. Key config overrides:
 
@@ -93,22 +93,22 @@ The local sandbox provider creates worktrees from the ledger repo's git history.
 ```bash
 # 1. Start daemon pointed at ledger repo
 cd /Volumes/External/Coding/ledger
-deck daemon --config deck.yaml
+tack daemon --config tack.yaml
 
 # 2. Create objective
-deck objective create "Build an expense tracker API with: (1) expense CRUD — create, list, filter by category/date range, delete; (2) recurring subscriptions — create, list, cancel, with billing cycle tracking; (3) a summary endpoint that returns spending totals by category and month, including projected subscription costs."
+tack objective create "Build an expense tracker API with: (1) expense CRUD — create, list, filter by category/date range, delete; (2) recurring subscriptions — create, list, cancel, with billing cycle tracking; (3) a summary endpoint that returns spending totals by category and month, including projected subscription costs."
 
 # 3. Wait for planner → review plan
-deck plan show <plan-id>
+tack plan show <plan-id>
 
 # 4. Approve
-deck plan approve <plan-id>
+tack plan approve <plan-id>
 
 # 5. Watch execution
-deck status <objective-id>
+tack status <objective-id>
 
 # 6. Check result
-deck objective get <objective-id>
+tack objective get <objective-id>
 ```
 
 ## Success Criteria

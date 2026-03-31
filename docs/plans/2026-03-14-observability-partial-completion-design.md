@@ -2,16 +2,16 @@
 
 **Date:** 2026-03-14
 **Status:** Approved
-**Context:** After two test runs on the splitwise project, several gaps prevent deck from running unsupervised: no visibility into agent activity, partial stream failures stall the whole pipeline, no timeout enforcement, and manual merging required.
+**Context:** After two test runs on the splitwise project, several gaps prevent tack from running unsupervised: no visibility into agent activity, partial stream failures stall the whole pipeline, no timeout enforcement, and manual merging required.
 
 ---
 
 ## Summary
 
-Five changes that make deck operational without constant human intervention:
+Five changes that make tack operational without constant human intervention:
 
 1. **Agent activity events** — pipe process events to event bus + JSONL log files
-2. **`deck watch` / `deck logs`** — CLI commands for live monitoring and replay
+2. **`tack watch` / `tack logs`** — CLI commands for live monitoring and replay
 3. **Partial completion** — merge succeeded streams, skip failed ones, mark objective `partial`
 4. **Configurable timeouts** — per-role max duration and idle timeout
 5. **Base branch config** — configurable PR target branch
@@ -30,7 +30,7 @@ Publish agent activity through two channels:
 
 **In-memory (event bus):** New event type `agent.activity` published from Pi/Claude-code process handlers as events arrive. No buffering. Enables live streaming via SSE `/events` endpoint.
 
-**Persistent (JSONL files):** Per-agent log file at `.deck/data/logs/{agent-id}.jsonl`. Append-only, one JSON object per line. Files cleaned up when sandbox is removed.
+**Persistent (JSONL files):** Per-agent log file at `.tack/data/logs/{agent-id}.jsonl`. Append-only, one JSON object per line. Files cleaned up when sandbox is removed.
 
 Activity payload structure:
 
@@ -55,9 +55,9 @@ type AgentActivityPayload struct {
 
 ---
 
-## 2. CLI Commands: `deck watch` and `deck logs`
+## 2. CLI Commands: `tack watch` and `tack logs`
 
-### `deck watch`
+### `tack watch`
 
 Subscribes to SSE `/events` endpoint. Renders a compact streaming log.
 
@@ -71,9 +71,9 @@ Three verbosity levels:
 
 Filters:
 
-- `deck watch --stream <id>` — single stream
-- `deck watch --agent <id>` — single agent
-- `deck watch --objective <id>` — single objective
+- `tack watch --stream <id>` — single stream
+- `tack watch --agent <id>` — single agent
+- `tack watch --objective <id>` — single objective
 
 Output format:
 
@@ -89,14 +89,14 @@ Output format:
 16:02:12 [backend-fixes] merged ✓
 ```
 
-### `deck logs <agent-id>`
+### `tack logs <agent-id>`
 
-Reads the JSONL file from `.deck/data/logs/{agent-id}.jsonl`. Same verbosity flags. If the agent is still running, tails the file live.
+Reads the JSONL file from `.tack/data/logs/{agent-id}.jsonl`. Same verbosity flags. If the agent is still running, tails the file live.
 
 ### Implementation
 
-- `cmd/deck/watch.go`: new cobra command, connects to SSE, formats events
-- `cmd/deck/logs.go`: new cobra command, reads JSONL, supports `--follow` for live tailing
+- `cmd/tack/watch.go`: new cobra command, connects to SSE, formats events
+- `cmd/tack/logs.go`: new cobra command, reads JSONL, supports `--follow` for live tailing
 - SSE endpoint `/events` already exists — no changes needed to the daemon
 
 ---
@@ -202,6 +202,6 @@ daemon:
 
 1. **Agent activity events + JSONL logging** — foundation for everything else
 2. **Configurable timeouts** — depends on activity events for idle reset
-3. **`deck watch` + `deck logs`** — CLI consumers of the event stream
+3. **`tack watch` + `tack logs`** — CLI consumers of the event stream
 4. **Partial completion** — independent, can be done in parallel
 5. **Base branch config** — trivial, do alongside anything

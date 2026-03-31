@@ -18,7 +18,7 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 
 ## Task 1.2: Add mail HTTP routes
 
-- Added `mailBroker *mail.Broker` field to `Daemon` struct in `daemon.go` with import alias `mail "github.com/syndg/deck/internal/services/mail"`.
+- Added `mailBroker *mail.Broker` field to `Daemon` struct in `daemon.go` with import alias `mail "github.com/syndg/tack/internal/services/mail"`.
 - Registered 4 routes: `POST /mail`, `GET /mail/{agentName}/unread`, `POST /mail/{id}/read`, `POST /mail/{agentName}/read-all`.
 - `handleSendMail` decodes JSON body into `domain.MailMessage` and calls `broker.Send()` for all messages — broadcast routing is handled internally by the broker (no explicit `IsBroadcast` check needed in the handler).
 - `handleMarkMailRead` parses the path `{id}` as int64 via `strconv.ParseInt`; returns 400 on invalid input.
@@ -29,7 +29,7 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 ## Task 2.1: Implement local sandbox provider
 
 - Created `internal/sandbox/local/provider.go` with `Provider` and `LocalSandbox` structs, both satisfying the `sandbox.SandboxProvider` and `sandbox.Sandbox` interfaces respectively.
-- Branch naming follows `deck/{objective[:8]}/{role}-{id[:8]}` pattern; falls back to `"agent"` if `deck.role` label is absent.
+- Branch naming follows `tack/{objective[:8]}/{role}-{id[:8]}` pattern; falls back to `"agent"` if `tack.role` label is absent.
 - `Exec` uses `sh -c` for shell execution; env is built by layering OS env → sandbox `envVars` → per-call `opts.Env` (later entries shadow earlier ones via shell semantics).
 - Non-zero exit codes from `Exec` are surfaced via `ExecResult.ExitCode` rather than as Go errors — only execution failures (e.g., exec not found) return an error.
 - `Stop` is a no-op for the worktree itself (worktree persists until `Delete`); it only flips status to `"stopped"`. `Start` validates current status is `"stopped"` before transitioning.
@@ -40,12 +40,12 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 
 - Created `internal/services/dispatch/spawner.go` with `SpawnRequest`, `SpawnResult`, `Spawner`, `NewSpawner`, `Spawn`, and `Kill`.
 - Added `UpdateSandboxAndStatus(ctx, id, sandboxID, status)` to `internal/db/agents.go` — needed to atomically set both `sandbox_id` and `status = "running"` after the process is spawned; `UpdateStatus` alone was insufficient.
-- Added `daemonURL string` field and constructor parameter (not in PRD spec) — required to populate `DECK_DAEMON_URL` env var; there was no other injection point.
+- Added `daemonURL string` field and constructor parameter (not in PRD spec) — required to populate `TACK_DAEMON_URL` env var; there was no other injection point.
 - `Kill` only does session state management (marks "failed", publishes EventAgentFailed) — cannot kill the actual process since the spawner does not track processes internally per PRD design.
 - Rule `ToolScope` → `tools.ToolScope` conversion is done inline in `Spawn`; `rules.ToolScope` and `tools.ToolScope` have identical shape (`Include`/`Exclude []string`) so no adapter type is needed.
 - `QualityGates` in `OverlayInput` is left empty — spawner has no access to plan data and the PRD's `SpawnRequest` does not include gates; expected to be added to `SpawnRequest` by the coordinator (future task).
-- Agent name format: `"{role}-{objID[:8]}-{sessID[:8]}"` for overlay; sandbox name: `"deck-{objID[:8]}-{role}-{sessID[:8]}"` per PRD spec.
-- `DECK_AGENT_TOKEN` is a freshly generated UUID per spawn; the coordinator/wiring layer will need to associate this token with the session if auth is required.
+- Agent name format: `"{role}-{objID[:8]}-{sessID[:8]}"` for overlay; sandbox name: `"tack-{objID[:8]}-{role}-{sessID[:8]}"` per PRD spec.
+- `TACK_AGENT_TOKEN` is a freshly generated UUID per spawn; the coordinator/wiring layer will need to associate this token with the session if auth is required.
 
 ## Task 4.1: Create stream scheduler
 
@@ -79,12 +79,12 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 - **Double-spawn mitigation**: both `handleStreamReady` and `HandleBlueprintRefStep`'s `EventStreamReady` path check `stream.Status == "pending"` and call `scheduler.MarkExecuting` before spawning. A theoretical race window exists between the DB read and the UPDATE — accepted as Phase 4 limitation; fix deferred to Phase 5+ with a DB-level CAS.
 - **`runExecution`**: persists execution state after each `engine.Advance()`; exits on `completed`, `failed`, or `waiting_human` (human resume deferred to task 7.x API routes).
 
-## Task 7.3: Create deck exec command
+## Task 7.3: Create tack exec command
 
-- Created `cmd/deck/exec.go` with `execCmd` — a single-arg cobra command that calls `client.ExecuteObjective` and prints a confirmation message.
+- Created `cmd/tack/exec.go` with `execCmd` — a single-arg cobra command that calls `client.ExecuteObjective` and prints a confirmation message.
 - Follows identical pattern to `approve.go`/`reject.go`: `init()` registers with `rootCmd`, command uses `daemonURL` from root, delegates entirely to the client method.
 - No new helpers needed; `client.ExecuteObjective` was already implemented in task 7.2.
-- Package builds cleanly with `go build ./cmd/deck/...`.
+- Package builds cleanly with `go build ./cmd/tack/...`.
 
 ## Task 7.2: Add execution and mail client methods
 
@@ -100,7 +100,7 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 
 - Created `internal/runtime/claudecode/runtime.go` with `Runtime` and `ClaudeCodeProcess` structs implementing `runtime.AgentRuntime` and `runtime.AgentProcess` interfaces.
 - `sandbox.Sandbox.Exec()` takes a `string` command (not `[]string`); prompt is shell-quoted using single-quote wrapping with `'\''` escape for embedded single quotes.
-- Env var setup copies all of `opts.EnvVars` into the exec env (includes `DECK_DAEMON_URL` and `DECK_AGENT_TOKEN` if present) — no special pre-extraction needed beyond the loop.
+- Env var setup copies all of `opts.EnvVars` into the exec env (includes `TACK_DAEMON_URL` and `TACK_AGENT_TOKEN` if present) — no special pre-extraction needed beyond the loop.
 - Goroutine closes both `doneCh` and `outputCh` via defers on exit; `Wait()` blocks on `doneCh`, then reads the result under the mutex.
 - `Kill()` is idempotent (guarded by `killed` flag + mutex); calls `cancel()` to propagate cancellation into `sandbox.Exec`.
 - Non-zero exit codes produce a `AgentResult{Success: false}` with stderr in `Error`; stdout is emitted as an `"output"` event regardless of success.
@@ -119,14 +119,14 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 - `handleKillAgent` and `handleListAgents`/`handleGetAgent` guard with 503 where applicable; all nil-guard with 503 for coordinator/spawner.
 - Package builds cleanly with `go build ./internal/db/... ./internal/services/dispatch/... ./internal/daemon/...`.
 
-## Task 7.4: Create deck agents command
+## Task 7.4: Create tack agents command
 
-- Created `cmd/deck/agents.go` with `agentsCmd` (list all agent sessions) and `killAgentCmd` (terminate an agent by ID).
+- Created `cmd/tack/agents.go` with `agentsCmd` (list all agent sessions) and `killAgentCmd` (terminate an agent by ID).
 - `agentsCmd` prints an aligned table with columns: ID | ROLE | OBJECTIVE | STREAM | SANDBOX | STATUS | CREATED, using `text/tabwriter`; included SANDBOX column per the comment spec even though the example output omits it.
 - Reuses `truncateID` and `timeAgo` helpers defined in `plans.go` (same `main` package) — no duplication needed.
 - `killAgentCmd` calls `c.KillAgent(ctx, id)` and prints `"Agent {id} terminated."` on success.
 - `init()` registers `killAgentCmd` as a subcommand of `agentsCmd`, then adds `agentsCmd` to `rootCmd`.
-- Package builds cleanly with `go build ./cmd/deck/...`.
+- Package builds cleanly with `go build ./cmd/tack/...`.
 
 ## Task 8.1: Wire execution layer into daemon
 
@@ -148,14 +148,14 @@ Phase 3 findings: `docs/phase3/FINDINGS.md`
 - The trigger flow works end-to-end: `POST /plans/{id}/approve` → `ApprovePlan` → `Transition(→approved)` → publishes `EventObjectiveUpdated{to: "approved"}` → coordinator goroutine calls `StartExecution` → spawns `runExecution` goroutine.
 - `go build ./...` passes cleanly.
 
-## Task 7.5: Create deck mail command
+## Task 7.5: Create tack mail command
 
-- Created `cmd/deck/mail.go` with `mailCmd` (view unread mail) and `sendMailCmd` (send mail) as a subcommand.
+- Created `cmd/tack/mail.go` with `mailCmd` (view unread mail) and `sendMailCmd` (send mail) as a subcommand.
 - `mailCmd` fetches unread messages via `c.ListMail()` and prints them in the spec's `#N FROM: ... TYPE: ... TIME: ...` format with the payload indented 4 spaces; prints a "no unread mail" message when empty.
 - `sendMailCmd` takes `[to] [type] [payload]` positional args plus `--objective` (required flag); sets `From` to `"@human"` since the CLI user is a human operator.
 - `mailObjective` is a package-level var (not inside `init`) to avoid re-declaration issues; `sendMailCmd.MarkFlagRequired("objective")` enforces the flag before the command runs.
 - Reuses `timeAgo` helper from `plans.go` (same `main` package) — no duplication needed.
-- Package builds cleanly with `go build ./cmd/deck/...`.
+- Package builds cleanly with `go build ./cmd/tack/...`.
 
 ## Task 8.3: Add unit tests
 

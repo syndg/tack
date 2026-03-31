@@ -173,7 +173,7 @@ Use auth.NewContext() wrapper instead.
 
 If no guidance is provided (e.g., the fix was external — updated a dependency, fixed config), the stream retries with just the original error context.
 
-CLI: `deck retry <execution-id> --guidance "use auth.NewContext() wrapper"`
+CLI: `tack retry <execution-id> --guidance "use auth.NewContext() wrapper"`
 
 ### 6. Escalation Configuration
 

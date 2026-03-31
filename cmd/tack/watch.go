@@ -236,14 +236,14 @@ func toolSummary(tool, content string) string {
 			}
 			return "$ " + cmd
 		}
-	case "deck_done":
+	case "tack_done":
 		if s, ok := args["summary"].(string); ok {
 			if len(s) > 80 {
 				s = s[:80] + "..."
 			}
 			return "done: " + s
 		}
-	case "deck_escalate":
+	case "tack_escalate":
 		if r, ok := args["reason"].(string); ok {
 			if len(r) > 80 {
 				r = r[:80] + "..."

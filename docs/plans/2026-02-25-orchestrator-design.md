@@ -1,4 +1,4 @@
-# Deck — Agentic Workflow Orchestrator Design
+# Tack — Agentic Workflow Orchestrator Design
 
 **Date:** 2026-02-25
 **Status:** Draft — Under Review
@@ -9,26 +9,26 @@
 
 ## Evolution
 
-The MVP defined Deck as a terminal-native TUI for embedding agent sessions, reviewing diffs, and running commands. This document evolves Deck into a **daemon-first agentic workflow orchestrator** — a system that manages the full lifecycle of AI-assisted coding work: **plan, execute, review, merge**.
+The MVP defined Tack as a terminal-native TUI for embedding agent sessions, reviewing diffs, and running commands. This document evolves Tack into a **daemon-first agentic workflow orchestrator** — a system that manages the full lifecycle of AI-assisted coding work: **plan, execute, review, merge**.
 
 The MVP's TUI becomes one client interface into a headless orchestration engine that runs anywhere.
 
-### Deck as a Harness Engineering Framework
+### Tack as a Harness Engineering Framework
 
-OpenAI's "harness engineering" discipline — building infrastructure, constraints, and feedback loops that enable AI agents to operate reliably — describes exactly what Deck is. But where OpenAI and Stripe built proprietary harnesses for themselves, **Deck is the open-source, configurable harness framework that lets anyone build their own.**
+OpenAI's "harness engineering" discipline — building infrastructure, constraints, and feedback loops that enable AI agents to operate reliably — describes exactly what Tack is. But where OpenAI and Stripe built proprietary harnesses for themselves, **Tack is the open-source, configurable harness framework that lets anyone build their own.**
 
-The four harness functions map directly to Deck's architecture:
+The four harness functions map directly to Tack's architecture:
 
-| Harness Function | What It Means | Deck's Implementation |
+| Harness Function | What It Means | Tack's Implementation |
 |---|---|---|
 | **Constrain** | Architectural boundaries, dependency rules | Blueprint state machine, file scope isolation, deterministic gates |
 | **Inform** | Right context at the right time | Scoped rules, agent overlays, repo-aware context pipeline |
 | **Verify** | Testing, linting, CI validation | Quality gates in sandboxes, max retry cap, independent verification |
 | **Correct** | Feedback loops, self-repair | Watchdog triage, escalation chain, learned rules from failures |
 
-**Key insight from the field:** LangChain improved from 52.8% to 66.5% on Terminal Bench 2.0 by modifying only the harness, not the model. The harness matters more than the model. Deck's value proposition is the harness — users bring their own models, sandboxes, and quality gates.
+**Key insight from the field:** LangChain improved from 52.8% to 66.5% on Terminal Bench 2.0 by modifying only the harness, not the model. The harness matters more than the model. Tack's value proposition is the harness — users bring their own models, sandboxes, and quality gates.
 
-Everything in Deck that isn't an LLM decision is harness. The blueprint engine, the merge queue, the scoped rules, the tool curation, the watchdog — these are the deterministic infrastructure that makes agents reliable. The LLM is the horse; Deck is the equipment that channels its power.
+Everything in Tack that isn't an LLM decision is harness. The blueprint engine, the merge queue, the scoped rules, the tool curation, the watchdog — these are the deterministic infrastructure that makes agents reliable. The LLM is the horse; Tack is the equipment that channels its power.
 
 ---
 
@@ -44,7 +44,7 @@ Solo developers using AI coding agents face compounding bottlenecks:
 
 ## Solution
 
-Deck is a **daemon-first orchestrator** that turns a solo developer into a team lead. You define objectives, collaborate on plans, approve decompositions, and review results. Deck handles everything in between — spawning agent teams in isolated sandboxes, routing communication between them, managing merge conflicts, and keeping you informed from any device.
+Tack is a **daemon-first orchestrator** that turns a solo developer into a team lead. You define objectives, collaborate on plans, approve decompositions, and review results. Tack handles everything in between — spawning agent teams in isolated sandboxes, routing communication between them, managing merge conflicts, and keeping you informed from any device.
 
 ---
 
@@ -82,13 +82,13 @@ All communication uses **HTTP REST + SSE**. No gRPC, no protobuf, no codegen.
 | Daemon → Client (live events) | SSE (Server-Sent Events) | Dashboard updates, status changes, escalation notifications |
 | Pi Extension → Daemon (from sandbox) | HTTP REST | Fetch unread mail, report status, signal completion. Uses `fetch()` — zero dependencies. |
 | Daemon → Pi Agent (control) | Pi RPC (stdin/stdout JSON) | Send prompts, steer mid-execution. Runs over sandbox `Exec()`. |
-| TUI ↔ Sandbox PTY (session view) | Sandbox Provider PTY API | Bidirectional terminal I/O. Daytona uses WebSocket internally; other providers may use `docker exec`, SSH, etc. Deck doesn't manage the transport — the provider does. |
+| TUI ↔ Sandbox PTY (session view) | Sandbox Provider PTY API | Bidirectional terminal I/O. Daytona uses WebSocket internally; other providers may use `docker exec`, SSH, etc. Tack doesn't manage the transport — the provider does. |
 
 **Why not gRPC:**
 - One server, handful of clients — proto codegen overhead isn't justified
 - Pi extension (TypeScript in sandbox) would need a gRPC client library; `fetch()` is zero-dep
 - SSE handles the only server-push need (event stream to clients)
-- PTY bidirectional streaming is handled by the sandbox provider, not by Deck's transport
+- PTY bidirectional streaming is handled by the sandbox provider, not by Tack's transport
 
 ---
 
@@ -97,13 +97,13 @@ All communication uses **HTTP REST + SSE**. No gRPC, no protobuf, no codegen.
 ### Two Binaries, One System
 
 ```
-deck daemon    — Headless orchestrator. Runs on VPS, home server, or laptop.
+tack daemon    — Headless orchestrator. Runs on VPS, home server, or laptop.
                  Manages agent lifecycle, planning, mail, merge queue, sandboxes.
                  Exposes HTTP REST API + SSE event stream.
 
-deck           — TUI client (Bubble Tea). Connects to local or remote daemon.
+tack           — TUI client (Bubble Tea). Connects to local or remote daemon.
                  Session viewer, diff review, plan editor, dashboard.
-                 Also serves as CLI: deck plan, deck status, deck approve.
+                 Also serves as CLI: tack plan, tack status, tack approve.
 ```
 
 ### System Diagram
@@ -120,7 +120,7 @@ deck           — TUI client (Bubble Tea). Connects to local or remote daemon.
          └───────────────┼──────────────────────┘
                          │ HTTP + SSE
          ┌───────────────▼───────────────────────────────────────┐
-         │                 DECK DAEMON                           │
+         │                 TACK DAEMON                           │
          │                                                       │
          │  ┌─────────────────────────────────────────────────┐  │
          │  │              Service Layer                      │  │
@@ -175,7 +175,7 @@ deck           — TUI client (Bubble Tea). Connects to local or remote daemon.
 
 ### 1. Objectives
 
-An **objective** is the unit of work you give Deck. It's a natural language description of what you want done.
+An **objective** is the unit of work you give Tack. It's a natural language description of what you want done.
 
 ```
 "Refactor the auth module to use JWT instead of session cookies"
@@ -262,7 +262,7 @@ Four agent capabilities, mapped to Pi agent instances:
 
 ### 4. Sandboxes (Provider-Agnostic)
 
-Each agent (except planner) runs in an isolated sandbox. Deck defines a **Sandbox Provider interface** — an abstraction over any sandbox backend. Daytona is the first implementation; future providers (Docker, E2B, Fly Machines, local git worktrees) implement the same interface.
+Each agent (except planner) runs in an isolated sandbox. Tack defines a **Sandbox Provider interface** — an abstraction over any sandbox backend. Daytona is the first implementation; future providers (Docker, E2B, Fly Machines, local git worktrees) implement the same interface.
 
 #### Sandbox Provider Interface
 
@@ -314,7 +314,7 @@ type PTYHandle interface {
 // CreateOpts configures a new sandbox.
 type CreateOpts struct {
     Name       string
-    Labels     map[string]string       // deck.objective, deck.stream, deck.role
+    Labels     map[string]string       // tack.objective, tack.stream, tack.role
     Snapshot   string                  // base snapshot to clone from
     Resources  ResourceSpec            // CPU, memory, disk
     EnvVars    map[string]string
@@ -325,14 +325,14 @@ type CreateOpts struct {
 }
 ```
 
-The rest of Deck's codebase only ever touches these interfaces. The Daytona implementation lives in `internal/sandbox/daytona/`. Config selects the provider:
+The rest of Tack's codebase only ever touches these interfaces. The Daytona implementation lives in `internal/sandbox/daytona/`. Config selects the provider:
 
 ```yaml
 sandbox:
   provider: "daytona"    # future: "docker", "e2b", "local"
   daytona:
     api_key: "${DAYTONA_API_KEY}"
-    default_snapshot: "deck-myproject"
+    default_snapshot: "tack-myproject"
     # ...
 ```
 
@@ -343,25 +343,25 @@ The Daytona provider wraps the Daytona TypeScript/Go SDK:
 ```go
 // internal/sandbox/daytona/provider.go
 sandbox, err := provider.Create(ctx, sandbox.CreateOpts{
-    Name:     fmt.Sprintf("deck-%s-%s", objectiveID, agentRole),
+    Name:     fmt.Sprintf("tack-%s-%s", objectiveID, agentRole),
     Snapshot: projectSnapshot,
     Labels:   map[string]string{
-        "deck.objective": objectiveID,
-        "deck.stream":    streamID,
-        "deck.role":      "builder",
+        "tack.objective": objectiveID,
+        "tack.stream":    streamID,
+        "tack.role":      "builder",
     },
     Resources: sandbox.ResourceSpec{CPU: 2, Memory: 4, Disk: 10},
     AutoStop:   60 * time.Minute,
     AutoDelete: 180 * time.Minute,
     Volumes: []sandbox.VolumeMount{{
         VolumeID:  sharedVolume.ID,
-        MountPath: "/deck/shared",
+        MountPath: "/tack/shared",
         Subpath:   objectiveID,
     }},
 })
 ```
 
-Daytona's native PTY WebSocket API powers the TUI session view. When you drop into an agent session, Deck calls `sandbox.ConnectPTY()` which maps to Daytona's `createPty()` / `connectPty()` — bidirectional terminal streaming is handled entirely by Daytona's SDK internally. Deck never manages WebSocket connections directly.
+Daytona's native PTY WebSocket API powers the TUI session view. When you drop into an agent session, Tack calls `sandbox.ConnectPTY()` which maps to Daytona's `createPty()` / `connectPty()` — bidirectional terminal streaming is handled entirely by Daytona's SDK internally. Tack never manages WebSocket connections directly.
 
 #### Why Sandboxes Over Git Worktrees
 
@@ -374,12 +374,12 @@ Daytona's native PTY WebSocket API powers the TUI session view. When you drop in
 
 **Snapshot strategy:**
 ```
-Base snapshot: "deck-{project}"
+Base snapshot: "tack-{project}"
   - Repo cloned
   - Dependencies installed
   - LSP servers configured
   - Pi agent runtime installed
-  - Deck agent hooks pre-configured
+  - Tack agent hooks pre-configured
 
 Per-sandbox:
   - Clone from snapshot (<90ms via Daytona, varies by provider)
@@ -390,7 +390,7 @@ Per-sandbox:
 
 ### 5. Mail System (Inter-Agent Communication)
 
-SQLite-backed message broker on the daemon. Agents never talk directly — all mail routes through Deck.
+SQLite-backed message broker on the daemon. Agents never talk directly — all mail routes through Tack.
 
 **Schema:**
 ```sql
@@ -410,7 +410,7 @@ CREATE INDEX idx_mail_to_unread ON mail(to_agent, read, created_at);
 
 **Delivery mechanism:**
 
-Agents run Pi with a custom Deck extension. The extension registers a `UserPromptSubmit` hook:
+Agents run Pi with a custom Tack extension. The extension registers a `UserPromptSubmit` hook:
 
 ```
 On every prompt submission:
@@ -421,14 +421,14 @@ On every prompt submission:
   5. Agent sees mail as part of its input — no choice to ignore it
 ```
 
-The extension also registers Deck tools that appear in Pi's tool list:
+The extension also registers Tack tools that appear in Pi's tool list:
 
 ```
-deck.mail.send      — Send message to another agent or broadcast
-deck.mail.reply     — Reply to a specific message
-deck.status.report  — Report progress to lead/coordinator
-deck.escalate       — Escalate issue to human (triggers notification)
-deck.done           — Signal task completion with summary
+tack.mail.send      — Send message to another agent or broadcast
+tack.mail.reply     — Reply to a specific message
+tack.status.report  — Report progress to lead/coordinator
+tack.escalate       — Escalate issue to human (triggers notification)
+tack.done           — Signal task completion with summary
 ```
 
 **Why this works:** Agents don't need to "remember" to check mail. The hook fires on every interaction, injecting context automatically. The tools are available but the critical path (receiving mail) doesn't depend on agents using them.
@@ -444,10 +444,10 @@ deck.done           — Signal task completion with summary
 
 Inspired by Stripe's blueprint pattern: a state machine that interleaves deterministic code steps with agentic (LLM-driven) steps.
 
-**Blueprints are user-configurable YAML files, not hardcoded logic.** They live in `.deck/blueprints/` per project or `~/.config/deck/blueprints/` globally. Deck ships sensible defaults; users write their own for their specific workflows.
+**Blueprints are user-configurable YAML files, not hardcoded logic.** They live in `.tack/blueprints/` per project or `~/.config/tack/blueprints/` globally. Tack ships sensible defaults; users write their own for their specific workflows.
 
 ```yaml
-# .deck/blueprints/feature.yaml — shipped default
+# .tack/blueprints/feature.yaml — shipped default
 name: "Feature Implementation"
 description: "Plan, build, review, and merge a new feature"
 trigger: "default"  # used when no blueprint is specified
@@ -472,7 +472,7 @@ steps:
 
   - id: per_stream
     type: blueprint_ref
-    ref: ".deck/blueprints/stream.yaml"  # nested blueprint per stream
+    ref: ".tack/blueprints/stream.yaml"  # nested blueprint per stream
     next: merge
 
   - id: merge
@@ -487,7 +487,7 @@ steps:
 ```
 
 ```yaml
-# .deck/blueprints/stream.yaml — per-stream execution
+# .tack/blueprints/stream.yaml — per-stream execution
 name: "Stream Execution"
 steps:
   - id: scout
@@ -518,7 +518,7 @@ steps:
 ```
 
 ```yaml
-# .deck/blueprints/hotfix.yaml — user-defined for quick fixes
+# .tack/blueprints/hotfix.yaml — user-defined for quick fixes
 name: "Hotfix"
 description: "Single-agent fix with minimal ceremony"
 trigger: "manual"
@@ -546,7 +546,7 @@ steps:
     action: mark_complete
 ```
 
-**Blueprint selection:** The Planner can recommend a blueprint based on task complexity (simple bug = `hotfix.yaml`, multi-stream feature = `feature.yaml`). Users can also specify: `deck plan "fix the auth bug" --blueprint hotfix`.
+**Blueprint selection:** The Planner can recommend a blueprint based on task complexity (simple bug = `hotfix.yaml`, multi-stream feature = `feature.yaml`). Users can also specify: `tack plan "fix the auth bug" --blueprint hotfix`.
 
 **Step types:**
 - `agent` — LLM-driven. Spawns an agent with the specified role.
@@ -620,22 +620,22 @@ FIFO merge queue with tiered conflict resolution:
 
 **Flow:**
 1. Lead signals `merge_ready` for a stream's branch
-2. Deck enqueues in merge queue
+2. Tack enqueues in merge queue
 3. Processes FIFO — sequential for deterministic history
 4. Runs quality gates after merge (tests, lint, typecheck)
 5. On failure: retry once with a fixer agent, then escalate
 6. On success: mark stream as merged, notify lead
 
-**Dependency handling:** If stream_2 depends on stream_1, stream_2's merge is held until stream_1 merges. Deck enforces this from the plan's dependency graph.
+**Dependency handling:** If stream_2 depends on stream_1, stream_2's merge is held until stream_1 merges. Tack enforces this from the plan's dependency graph.
 
-### 8. Scoped Rules (`.deck/rules/`)
+### 8. Scoped Rules (`.tack/rules/`)
 
 **Every mistake becomes a rule.** When a Builder, Reviewer, or Scout agent fails and a human corrects it, the pattern should be captured as a scoped rule that prevents future agents from making the same mistake. This is the compounding loop that makes the harness smarter over time.
 
-Rules live in `.deck/rules/` as markdown files with glob-scoped frontmatter:
+Rules live in `.tack/rules/` as markdown files with glob-scoped frontmatter:
 
 ```yaml
-# .deck/rules/auth-patterns.md
+# .tack/rules/auth-patterns.md
 ---
 scope: "src/auth/**"
 ---
@@ -647,7 +647,7 @@ scope: "src/auth/**"
 ```
 
 ```yaml
-# .deck/rules/testing.md
+# .tack/rules/testing.md
 ---
 scope: "**/*.test.ts"
 ---
@@ -658,7 +658,7 @@ scope: "**/*.test.ts"
 ```
 
 ```yaml
-# .deck/rules/payments.md
+# .tack/rules/payments.md
 ---
 scope: "src/payments/**"
 priority: high
@@ -671,7 +671,7 @@ priority: high
 
 **How rules are delivered to agents:**
 
-When the daemon constructs an agent's context package, it scans `.deck/rules/` for files whose `scope` glob matches the agent's assigned files. Matching rules are injected into the agent overlay alongside the task spec. The agent sees them as part of its system instructions — not optional reading.
+When the daemon constructs an agent's context package, it scans `.tack/rules/` for files whose `scope` glob matches the agent's assigned files. Matching rules are injected into the agent overlay alongside the task spec. The agent sees them as part of its system instructions — not optional reading.
 
 ```
 Agent overlay for builder-payments-1:
@@ -679,16 +679,16 @@ Agent overlay for builder-payments-1:
   2. Task spec (from lead)
   3. File scope (src/payments/**)
   4. Matched rules:           ← auto-attached
-     - .deck/rules/payments.md (scope: src/payments/**)
-     - .deck/rules/testing.md  (scope: **/*.test.ts)
+     - .tack/rules/payments.md (scope: src/payments/**)
+     - .tack/rules/testing.md  (scope: **/*.test.ts)
   5. Quality gates
   6. Communication config
 ```
 
 **Rule sources:**
 - **Manual:** Developer writes rules based on project conventions
-- **Learned (future):** When a human corrects an agent and the correction reveals a pattern, the daemon prompts: "Save this as a rule for `src/auth/**`?" Stored in `.deck/rules/learned/` with timestamp and provenance.
-- **Inherited:** Global rules in `~/.config/deck/rules/` apply to all projects (e.g., "always use Bun, not npm")
+- **Learned (future):** When a human corrects an agent and the correction reveals a pattern, the daemon prompts: "Save this as a rule for `src/auth/**`?" Stored in `.tack/rules/learned/` with timestamp and provenance.
+- **Inherited:** Global rules in `~/.config/tack/rules/` apply to all projects (e.g., "always use Bun, not npm")
 
 **Priority levels:** Rules can have `priority: high` which makes them appear at the top of the agent's context and are highlighted as constraints the agent must not violate.
 
@@ -696,7 +696,7 @@ Agent overlay for builder-payments-1:
 
 ### 9. Tool Curation
 
-Stripe built "Tool Shed" — a meta-MCP server managing ~500 internal tools — because loading all tools into every agent kills performance. As Deck becomes provider-agnostic and users bring their own MCP servers, the daemon needs the same tool selection layer.
+Stripe built "Tool Shed" — a meta-MCP server managing ~500 internal tools — because loading all tools into every agent kills performance. As Tack becomes provider-agnostic and users bring their own MCP servers, the daemon needs the same tool selection layer.
 
 **The problem:** A project might have MCP servers for GitHub, database, Sentry, Figma, Slack, and custom internal tools. A Builder fixing a CSS bug doesn't need database tools. A Builder writing migrations doesn't need Figma tools. Loading everything wastes tokens and confuses the agent.
 
@@ -715,7 +715,7 @@ Per-blueprint-step tool restrictions:
 
 Per-rule tool restrictions:
 ```yaml
-# .deck/rules/database.md
+# .tack/rules/database.md
 ---
 scope: "src/db/**"
 tools:
@@ -725,7 +725,7 @@ tools:
 
 Global tool budget in config:
 ```yaml
-# .deck/config.yaml
+# .tack/config.yaml
 tools:
   max_per_agent: 15          # max tools exposed to any single agent
   always_include:             # always available to all agents
@@ -793,21 +793,21 @@ The planning system is the bridge between your intent and agent execution.
 
 **Focused (interactive):**
 ```
-You: deck plan "Refactor auth to JWT"
-Deck: Spawns planner agent, opens interactive session
+You: tack plan "Refactor auth to JWT"
+Tack: Spawns planner agent, opens interactive session
       Planner explores codebase, asks you questions
       You iterate back and forth
       Planner produces structured plan
       You review in TUI, edit if needed, approve
-      Deck dispatches agent teams
+      Tack dispatches agent teams
 ```
 
 **Batch (queued):**
 ```
-You: deck plan "Fix flaky tests in payments" --auto
-     deck plan "Add rate limiting to public API" --auto
-     deck plan "Update deps to latest major versions" --auto
-Deck: Queues 3 planning sessions
+You: tack plan "Fix flaky tests in payments" --auto
+     tack plan "Add rate limiting to public API" --auto
+     tack plan "Update deps to latest major versions" --auto
+Tack: Queues 3 planning sessions
       Each planner explores independently
       Plans appear in your approval queue
       You review/approve each as they're ready
@@ -833,9 +833,9 @@ The TUI provides a structured editor for plans (not raw YAML editing). CLI users
 
 ## Communication Channels
 
-Deck is multi-user. Team members interact with Deck through messaging platforms — creating objectives, approving plans, steering agents, reviewing progress. The channel plugin interface is inspired by [OpenClaw's channel architecture](https://github.com/nicepkg/openclaw) (`src/channels/plugins/types.plugin.ts`), but Deck owns its channels directly — no external gateway dependency.
+Tack is multi-user. Team members interact with Tack through messaging platforms — creating objectives, approving plans, steering agents, reviewing progress. The channel plugin interface is inspired by [OpenClaw's channel architecture](https://github.com/nicepkg/openclaw) (`src/channels/plugins/types.plugin.ts`), but Tack owns its channels directly — no external gateway dependency.
 
-**Discord is the primary channel.** Slack follows. Future channels implement the same plugin interface. OpenClaw integration is possible but not a priority — their gateway is tightly coupled to their agent execution pipeline (no relay mode), so using it as a message proxy requires their agent as a middleman. Deck talks to platform APIs directly.
+**Discord is the primary channel.** Slack follows. Future channels implement the same plugin interface. OpenClaw integration is possible but not a priority — their gateway is tightly coupled to their agent execution pipeline (no relay mode), so using it as a message proxy requires their agent as a middleman. Tack talks to platform APIs directly.
 
 ### Channel Plugin Interface
 
@@ -918,10 +918,10 @@ type Action struct {
 
 ### User Routing & Permissions
 
-Team members are mapped to Deck users. Each user has roles that determine what they can do through channels.
+Team members are mapped to Tack users. Each user has roles that determine what they can do through channels.
 
 ```yaml
-# .deck/config.yaml
+# .tack/config.yaml
 users:
   - id: "andy"
     discord_id: "123456789012345678"
@@ -950,19 +950,19 @@ roles:
 ```go
 // internal/channels/router.go
 
-// Router resolves inbound events to Deck users and checks permissions.
+// Router resolves inbound events to Tack users and checks permissions.
 type Router struct {
     users  []UserMapping
     roles  map[string][]Permission
 }
 
 type UserMapping struct {
-    DeckUserID string
+    TackUserID string
     ChannelIDs map[string]string  // channel name → platform user ID
     Role       string
 }
 
-// Resolve maps a platform user ID to a Deck user.
+// Resolve maps a platform user ID to a Tack user.
 func (r *Router) Resolve(channel string, platformUserID string) (*UserMapping, error)
 
 // Authorize checks if a user has permission for an action.
@@ -971,7 +971,7 @@ func (r *Router) Authorize(user *UserMapping, action Permission) bool
 
 ### Command Parsing
 
-Inbound messages are parsed into Deck commands. Same mapping regardless of which channel the message came from.
+Inbound messages are parsed into Tack commands. Same mapping regardless of which channel the message came from.
 
 ```go
 // internal/channels/commands.go
@@ -1068,15 +1068,15 @@ Default rules:
 #### Configuration
 
 ```yaml
-# .deck/config.yaml
+# .tack/config.yaml
 channels:
   discord:
     enabled: true
     bot_token: "${DISCORD_BOT_TOKEN}"
     guild_id: "123456789"            # Discord server
     channels:
-      notifications: "deck-notifications"   # default broadcast channel
-      objectives: "deck-objectives"         # threaded per objective
+      notifications: "tack-notifications"   # default broadcast channel
+      objectives: "tack-objectives"         # threaded per objective
     dm_escalations: true
   slack:
     enabled: true
@@ -1084,8 +1084,8 @@ channels:
     app_token: "${SLACK_APP_TOKEN}"   # for socket mode
     mode: "socket"                    # "socket" or "http"
     channels:
-      notifications: "#deck-notifications"
-      objectives: "#deck-objectives"
+      notifications: "#tack-notifications"
+      objectives: "#tack-objectives"
     dm_escalations: true
 ```
 
@@ -1112,7 +1112,7 @@ internal/channels/
 
 **Team member creates objective from Discord:**
 
-1. Sarah messages `#deck-objectives`: "Plan a refactor of the auth module to JWT"
+1. Sarah messages `#tack-objectives`: "Plan a refactor of the auth module to JWT"
 2. Discord bot receives → router resolves Sarah (member role) → authorized for `objectives.create`
 3. Command parsed → `POST /objectives {description: "...", user: "sarah"}`
 4. Daemon spawns planner. Bot creates a thread under Sarah's message for this objective.
@@ -1124,22 +1124,22 @@ internal/channels/
 
 **Steering an agent mid-execution from Slack:**
 
-1. Andy in `#deck-objectives` thread: "steer builder-1: use the existing rate limiter in pkg/middleware, don't create a new one"
+1. Andy in `#tack-objectives` thread: "steer builder-1: use the existing rate limiter in pkg/middleware, don't create a new one"
 2. Slack bot receives → router resolves Andy (admin) → authorized for `agents.steer`
 3. Command parsed → `POST /mail {to: "builder-1", from: "andy", body: "use the existing rate limiter..."}`
 4. Builder-1 receives mail at next hook injection point.
 
 ### OpenClaw Integration (Not a Priority)
 
-OpenClaw's gateway is **tightly coupled to its agent execution pipeline**. Every inbound message must pass through their AI agent — there's no relay mode, no webhook forwarding, no way to use it as a dumb message pipe. Using OpenClaw as a Deck channel means their agent acts as a middleman: OpenClaw receives your message → runs its own agent → that agent calls Deck's REST API as a tool. This burns tokens and adds latency for what should be a direct API call.
+OpenClaw's gateway is **tightly coupled to its agent execution pipeline**. Every inbound message must pass through their AI agent — there's no relay mode, no webhook forwarding, no way to use it as a dumb message pipe. Using OpenClaw as a Tack channel means their agent acts as a middleman: OpenClaw receives your message → runs its own agent → that agent calls Tack's REST API as a tool. This burns tokens and adds latency for what should be a direct API call.
 
-If a team already runs OpenClaw and wants to reach Deck from Telegram/WhatsApp/Signal, it's possible — write a Deck skill for OpenClaw's agent that maps messages to Deck REST calls. But this is a community contribution, not a Deck priority. Deck owns its channels directly.
+If a team already runs OpenClaw and wants to reach Tack from Telegram/WhatsApp/Signal, it's possible — write a Tack skill for OpenClaw's agent that maps messages to Tack REST calls. But this is a community contribution, not a Tack priority. Tack owns its channels directly.
 
 ### Reference: OpenClaw Channel Architecture
 
-Deck's channel plugin interface is inspired by OpenClaw's architecture. Key reference files in the [OpenClaw codebase](https://github.com/nicepkg/openclaw) for implementation patterns:
+Tack's channel plugin interface is inspired by OpenClaw's architecture. Key reference files in the [OpenClaw codebase](https://github.com/nicepkg/openclaw) for implementation patterns:
 
-| Pattern | OpenClaw File | Deck Equivalent |
+| Pattern | OpenClaw File | Tack Equivalent |
 |---------|--------------|-----------------|
 | Channel plugin interface | `src/channels/plugins/types.plugin.ts` | `internal/channels/channel.go` |
 | Gateway lifecycle manager | `src/gateway/server-channels.ts` | `internal/channels/manager.go` |
@@ -1180,7 +1180,7 @@ Agent Session (N) ──── (N) Mail Messages
 
 ## Agent Runtime (Provider-Agnostic)
 
-Deck's harness is runtime-agnostic. Pi is the first supported runtime, but the architecture supports any agent that can run in a sandbox, receive prompts, and report results.
+Tack's harness is runtime-agnostic. Pi is the first supported runtime, but the architecture supports any agent that can run in a sandbox, receive prompts, and report results.
 
 ### Agent Runtime Interface
 
@@ -1233,7 +1233,7 @@ agents:
       api_key: "${ANTHROPIC_API_KEY}"
 ```
 
-**Why this matters for open source:** Users shouldn't be locked into one agent runtime. A team using Claude Code locally should be able to use Deck's orchestration without switching to Pi. A team with Codex access should be able to plug that in. The harness (blueprints, rules, gates, merge queue) stays the same — only the runtime that executes agent steps changes.
+**Why this matters for open source:** Users shouldn't be locked into one agent runtime. A team using Claude Code locally should be able to use Tack's orchestration without switching to Pi. A team with Codex access should be able to plug that in. The harness (blueprints, rules, gates, merge queue) stays the same — only the runtime that executes agent steps changes.
 
 **Capability differences across runtimes:**
 
@@ -1250,9 +1250,9 @@ Runtimes that don't support hooks get mail and rules injected via prompt prepend
 
 Each agent is a Pi instance running in RPC mode inside a sandbox.
 
-### Deck Extension for Pi
+### Tack Extension for Pi
 
-A Pi extension (`deck-agent-extension`) is pre-installed in the Daytona snapshot. It:
+A Pi extension (`tack-agent-extension`) is pre-installed in the Daytona snapshot. It:
 
 1. **Registers hooks:**
    - `UserPromptSubmit`: Injects unread mail from daemon
@@ -1261,15 +1261,15 @@ A Pi extension (`deck-agent-extension`) is pre-installed in the Daytona snapshot
    - `agent_end`: Reports completion status to daemon
 
 2. **Registers tools:**
-   - `deck.mail.send(to, type, payload)` — Send mail
-   - `deck.mail.reply(messageID, payload)` — Reply to message
-   - `deck.status(summary)` — Report progress
-   - `deck.escalate(severity, context)` — Escalate to human
-   - `deck.done(summary, filesModified)` — Signal completion
+   - `tack.mail.send(to, type, payload)` — Send mail
+   - `tack.mail.reply(messageID, payload)` — Reply to message
+   - `tack.status(summary)` — Report progress
+   - `tack.escalate(severity, context)` — Escalate to human
+   - `tack.done(summary, filesModified)` — Signal completion
 
 3. **Communicates with daemon:**
-   - Via HTTP to the daemon's address (passed as `DECK_DAEMON_URL` env var)
-   - Auth via per-agent token (passed as `DECK_AGENT_TOKEN` env var, generated at spawn time)
+   - Via HTTP to the daemon's address (passed as `TACK_DAEMON_URL` env var)
+   - Auth via per-agent token (passed as `TACK_AGENT_TOKEN` env var, generated at spawn time)
    - Uses `fetch()` — no special client libraries needed in the sandbox
 
 ### Agent Overlay
@@ -1277,7 +1277,7 @@ A Pi extension (`deck-agent-extension`) is pre-installed in the Daytona snapshot
 Each agent gets a system prompt overlay injected via the extension's `before_agent_start` hook:
 
 ```markdown
-# Deck Agent: builder-auth-1
+# Tack Agent: builder-auth-1
 
 ## Role
 You are a Builder agent. Your job is to implement code changes according to the spec.
@@ -1285,7 +1285,7 @@ You are a Builder agent. Your job is to implement code changes according to the 
 ## Task
 Objective: Refactor auth to JWT
 Stream: JWT token generation and validation
-Spec: /deck/shared/specs/stream_1_spec.md
+Spec: /tack/shared/specs/stream_1_spec.md
 
 ## File Scope
 You may ONLY modify these files:
@@ -1302,30 +1302,30 @@ Before signaling completion, you MUST pass:
 
 ## Communication
 - Your lead is: lead-auth
-- Use deck.status() to report progress
-- Use deck.escalate() if you're blocked
-- Use deck.done() when finished
+- Use tack.status() to report progress
+- Use tack.escalate() if you're blocked
+- Use tack.done() when finished
 - Check mail for updates from your lead (injected automatically)
 
 ## Constraints
 - Do NOT modify files outside your scope
-- Do NOT push to git (Deck handles merging)
+- Do NOT push to git (Tack handles merging)
 - Do NOT install new dependencies without escalating
 - Commit frequently with descriptive messages
 ```
 
 ### RPC Control
 
-Deck daemon communicates with Pi agents via Pi's RPC mode (stdin/stdout JSON protocol):
+Tack daemon communicates with Pi agents via Pi's RPC mode (stdin/stdout JSON protocol):
 
 ```go
-// Deck daemon sends initial prompt to Pi agent
+// Tack daemon sends initial prompt to Pi agent
 agent.Send(RPCMessage{
     Type: "prompt",
-    Content: "Begin implementation. Read the spec at /deck/shared/specs/stream_1_spec.md",
+    Content: "Begin implementation. Read the spec at /tack/shared/specs/stream_1_spec.md",
 })
 
-// Deck daemon can steer mid-execution
+// Tack daemon can steer mid-execution
 agent.Send(RPCMessage{
     Type: "steer",
     Content: "Use the existing bcrypt utility in src/utils/crypto.ts instead of adding a new dependency",
@@ -1336,7 +1336,7 @@ agent.Send(RPCMessage{
 
 ## Autonomy Levels
 
-Deck implements progressive autonomy tied to the blueprint state machine. Higher autonomy = fewer human gates. Default is conservative; users unlock more autonomy as trust builds.
+Tack implements progressive autonomy tied to the blueprint state machine. Higher autonomy = fewer human gates. Default is conservative; users unlock more autonomy as trust builds.
 
 | Level | Name | Plan | Execution | Review | Merge | Best For |
 |-------|------|------|-----------|--------|-------|----------|
@@ -1372,7 +1372,7 @@ After 3 consecutive stuck signals: escalate to Lead. After Lead failure: escalat
 Not every task needs the full Planner → Lead → Builder hierarchy. Simple mode collapses the pipeline to a single agent in a single sandbox — no decomposition, no streams, no inter-agent communication.
 
 ```
-deck plan "fix the typo in README" --simple
+tack plan "fix the typo in README" --simple
 ```
 
 Simple mode is:
@@ -1396,7 +1396,7 @@ The TUI connects to the daemon via HTTP (commands) and SSE (live event stream) a
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ DECK                                          ▲ 3 objectives   │
+│ TACK                                          ▲ 3 objectives   │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  ● Refactor auth to JWT                          [EXECUTING]    │
@@ -1464,11 +1464,11 @@ Same as MVP design — hunk-level review of changes across all streams:
 ## Project Structure
 
 ```
-deck/
+tack/
 ├── cmd/
 │   ├── daemon/
-│   │   └── main.go              # deck daemon entry point
-│   └── deck/
+│   │   └── main.go              # tack daemon entry point
+│   └── tack/
 │       └── main.go              # TUI + CLI entry point
 ├── internal/
 │   ├── daemon/
@@ -1562,10 +1562,10 @@ deck/
 │   └── config/
 │       └── config.go            # Global + project config
 ├── extension/
-│   └── deck-pi-extension/       # Pi extension (TypeScript, deployed to sandboxes)
+│   └── tack-pi-extension/       # Pi extension (TypeScript, deployed to sandboxes)
 │       ├── index.ts             # Extension entry point
 │       ├── hooks.ts             # Mail injection, scope enforcement
-│       ├── tools.ts             # deck.mail.send, deck.done, etc.
+│       ├── tools.ts             # tack.mail.send, tack.done, etc.
 │       └── package.json
 ├── configs/
 │   ├── defaults/
@@ -1586,18 +1586,18 @@ deck/
 
 ## Configuration
 
-### Daemon Config (`~/.config/deck/config.yaml`)
+### Daemon Config (`~/.config/tack/config.yaml`)
 
 ```yaml
 daemon:
   listen: "0.0.0.0:9800"          # HTTP listen address
-  data_dir: "~/.deck/data"        # SQLite databases, logs
+  data_dir: "~/.tack/data"        # SQLite databases, logs
 
 sandbox:
   provider: "daytona"             # sandbox provider ("daytona", future: "docker", "e2b", "local")
   daytona:                        # Daytona-specific config (only when provider=daytona)
     api_key: "${DAYTONA_API_KEY}"
-    default_snapshot: ""           # set after first deck snapshot create
+    default_snapshot: ""           # set after first tack snapshot create
   default_resources:              # provider-agnostic defaults
     cpu: 2
     memory: 4
@@ -1642,12 +1642,12 @@ quality_gates:                    # default gates, overridable per project
   - "bun run lint"
 
 blueprints:
-  dir: "~/.config/deck/blueprints"  # global custom blueprints
-  # Project blueprints in .deck/blueprints/ take priority
+  dir: "~/.config/tack/blueprints"  # global custom blueprints
+  # Project blueprints in .tack/blueprints/ take priority
 
 rules:
-  dir: "~/.config/deck/rules"      # global rules (apply to all projects)
-  # Project rules in .deck/rules/ are additive
+  dir: "~/.config/tack/rules"      # global rules (apply to all projects)
+  # Project rules in .tack/rules/ are additive
 
 users:
   - id: "andy"
@@ -1661,8 +1661,8 @@ channels:
     bot_token: "${DISCORD_BOT_TOKEN}"
     guild_id: ""
     channels:
-      notifications: "deck-notifications"
-      objectives: "deck-objectives"
+      notifications: "tack-notifications"
+      objectives: "tack-objectives"
     dm_escalations: true
   slack:
     enabled: false
@@ -1670,20 +1670,20 @@ channels:
     app_token: "${SLACK_APP_TOKEN}"
     mode: "socket"                   # "socket" or "http"
     channels:
-      notifications: "#deck-notifications"
-      objectives: "#deck-objectives"
+      notifications: "#tack-notifications"
+      objectives: "#tack-objectives"
     dm_escalations: true
   # OpenClaw integration is possible but not a priority — see design doc.
   # Their gateway is tightly coupled to their agent pipeline (no relay mode).
 ```
 
-### Project Config (`.deck/config.yaml`)
+### Project Config (`.tack/config.yaml`)
 
 ```yaml
 # Project-specific overrides
 repo: "git@github.com:user/project.git"
 default_branch: "main"
-snapshot: "deck-myproject"          # sandbox snapshot for this project (provider-specific)
+snapshot: "tack-myproject"          # sandbox snapshot for this project (provider-specific)
 
 quality_gates:
   - "bun test"
@@ -1707,13 +1707,13 @@ guidance: |
   Tests use vitest, not jest.
 ```
 
-### Project `.deck/` Directory Structure
+### Project `.tack/` Directory Structure
 
 ```
-.deck/
+.tack/
 ├── config.yaml              # project config (above)
 ├── blueprints/              # workflow definitions
-│   ├── feature.yaml         # copied from defaults on deck init
+│   ├── feature.yaml         # copied from defaults on tack init
 │   ├── hotfix.yaml
 │   ├── stream.yaml
 │   └── migration.yaml       # user-defined custom blueprint
@@ -1726,7 +1726,7 @@ guidance: |
 └── sessions.yaml            # TUI session persistence
 ```
 
-Everything in `.deck/` is version-controlled. Rules and blueprints are shared across the team. The harness improves with every commit.
+Everything in `.tack/` is version-controlled. Rules and blueprints are shared across the team. The harness improves with every commit.
 
 ---
 
@@ -1738,7 +1738,7 @@ Everything in `.deck/` is version-controlled. Rules and blueprints are shared ac
 - Agent runtime interface + Pi implementation
 - SQLite database layer (objectives, agents, mail, events)
 - Event bus (pub/sub)
-- Basic CLI client (deck plan, deck status)
+- Basic CLI client (tack plan, tack status)
 
 ### Phase 2: Harness Core
 - Blueprint engine (YAML loader, state machine executor, shipped defaults)
@@ -1756,7 +1756,7 @@ Everything in `.deck/` is version-controlled. Rules and blueprints are shared ac
 ### Phase 4: Execution
 - Blueprint execution (step-by-step state machine with gates)
 - Agent role definitions and overlay generation (with rules + tools injection)
-- Deck Pi extension (mail injection hooks, tools, scope enforcement)
+- Tack Pi extension (mail injection hooks, tools, scope enforcement)
 - Nested sub-execution: coordinator drives stream blueprint per stream (see [2026-03-13-nested-sub-execution-design.md](2026-03-13-nested-sub-execution-design.md))
 - Stream failure escalation with human retry + guidance
 - `partial` objective status for mixed success/failure outcomes
@@ -1794,16 +1794,16 @@ Everything in `.deck/` is version-controlled. Rules and blueprints are shared ac
 
 ---
 
-## What Deck Is Not
+## What Tack Is Not
 
-- **Not an agent framework.** Deck doesn't implement agents. Agent runtimes (Pi, Claude Code, Codex) do the thinking. Deck orchestrates them.
-- **Not a sandbox provider.** Daytona, Docker, E2B provide sandboxes. Deck manages their lifecycle through a provider interface.
-- **Not a messaging platform.** Deck ships with Discord and Slack bots for team communication, but the bots are thin command/notification interfaces — not chat agents.
-- **Not an IDE.** Deck doesn't edit code. Agents edit code. You review their work.
-- **Not a CI system.** Deck runs quality gates locally in sandboxes. CI is your existing pipeline.
+- **Not an agent framework.** Tack doesn't implement agents. Agent runtimes (Pi, Claude Code, Codex) do the thinking. Tack orchestrates them.
+- **Not a sandbox provider.** Daytona, Docker, E2B provide sandboxes. Tack manages their lifecycle through a provider interface.
+- **Not a messaging platform.** Tack ships with Discord and Slack bots for team communication, but the bots are thin command/notification interfaces — not chat agents.
+- **Not an IDE.** Tack doesn't edit code. Agents edit code. You review their work.
+- **Not a CI system.** Tack runs quality gates locally in sandboxes. CI is your existing pipeline.
 - **Not locked to any model or provider.** Bring your own agent runtime, sandbox provider, and model. The harness stays the same.
 
-Deck is a **harness engineering framework** — the open-source, configurable infrastructure that makes AI coding agents reliable. It sits above agent runtimes, sandbox providers, and messaging platforms, coordinating all of them into a coherent workflow. Users configure blueprints for their workflows, write scoped rules for their conventions, plug in their preferred agent runtime and sandbox provider, and set their autonomy level.
+Tack is a **harness engineering framework** — the open-source, configurable infrastructure that makes AI coding agents reliable. It sits above agent runtimes, sandbox providers, and messaging platforms, coordinating all of them into a coherent workflow. Users configure blueprints for their workflows, write scoped rules for their conventions, plug in their preferred agent runtime and sandbox provider, and set their autonomy level.
 
 The harness is the product. Users bring the horse.
 
@@ -1811,11 +1811,11 @@ The harness is the product. Users bring the horse.
 
 ## Summary
 
-Deck is an open-source harness engineering framework that transforms a solo developer into a team lead. You think, plan, and review. Agents explore, implement, and test. Deck manages the machinery in between — spawning sandboxes, routing communication, enforcing quality gates, resolving conflicts, and keeping you informed from anywhere.
+Tack is an open-source harness engineering framework that transforms a solo developer into a team lead. You think, plan, and review. Agents explore, implement, and test. Tack manages the machinery in between — spawning sandboxes, routing communication, enforcing quality gates, resolving conflicts, and keeping you informed from anywhere.
 
-**What makes Deck different from every other tool in this space:**
+**What makes Tack different from every other tool in this space:**
 
-1. **The harness is the product, not the model.** OpenAI and Stripe built proprietary harnesses for themselves. Deck is the configurable harness framework anyone can use.
+1. **The harness is the product, not the model.** OpenAI and Stripe built proprietary harnesses for themselves. Tack is the configurable harness framework anyone can use.
 2. **Daemon-first with pluggable everything.** No other tool offers a persistent headless orchestrator with pluggable agent runtimes, sandbox providers, and configurable blueprints.
 3. **Scoped rules that compound.** Every mistake becomes a version-controlled rule. The harness gets smarter with every task.
 4. **Progressive autonomy.** From fully supervised to fully autonomous, configured per project, per path, per task type.

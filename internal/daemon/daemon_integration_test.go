@@ -487,7 +487,7 @@ steps:
 func TestSimpleHotfixExecution_CompletesWithNormalizedBlueprintAndQualityGates(t *testing.T) {
 	restoreRepo := setupGitRepo(t)
 	defer restoreRepo()
-	installFakeClaude(t, "#!/bin/sh\necho \"done role=$DECK_AGENT_ROLE\"\nexit 0\n")
+	installFakeClaude(t, "#!/bin/sh\necho \"done role=$TACK_AGENT_ROLE\"\nexit 0\n")
 
 	baseURL, shutdown := startExecutionDaemon(t, "127.0.0.1:19805", []string{"true"})
 	defer shutdown()
@@ -530,7 +530,7 @@ func TestFeatureExecution_PlannerRunsThenApproveAndComplete(t *testing.T) {
 	defer restoreRepo()
 	// Planner outputs valid plan YAML; other roles succeed with simple output.
 	installFakeClaude(t, `#!/bin/sh
-if [ "$DECK_AGENT_ROLE" = "planner" ]; then
+if [ "$TACK_AGENT_ROLE" = "planner" ]; then
 cat <<'PLAN'
 streams:
   - title: "stream one"
@@ -542,7 +542,7 @@ quality_gates: []
 PLAN
 exit 0
 fi
-echo "done role=$DECK_AGENT_ROLE"
+echo "done role=$TACK_AGENT_ROLE"
 exit 0
 `)
 
@@ -647,7 +647,7 @@ exit 0
 func TestExecutionFailure_TransitionsObjectiveAndPlanFailed(t *testing.T) {
 	restoreRepo := setupGitRepo(t)
 	defer restoreRepo()
-	installFakeClaude(t, "#!/bin/sh\necho \"done role=$DECK_AGENT_ROLE\"\nexit 0\n")
+	installFakeClaude(t, "#!/bin/sh\necho \"done role=$TACK_AGENT_ROLE\"\nexit 0\n")
 
 	baseURL, shutdown := startExecutionDaemon(t, "127.0.0.1:19807", []string{"false"})
 	defer shutdown()
@@ -680,7 +680,7 @@ func TestExecutionFailure_TransitionsObjectiveAndPlanFailed(t *testing.T) {
 func TestKillAgent_StopsExecutionAndMarksFailure(t *testing.T) {
 	restoreRepo := setupGitRepo(t)
 	defer restoreRepo()
-	installFakeClaude(t, "#!/bin/sh\nsleep 5\necho \"done role=$DECK_AGENT_ROLE\"\nexit 0\n")
+	installFakeClaude(t, "#!/bin/sh\nsleep 5\necho \"done role=$TACK_AGENT_ROLE\"\nexit 0\n")
 
 	baseURL, shutdown := startExecutionDaemon(t, "127.0.0.1:19808", nil)
 	defer shutdown()
@@ -728,7 +728,7 @@ func TestMultiStreamExecution_DependencyCascadeAndPartialCompletion(t *testing.T
 	defer restoreRepo()
 	// Planner outputs 3-stream plan; builder fails for "fail-stream" title.
 	installFakeClaude(t, `#!/bin/sh
-if [ "$DECK_AGENT_ROLE" = "planner" ]; then
+if [ "$TACK_AGENT_ROLE" = "planner" ]; then
 cat <<'PLAN'
 streams:
   - title: "stream one"
@@ -751,11 +751,11 @@ quality_gates: []
 PLAN
 exit 0
 fi
-if [ "$DECK_AGENT_ROLE" = "builder" ] && echo "$DECK_STREAM_TITLE" | grep -q "fail-stream"; then
+if [ "$TACK_AGENT_ROLE" = "builder" ] && echo "$TACK_STREAM_TITLE" | grep -q "fail-stream"; then
   echo "build failed"
   exit 1
 fi
-echo "done role=$DECK_AGENT_ROLE"
+echo "done role=$TACK_AGENT_ROLE"
 exit 0
 `)
 
@@ -863,7 +863,7 @@ func TestRetryExecution_RetriesFailedStreamWithGuidance(t *testing.T) {
 	// subsequent calls succeed. Planner outputs valid plan YAML.
 	attemptFile := filepath.Join(t.TempDir(), "attempts")
 	installFakeClaude(t, `#!/bin/sh
-if [ "$DECK_AGENT_ROLE" = "planner" ]; then
+if [ "$TACK_AGENT_ROLE" = "planner" ]; then
 cat <<'PLAN'
 streams:
   - title: "retry-stream"
@@ -875,7 +875,7 @@ quality_gates: []
 PLAN
 exit 0
 fi
-if [ "$DECK_AGENT_ROLE" = "builder" ] && echo "$DECK_STREAM_TITLE" | grep -q "retry-stream"; then
+if [ "$TACK_AGENT_ROLE" = "builder" ] && echo "$TACK_STREAM_TITLE" | grep -q "retry-stream"; then
   count=$(cat "`+attemptFile+`" 2>/dev/null || echo 0)
   count=$((count + 1))
   echo $count > "`+attemptFile+`"
@@ -884,7 +884,7 @@ if [ "$DECK_AGENT_ROLE" = "builder" ] && echo "$DECK_STREAM_TITLE" | grep -q "re
     exit 1
   fi
 fi
-echo "done role=$DECK_AGENT_ROLE"
+echo "done role=$TACK_AGENT_ROLE"
 exit 0
 `)
 
@@ -1164,7 +1164,7 @@ func TestDaemonRestart_RediscoversLocalSandboxesAndCompletesObjective(t *testing
 	// --- Daemon 2: fast agent, same DataDir, recovery ---
 	fastBinDir := t.TempDir()
 	fastClaude := filepath.Join(fastBinDir, "claude")
-	if err := os.WriteFile(fastClaude, []byte("#!/bin/sh\necho \"done role=$DECK_AGENT_ROLE\"\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(fastClaude, []byte("#!/bin/sh\necho \"done role=$TACK_AGENT_ROLE\"\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile fast claude: %v", err)
 	}
 	t.Setenv("PATH", fastBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))

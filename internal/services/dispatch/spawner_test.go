@@ -206,7 +206,7 @@ func TestSpawn_UsesBuildPlannerOverlayForPlannerRole(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	// BuildPlannerOverlay produces "# Deck Agent: planner" and "You are a Planner agent"
+	// BuildPlannerOverlay produces "# Tack Agent: planner" and "You are a Planner agent"
 	if !strings.Contains(rt.lastOpts.Overlay, "Planner") {
 		t.Errorf("planner overlay should contain 'Planner'\noverlay: %s", rt.lastOpts.Overlay)
 	}

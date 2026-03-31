@@ -1,7 +1,7 @@
 {
-  "name": "deck-agent",
+  "name": "tack-agent",
   "version": "1.0.0",
-  "description": "Deck agent extension for Pi - provides mail, status, escalation, and file scope enforcement",
+  "description": "Tack agent extension for Pi - provides mail, status, escalation, and file scope enforcement",
   "main": "index.ts",
   "type": "module"
 }

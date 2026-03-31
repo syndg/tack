@@ -141,9 +141,9 @@ func TestFindProjectRoot(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create .tack/ in the root
-	deckDir := filepath.Join(dir, ".tack")
-	os.MkdirAll(deckDir, 0o755)
-	os.WriteFile(filepath.Join(deckDir, "config.yaml"), []byte("agents:\n  runtime: pi\n"), 0o644)
+	tackDir := filepath.Join(dir, ".tack")
+	os.MkdirAll(tackDir, 0o755)
+	os.WriteFile(filepath.Join(tackDir, "config.yaml"), []byte("agents:\n  runtime: pi\n"), 0o644)
 
 	// Create a nested subdirectory
 	nested := filepath.Join(dir, "src", "pkg", "deep")

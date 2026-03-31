@@ -27,7 +27,7 @@ func init() {
 
 var configCmd = &cobra.Command{
 	Use:   "config",
-	Short: "Manage Deck configuration",
+	Short: "Manage Tack configuration",
 }
 
 var configSetCmd = &cobra.Command{
@@ -148,7 +148,7 @@ func targetConfigPath() string {
 }
 
 func userConfigPath() string {
-	if v := os.Getenv("DECK_USER_CONFIG_PATH"); v != "" {
+	if v := os.Getenv("TACK_USER_CONFIG_PATH"); v != "" {
 		return v
 	}
 	return config.UserConfigPath

@@ -1,8 +1,8 @@
-# Deck
+# Tack
 
 **One objective in. Reviewed, tested, merged code out.**
 
-Deck is an open-source orchestrator that runs AI coding agents at scale. You describe what you want built. Deck decomposes it into parallel work streams, assigns each to an isolated agent, enforces quality gates, reviews the output, merges everything, and opens a PR.
+Tack is an open-source orchestrator that runs AI coding agents at scale. You describe what you want built. Tack decomposes it into parallel work streams, assigns each to an isolated agent, enforces quality gates, reviews the output, merges everything, and opens a PR.
 
 You go from being the developer to being the team lead.
 
@@ -22,18 +22,18 @@ Objective completed. PR created: github.com/you/project/pull/42
 
 ---
 
-## Why Deck
+## Why Tack
 
-**The harness matters more than the model.** LangChain improved from 52.8% to 66.5% on Terminal Bench 2.0 by modifying only the harness, not the model. Stripe and OpenAI built proprietary harnesses internally. Deck is that harness — open source and configurable.
+**The harness matters more than the model.** LangChain improved from 52.8% to 66.5% on Terminal Bench 2.0 by modifying only the harness, not the model. Stripe and OpenAI built proprietary harnesses internally. Tack is that harness — open source and configurable.
 
-Everything in Deck that isn't an LLM decision is deterministic infrastructure: the blueprint engine, quality gates, merge queue, scoped rules, file scope enforcement, timeout management. The LLM is the horse. Deck is the equipment.
+Everything in Tack that isn't an LLM decision is deterministic infrastructure: the blueprint engine, quality gates, merge queue, scoped rules, file scope enforcement, timeout management. The LLM is the horse. Tack is the equipment.
 
-**What Deck solves:**
+**What Tack solves:**
 
-- **Planning is serial** — Deck's planner decomposes objectives into parallel streams automatically
-- **Execution is uncoordinated** — Deck manages agent lifecycle, scheduling, and isolation
-- **You must be present** — Deck runs as a daemon. Agents work while you're away
-- **Merging is manual** — Deck's merge processor integrates branches with tiered conflict resolution
+- **Planning is serial** — Tack's planner decomposes objectives into parallel streams automatically
+- **Execution is uncoordinated** — Tack manages agent lifecycle, scheduling, and isolation
+- **You must be present** — Tack runs as a daemon. Agents work while you're away
+- **Merging is manual** — Tack's merge processor integrates branches with tiered conflict resolution
 - **Quality is inconsistent** — Deterministic gates enforce lint, typecheck, and tests on every change
 
 ---
@@ -159,7 +159,7 @@ Agents never see each other's changes during execution. Integration happens at m
 
 ### File-Attribution Quality Gates
 
-Quality gates run against the full project, but Deck only fails a stream for errors in its own files. Pre-existing errors in other files don't block progress. Cross-file breakage is caught at merge time.
+Quality gates run against the full project, but Tack only fails a stream for errors in its own files. Pre-existing errors in other files don't block progress. Cross-file breakage is caught at merge time.
 
 ```
 Stream 1 (backend routes):     bunx tsc --noEmit → fails on frontend error → PASS (not in scope)
@@ -170,7 +170,7 @@ Stream 2 (frontend components): bunx tsc --noEmit → fails on frontend error �
 
 Workflows are defined as YAML state machines. Steps can be `agent`, `deterministic`, `human`, or `blueprint_ref` (nested).
 
-Deck ships two defaults. Override by placing your own in `.tack/blueprints/`.
+Tack ships two defaults. Override by placing your own in `.tack/blueprints/`.
 
 ```yaml
 # .tack/blueprints/stream.yaml — per-stream execution
@@ -244,11 +244,11 @@ rules:
 
 ### Escalation Dedup
 
-When an agent hits the same blocker across fix-loop iterations, Deck sends one escalation — not 50 copies of the same error.
+When an agent hits the same blocker across fix-loop iterations, Tack sends one escalation — not 50 copies of the same error.
 
 ### Partial Completion
 
-When some streams fail, Deck merges what succeeded and marks the objective `partial`. You can retry failed streams or accept the partial result. The pipeline doesn't stall waiting for streams that will never complete.
+When some streams fail, Tack merges what succeeded and marks the objective `partial`. You can retry failed streams or accept the partial result. The pipeline doesn't stall waiting for streams that will never complete.
 
 ### Configurable Timeouts
 
@@ -340,7 +340,7 @@ tools:
     stream.yaml        #   Per-stream: scout → build → lint → review → merge_ready
   rules/               # Project-specific agent guidance, scoped by file patterns
     project.yaml
-  data/                # Managed by Deck: SQLite, activity logs
+  data/                # Managed by Tack: SQLite, activity logs
     tack.db
     activity/          # Per-agent JSONL activity logs
 ```
@@ -349,7 +349,7 @@ tools:
 
 ## Pluggable Runtime
 
-Deck supports multiple agent runtimes through a provider interface:
+Tack supports multiple agent runtimes through a provider interface:
 
 | Runtime | Status | RPC | Hooks | File Scope |
 |---------|--------|-----|-------|------------|
@@ -389,12 +389,12 @@ agents:
 
 ---
 
-## What Deck Is Not
+## What Tack Is Not
 
-- **Not an agent framework.** Deck doesn't implement agents. Pi and Claude Code do the thinking. Deck orchestrates them.
-- **Not a sandbox provider.** Local worktrees, Daytona, Docker provide isolation. Deck manages their lifecycle.
-- **Not an IDE.** Deck doesn't edit code. Agents edit code. You review their work.
-- **Not a CI system.** Deck runs quality gates locally in sandboxes. CI is your existing pipeline.
+- **Not an agent framework.** Tack doesn't implement agents. Pi and Claude Code do the thinking. Tack orchestrates them.
+- **Not a sandbox provider.** Local worktrees, Daytona, Docker provide isolation. Tack manages their lifecycle.
+- **Not an IDE.** Tack doesn't edit code. Agents edit code. You review their work.
+- **Not a CI system.** Tack runs quality gates locally in sandboxes. CI is your existing pipeline.
 - **Not locked to any model.** Bring your own runtime, provider, and model. The harness stays the same.
 
 ---

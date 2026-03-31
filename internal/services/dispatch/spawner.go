@@ -238,21 +238,21 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	// 7. Spawn agent process via runtime.
 	agentToken := uuid.New().String()
 	envVars := map[string]string{
-		"DECK_DAEMON_URL":   s.daemonURL,
-		"DECK_AGENT_TOKEN":  agentToken,
-		"DECK_AGENT_NAME":   agentName,
-		"DECK_OBJECTIVE_ID": req.Objective.ID,
-		"DECK_AGENT_ROLE":   req.Role,
+		"TACK_DAEMON_URL":   s.daemonURL,
+		"TACK_AGENT_TOKEN":  agentToken,
+		"TACK_AGENT_NAME":   agentName,
+		"TACK_OBJECTIVE_ID": req.Objective.ID,
+		"TACK_AGENT_ROLE":   req.Role,
 	}
 	if req.Stream != nil {
-		envVars["DECK_STREAM_ID"] = req.Stream.ID
-		envVars["DECK_STREAM_TITLE"] = req.Stream.Title
+		envVars["TACK_STREAM_ID"] = req.Stream.ID
+		envVars["TACK_STREAM_TITLE"] = req.Stream.Title
 		if len(req.Stream.FileScope) > 0 {
-			envVars["DECK_FILE_SCOPE"] = strings.Join(req.Stream.FileScope, ",")
+			envVars["TACK_FILE_SCOPE"] = strings.Join(req.Stream.FileScope, ",")
 		}
 	}
 	if req.TaskSpec != "" {
-		envVars["DECK_TASK_SPEC"] = req.TaskSpec
+		envVars["TACK_TASK_SPEC"] = req.TaskSpec
 	}
 
 	// Inject model provider credential (only the configured provider).

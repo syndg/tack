@@ -79,10 +79,10 @@ func TestRoundTrip(t *testing.T) {
 }
 
 func TestResolveEnvVar(t *testing.T) {
-	t.Setenv("DECK_TEST_SECRET", "resolved-from-env")
+	t.Setenv("TACK_TEST_SECRET", "resolved-from-env")
 	path := filepath.Join(t.TempDir(), "creds.yaml")
 	s, _ := Load(path)
-	s.SetModelProvider("test", ProviderCredential{Type: TypeAPIKey, APIKey: "DECK_TEST_SECRET"})
+	s.SetModelProvider("test", ProviderCredential{Type: TypeAPIKey, APIKey: "TACK_TEST_SECRET"})
 
 	rp, err := s.ModelProvider("test")
 	if err != nil {

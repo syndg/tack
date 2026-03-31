@@ -1,4 +1,4 @@
-# Deck Phase 4: Execution — PRD & Implementation Plan
+# Tack Phase 4: Execution — PRD & Implementation Plan
 
 Build the execution engine that transforms approved plans into running agent teams. This phase implements the mail broker, local sandbox provider, Claude Code agent runtime, agent spawner, stream scheduler, blueprint step handlers, execution coordinator, and the API/CLI surface for managing execution.
 
@@ -26,9 +26,9 @@ The `mail` table and `MailStore` already exist from Phase 1 (`internal/db/mail.g
       "fmt"
       "log/slog"
       "strings"
-      "github.com/syndg/deck/internal/db"
-      "github.com/syndg/deck/internal/domain"
-      events "github.com/syndg/deck/internal/services/events"
+      "github.com/syndg/tack/internal/db"
+      "github.com/syndg/tack/internal/domain"
+      events "github.com/syndg/tack/internal/services/events"
   )
 
   // Broker manages inter-agent mail delivery and broadcast resolution.
@@ -153,7 +153,7 @@ Implement the first concrete sandbox provider and agent runtime. The local sandb
       "path/filepath"
       "sync"
       "github.com/google/uuid"
-      "github.com/syndg/deck/internal/sandbox"
+      "github.com/syndg/tack/internal/sandbox"
   )
 
   // Provider creates sandboxes as local git worktrees.
@@ -170,7 +170,7 @@ Implement the first concrete sandbox provider and agent runtime. The local sandb
 
   // Create provisions a new git worktree sandbox.
   // 1. Generate sandbox ID (uuid)
-  // 2. Create branch: deck/{labels["deck.objective"][:8]}/{labels["deck.role"]}-{id[:8]}
+  // 2. Create branch: tack/{labels["tack.objective"][:8]}/{labels["tack.role"]}-{id[:8]}
   // 3. Run: git worktree add {worktreeDir}/{id} -b {branch}
   // 4. Apply env vars from opts.EnvVars
   // 5. Track sandbox in internal map
@@ -244,8 +244,8 @@ Implement the first concrete sandbox provider and agent runtime. The local sandb
       "log/slog"
       "strings"
       "sync"
-      "github.com/syndg/deck/internal/runtime"
-      "github.com/syndg/deck/internal/sandbox"
+      "github.com/syndg/tack/internal/runtime"
+      "github.com/syndg/tack/internal/sandbox"
   )
 
   // Runtime spawns Claude Code agents in sandboxes via `claude -p`.
@@ -264,7 +264,7 @@ Implement the first concrete sandbox provider and agent runtime. The local sandb
   // 1. Build prompt: overlay + "\n\nBegin your task now."
   // 2. Build tool list from opts.Tools
   // 3. Build command: claude -p "{prompt}" --model {model} --allowedTools {tools}
-  // 4. Set env vars: DECK_DAEMON_URL, DECK_AGENT_TOKEN, plus opts.EnvVars
+  // 4. Set env vars: TACK_DAEMON_URL, TACK_AGENT_TOKEN, plus opts.EnvVars
   // 5. Execute via sandbox.Exec() in a goroutine
   // 6. Return ClaudeCodeProcess that monitors execution
   func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.AgentOpts) (runtime.AgentProcess, error)
@@ -302,7 +302,7 @@ Implement the first concrete sandbox provider and agent runtime. The local sandb
   2. Build the full prompt: `opts.Overlay + "\n\n" + "Begin your task now."`
   3. Build tool allowlist: join `opts.Tools` with commas
   4. Construct command: `claude -p "..." --model {model} --allowedTools "..."`
-  5. Set up env vars map with `DECK_DAEMON_URL` and `DECK_AGENT_TOKEN` from `opts.EnvVars`
+  5. Set up env vars map with `TACK_DAEMON_URL` and `TACK_AGENT_TOKEN` from `opts.EnvVars`
   6. Start goroutine that calls `sandbox.Exec()` with the command
   7. On completion: parse exit code, set result (Success = exitCode == 0), send event, close channels
   8. Return `ClaudeCodeProcess` immediately
@@ -325,14 +325,14 @@ The agent spawner coordinates the full lifecycle of creating an agent: recording
       "context"
       "fmt"
       "log/slog"
-      "github.com/syndg/deck/internal/db"
-      "github.com/syndg/deck/internal/domain"
-      "github.com/syndg/deck/internal/runtime"
-      "github.com/syndg/deck/internal/sandbox"
-      "github.com/syndg/deck/internal/services/agents"
-      "github.com/syndg/deck/internal/harness/rules"
-      "github.com/syndg/deck/internal/harness/tools"
-      events "github.com/syndg/deck/internal/services/events"
+      "github.com/syndg/tack/internal/db"
+      "github.com/syndg/tack/internal/domain"
+      "github.com/syndg/tack/internal/runtime"
+      "github.com/syndg/tack/internal/sandbox"
+      "github.com/syndg/tack/internal/services/agents"
+      "github.com/syndg/tack/internal/harness/rules"
+      "github.com/syndg/tack/internal/harness/tools"
+      events "github.com/syndg/tack/internal/services/events"
   )
 
   // SpawnRequest describes what agent to create.
@@ -378,8 +378,8 @@ The agent spawner coordinates the full lifecycle of creating an agent: recording
   //   1. Look up role definition via agents.DefaultRoles()
   //   2. Create AgentSession record (status "pending")
   //   3. Provision sandbox via provider:
-  //      - Name: "deck-{objectiveID[:8]}-{role}-{sessionID[:8]}"
-  //      - Labels: deck.objective, deck.stream, deck.role
+  //      - Name: "tack-{objectiveID[:8]}-{role}-{sessionID[:8]}"
+  //      - Labels: tack.objective, tack.stream, tack.role
   //      - Ephemeral: !role.Persistent
   //   4. Match rules against file scope (empty for planners)
   //   5. Curate tools for the role + file scope
@@ -399,11 +399,11 @@ The agent spawner coordinates the full lifecycle of creating an agent: recording
 
   Environment variables passed to the agent:
   ```
-  DECK_DAEMON_URL=http://localhost:{port}
-  DECK_AGENT_TOKEN={generated-uuid}
-  DECK_OBJECTIVE_ID={objectiveID}
-  DECK_STREAM_ID={streamID}
-  DECK_AGENT_ROLE={role}
+  TACK_DAEMON_URL=http://localhost:{port}
+  TACK_AGENT_TOKEN={generated-uuid}
+  TACK_OBJECTIVE_ID={objectiveID}
+  TACK_STREAM_ID={streamID}
+  TACK_AGENT_ROLE={role}
   ```
 
   The spawner does NOT track running processes internally — it returns the `SpawnResult`
@@ -428,9 +428,9 @@ Dependency-aware scheduler that determines which streams are ready for execution
       "fmt"
       "log/slog"
       "sync"
-      "github.com/syndg/deck/internal/db"
-      "github.com/syndg/deck/internal/domain"
-      events "github.com/syndg/deck/internal/services/events"
+      "github.com/syndg/tack/internal/db"
+      "github.com/syndg/tack/internal/domain"
+      events "github.com/syndg/tack/internal/services/events"
   )
 
   // Scheduler manages dependency-aware stream execution.
@@ -512,11 +512,11 @@ Register handlers for each blueprint step type. These handlers implement the act
       "encoding/json"
       "fmt"
       "log/slog"
-      "github.com/syndg/deck/internal/db"
-      "github.com/syndg/deck/internal/domain"
-      "github.com/syndg/deck/internal/harness/blueprint"
-      "github.com/syndg/deck/internal/harness/gates"
-      "github.com/syndg/deck/internal/services/lifecycle"
+      "github.com/syndg/tack/internal/db"
+      "github.com/syndg/tack/internal/domain"
+      "github.com/syndg/tack/internal/harness/blueprint"
+      "github.com/syndg/tack/internal/harness/gates"
+      "github.com/syndg/tack/internal/services/lifecycle"
   )
 
   // Handlers implements blueprint step handlers for deterministic and human steps.
@@ -617,11 +617,11 @@ The coordinator is the central orchestration loop. It subscribes to events, driv
       "fmt"
       "log/slog"
       "sync"
-      "github.com/syndg/deck/internal/db"
-      "github.com/syndg/deck/internal/domain"
-      "github.com/syndg/deck/internal/harness/blueprint"
-      "github.com/syndg/deck/internal/services/lifecycle"
-      events "github.com/syndg/deck/internal/services/events"
+      "github.com/syndg/tack/internal/db"
+      "github.com/syndg/tack/internal/domain"
+      "github.com/syndg/tack/internal/harness/blueprint"
+      "github.com/syndg/tack/internal/services/lifecycle"
+      events "github.com/syndg/tack/internal/services/events"
   )
 
   // Coordinator orchestrates objective execution from plan approval to completion.
@@ -808,8 +808,8 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
 
   File: `internal/client/client.go`
 
-- [x] **7.3** Create `deck exec` command
-  Create `cmd/deck/exec.go` with:
+- [x] **7.3** Create `tack exec` command
+  Create `cmd/tack/exec.go` with:
 
   ```go
   var execCmd = &cobra.Command{
@@ -830,10 +830,10 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
 
   Register with `rootCmd.AddCommand(execCmd)` in init().
 
-  File: `cmd/deck/exec.go`
+  File: `cmd/tack/exec.go`
 
-- [x] **7.4** Create `deck agents` command
-  Create `cmd/deck/agents.go` with:
+- [x] **7.4** Create `tack agents` command
+  Create `cmd/tack/agents.go` with:
 
   ```go
   var agentsCmd = &cobra.Command{
@@ -879,10 +879,10 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
 
   Reuse `truncateID` and `timeAgo` helpers from `plans.go` (same `main` package).
 
-  File: `cmd/deck/agents.go`
+  File: `cmd/tack/agents.go`
 
-- [x] **7.5** Create `deck mail` command
-  Create `cmd/deck/mail.go` with:
+- [x] **7.5** Create `tack mail` command
+  Create `cmd/tack/mail.go` with:
 
   ```go
   var mailCmd = &cobra.Command{
@@ -935,7 +935,7 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
   sendMailCmd.MarkFlagRequired("objective")
   ```
 
-  File: `cmd/deck/mail.go`
+  File: `cmd/tack/mail.go`
 
 ---
 
@@ -956,10 +956,10 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
 
   2. Import new packages:
   ```go
-  "github.com/syndg/deck/internal/services/mail"
-  "github.com/syndg/deck/internal/services/dispatch"
-  "github.com/syndg/deck/internal/sandbox/local"
-  "github.com/syndg/deck/internal/runtime/claudecode"
+  "github.com/syndg/tack/internal/services/mail"
+  "github.com/syndg/tack/internal/services/dispatch"
+  "github.com/syndg/tack/internal/sandbox/local"
+  "github.com/syndg/tack/internal/runtime/claudecode"
   ```
 
   3. In `New()`:
@@ -968,7 +968,7 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
   mailBroker := mail.New(mailStore, agentStore, eventBus, logger)
 
   // Create sandbox provider (local worktrees for now)
-  worktreeDir := filepath.Join(os.TempDir(), "deck-worktrees")
+  worktreeDir := filepath.Join(os.TempDir(), "tack-worktrees")
   sandboxProv := local.New(projectRoot, worktreeDir, logger)
 
   // Create agent runtime (Claude Code)
@@ -1089,9 +1089,9 @@ Extend the daemon API and CLI to support execution management, agent monitoring,
 | 8 | 6.1 Create execution coordinator | 6 |
 | 9 | 7.1 Add execution management HTTP routes | 7 |
 | 10 | 7.2 Add execution and mail client methods | 7 |
-| 11 | 7.3 Create `deck exec` command | 7 |
-| 12 | 7.4 Create `deck agents` command | 7 |
-| 13 | 7.5 Create `deck mail` command | 7 |
+| 11 | 7.3 Create `tack exec` command | 7 |
+| 12 | 7.4 Create `tack agents` command | 7 |
+| 13 | 7.5 Create `tack mail` command | 7 |
 | 14 | 8.1 Wire execution layer into daemon | 8 |
 | 15 | 8.2 Add event-driven execution trigger | 8 |
 | 16 | 8.3 Add unit tests | 8 |

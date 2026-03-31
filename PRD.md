@@ -1,4 +1,4 @@
-# Deck Phase 5: Merge & Review — PRD & Implementation Plan
+# Tack Phase 5: Merge & Review — PRD & Implementation Plan
 
 Build the merge queue that processes completed stream branches into the main branch. This phase implements the merge queue store, merge processor with tiered conflict resolution, post-merge quality gate re-execution, diff extraction for client consumption, and the API/CLI surface for managing merges.
 
@@ -57,7 +57,7 @@ The `merge_queue` table schema already exists in `internal/db/migrations.go`. Th
       "fmt"
       "time"
       "github.com/google/uuid"
-      "github.com/syndg/deck/internal/domain"
+      "github.com/syndg/tack/internal/domain"
   )
 
   type MergeQueueStore struct {
@@ -135,7 +135,7 @@ Implement the core git operations that perform branch merging with tiered confli
       "fmt"
       "log/slog"
       "strings"
-      "github.com/syndg/deck/internal/sandbox"
+      "github.com/syndg/tack/internal/sandbox"
   )
 
   // MergeResult describes the outcome of a merge attempt.
@@ -224,7 +224,7 @@ Implement the core git operations that perform branch merging with tiered confli
       "fmt"
       "log/slog"
       "strings"
-      "github.com/syndg/deck/internal/sandbox"
+      "github.com/syndg/tack/internal/sandbox"
   )
 
   // FileDiff represents the diff for a single file.
@@ -292,11 +292,11 @@ The central merge processing loop. Consumes the merge queue FIFO, coordinates gi
       "log/slog"
       "sync"
       "time"
-      "github.com/syndg/deck/internal/db"
-      "github.com/syndg/deck/internal/domain"
-      "github.com/syndg/deck/internal/harness/gates"
-      "github.com/syndg/deck/internal/sandbox"
-      events "github.com/syndg/deck/internal/services/events"
+      "github.com/syndg/tack/internal/db"
+      "github.com/syndg/tack/internal/domain"
+      "github.com/syndg/tack/internal/harness/gates"
+      "github.com/syndg/tack/internal/sandbox"
+      events "github.com/syndg/tack/internal/services/events"
   )
 
   // Processor manages the merge queue lifecycle.
@@ -389,7 +389,7 @@ The central merge processing loop. Consumes the merge queue FIFO, coordinates gi
   4. Update stream: `status = "merging"`
   5. Get sandbox for merge work:
      - Use `sandboxProv.Get()` to find an existing sandbox for the objective
-     - Or create a temporary one via `sandboxProv.Create()` with labels `{deck.role: merger, deck.objective: objectiveID}`
+     - Or create a temporary one via `sandboxProv.Create()` with labels `{tack.role: merger, tack.objective: objectiveID}`
   6. Call `merger.Merge(ctx, sb, entry.Branch)`:
      - On success: `runPostMergeGates()`, then:
        - Gates pass → extract diff, store in entry, update entry `status = "merged"`, update stream `status = "merged"`, publish `EventMergeCompleted`
@@ -421,7 +421,7 @@ Connect the merge processor to the existing blueprint engine and daemon infrastr
 
   2. Add import:
   ```go
-  "github.com/syndg/deck/internal/services/merge"
+  "github.com/syndg/tack/internal/services/merge"
   ```
 
   3. In `New()`:
@@ -555,8 +555,8 @@ Expose merge queue management and diff viewing through the HTTP API and CLI.
 
   File: `internal/client/client.go`
 
-- [x] **5.3** Create `deck merge` command
-  Create `cmd/deck/merge.go` with:
+- [x] **5.3** Create `tack merge` command
+  Create `cmd/tack/merge.go` with:
 
   ```go
   var mergeCmd = &cobra.Command{
@@ -600,8 +600,8 @@ Expose merge queue management and diff viewing through the HTTP API and CLI.
   Format `mergeCmd` output as aligned table using `text/tabwriter`:
   ```
   ID        STREAM    BRANCH                          STATUS    TIER  CREATED
-  a1b2c3    d4e5f6    deck/d4e5f6/builder-g7h8i9      merged    1     5m ago
-  j0k1l2    m3n4o5    deck/m3n4o5/builder-p6q7r8      pending   0     2m ago
+  a1b2c3    d4e5f6    tack/d4e5f6/builder-g7h8i9      merged    1     5m ago
+  j0k1l2    m3n4o5    tack/m3n4o5/builder-p6q7r8      pending   0     2m ago
   ```
 
   `mergeDiffCmd` output:
@@ -628,7 +628,7 @@ Expose merge queue management and diff viewing through the HTTP API and CLI.
 
   Reuse `truncateID` and `timeAgo` helpers from `plans.go`.
 
-  File: `cmd/deck/merge.go`
+  File: `cmd/tack/merge.go`
 
 ---
 
@@ -695,5 +695,5 @@ Expose merge queue management and diff viewing through the HTTP API and CLI.
 | 7 | 4.2 Replace merge_queue stub in handlers | 4 |
 | 8 | 5.1 Add merge queue HTTP routes | 5 |
 | 9 | 5.2 Add merge queue client methods | 5 |
-| 10 | 5.3 Create deck merge command | 5 |
+| 10 | 5.3 Create tack merge command | 5 |
 | 11 | 6.1 Add unit tests | 6 |

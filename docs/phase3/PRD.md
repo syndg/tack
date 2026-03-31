@@ -1,4 +1,4 @@
-# Deck Phase 3: Planning — PRD & Implementation Plan
+# Tack Phase 3: Planning — PRD & Implementation Plan
 
 Build the planning layer that bridges objectives to execution. This phase produces plan and stream data stores, a planning service that manages planner agent sessions, agent overlay generation, objective lifecycle management, plan approval flow, simple mode (single-agent escape hatch), and the CLI/API surface for interacting with plans.
 
@@ -27,7 +27,7 @@ The `plans` and `streams` tables already exist in `internal/db/migrations.go` (P
       "fmt"
       "time"
       "github.com/google/uuid"
-      "github.com/syndg/deck/internal/domain"
+      "github.com/syndg/tack/internal/domain"
   )
 
   // PlanStore persists plan records.
@@ -76,7 +76,7 @@ The `plans` and `streams` tables already exist in `internal/db/migrations.go` (P
       "fmt"
       "time"
       "github.com/google/uuid"
-      "github.com/syndg/deck/internal/domain"
+      "github.com/syndg/tack/internal/domain"
   )
 
   // StreamStore persists stream records.
@@ -127,9 +127,9 @@ Centralize objective state transitions and enforce valid lifecycle progression.
       "context"
       "fmt"
       "log/slog"
-      "github.com/syndg/deck/internal/db"
-      "github.com/syndg/deck/internal/domain"
-      events "github.com/syndg/deck/internal/services/events"
+      "github.com/syndg/tack/internal/db"
+      "github.com/syndg/tack/internal/domain"
+      events "github.com/syndg/tack/internal/services/events"
   )
 
   // Manager enforces objective state transitions and coordinates
@@ -232,9 +232,9 @@ Build the context package that each agent receives: role definition, task spec, 
   import (
       "fmt"
       "strings"
-      "github.com/syndg/deck/internal/domain"
-      "github.com/syndg/deck/internal/harness/rules"
-      "github.com/syndg/deck/internal/harness/tools"
+      "github.com/syndg/tack/internal/domain"
+      "github.com/syndg/tack/internal/harness/rules"
+      "github.com/syndg/tack/internal/harness/tools"
   )
 
   // OverlayInput holds all inputs for constructing an agent's system overlay.
@@ -249,7 +249,7 @@ Build the context package that each agent receives: role definition, task spec, 
       CuratedTools tools.CurationResult
       QualityGates []string            // gate commands to run before completion
       LeadAgent    string              // name of this agent's lead (empty for planners)
-      Guidance     string              // project-level guidance from .deck/config.yaml
+      Guidance     string              // project-level guidance from .tack/config.yaml
   }
 
   // BuildOverlay generates the markdown system prompt overlay for an agent.
@@ -271,7 +271,7 @@ Build the context package that each agent receives: role definition, task spec, 
 
   `BuildOverlay` produces markdown following the design doc's overlay format:
   ```markdown
-  # Deck Agent: {agentName}
+  # Tack Agent: {agentName}
 
   ## Role
   You are a {role.Name} agent. {role.Description}
@@ -294,20 +294,20 @@ Build the context package that each agent receives: role definition, task spec, 
 
   ## Communication
   - Your lead is: {leadAgent}
-  - Use deck.status() to report progress
-  - Use deck.escalate() if you're blocked
-  - Use deck.done() when finished
+  - Use tack.status() to report progress
+  - Use tack.escalate() if you're blocked
+  - Use tack.done() when finished
 
   ## Constraints
   - Do NOT modify files outside your scope
-  - Do NOT push to git (Deck handles merging)
+  - Do NOT push to git (Tack handles merging)
   - Do NOT install new dependencies without escalating
   - Commit frequently with descriptive messages
   ```
 
   `BuildPlannerOverlay` instructs the planner to produce a structured plan:
   ```markdown
-  # Deck Agent: planner
+  # Tack Agent: planner
 
   ## Role
   You are a Planner agent. Explore the codebase and decompose the objective into parallel work streams.
@@ -346,7 +346,7 @@ The planning service manages planner agent sessions — spawning them, collectin
   import (
       "fmt"
       "gopkg.in/yaml.v3"
-      "github.com/syndg/deck/internal/domain"
+      "github.com/syndg/tack/internal/domain"
   )
 
   // RawPlan is the YAML structure a planner agent outputs.
@@ -406,11 +406,11 @@ The planning service manages planner agent sessions — spawning them, collectin
       "context"
       "fmt"
       "log/slog"
-      "github.com/syndg/deck/internal/db"
-      "github.com/syndg/deck/internal/domain"
-      "github.com/syndg/deck/internal/services/agents"
-      "github.com/syndg/deck/internal/services/lifecycle"
-      events "github.com/syndg/deck/internal/services/events"
+      "github.com/syndg/tack/internal/db"
+      "github.com/syndg/tack/internal/domain"
+      "github.com/syndg/tack/internal/services/agents"
+      "github.com/syndg/tack/internal/services/lifecycle"
+      events "github.com/syndg/tack/internal/services/events"
   )
 
   // Service manages the planning lifecycle for objectives.
@@ -489,7 +489,7 @@ Simple mode collapses the planning pipeline to a single agent in a single sandbo
       "context"
       "fmt"
       "log/slog"
-      "github.com/syndg/deck/internal/domain"
+      "github.com/syndg/tack/internal/domain"
   )
 
   // SimpleOpts configures simple mode execution.
@@ -513,7 +513,7 @@ Simple mode collapses the planning pipeline to a single agent in a single sandbo
 
   Simple mode uses the `hotfix` blueprint by default (single-agent: fix → lint → merge → complete).
   When `AutoApprove` is true, the plan is approved inline — no human gate.
-  This is the `deck plan "fix typo" --simple` path from the design doc.
+  This is the `tack plan "fix typo" --simple` path from the design doc.
 
   File: `internal/services/planner/simple.go`
 
@@ -613,8 +613,8 @@ Extend the CLI client to support plan management.
 
   File: `internal/client/client.go`
 
-- [x] **7.2** Create `deck plans` command
-  Create `cmd/deck/plans.go` with:
+- [x] **7.2** Create `tack plans` command
+  Create `cmd/tack/plans.go` with:
 
   ```go
   var plansCmd = &cobra.Command{
@@ -636,10 +636,10 @@ Extend the CLI client to support plan management.
   ```
 
   Register with `rootCmd.AddCommand(plansCmd)` in init().
-  File: `cmd/deck/plans.go`
+  File: `cmd/tack/plans.go`
 
-- [x] **7.3** Create `deck show` command
-  Create `cmd/deck/show.go` with:
+- [x] **7.3** Create `tack show` command
+  Create `cmd/tack/show.go` with:
 
   ```go
   var showCmd = &cobra.Command{
@@ -676,10 +676,10 @@ Extend the CLI client to support plan management.
   ```
 
   Register with `rootCmd.AddCommand(showCmd)` in init().
-  File: `cmd/deck/show.go`
+  File: `cmd/tack/show.go`
 
-- [x] **7.4** Create `deck approve` and `deck reject` commands
-  Create `cmd/deck/approve.go` with:
+- [x] **7.4** Create `tack approve` and `tack reject` commands
+  Create `cmd/tack/approve.go` with:
 
   ```go
   var approveCmd = &cobra.Command{
@@ -706,10 +706,10 @@ Extend the CLI client to support plan management.
   ```
 
   Register both with `rootCmd.AddCommand()` in init().
-  File: `cmd/deck/approve.go`
+  File: `cmd/tack/approve.go`
 
-- [x] **7.5** Enhance `deck plan` with flags
-  Update `cmd/deck/plan.go` to support:
+- [x] **7.5** Enhance `tack plan` with flags
+  Update `cmd/tack/plan.go` to support:
 
   ```go
   var (
@@ -752,7 +752,7 @@ Extend the CLI client to support plan management.
   The `--auto` flag sets planning mode to batch (planner works autonomously, plan appears in approval queue).
   The `--blueprint` flag overrides blueprint selection.
 
-  File: `cmd/deck/plan.go`
+  File: `cmd/tack/plan.go`
 
 ---
 
@@ -768,9 +768,9 @@ Extend the CLI client to support plan management.
 
   Import the new service packages:
   ```go
-  "github.com/syndg/deck/internal/services/lifecycle"
-  "github.com/syndg/deck/internal/services/planner"
-  "github.com/syndg/deck/internal/services/agents"
+  "github.com/syndg/tack/internal/services/lifecycle"
+  "github.com/syndg/tack/internal/services/planner"
+  "github.com/syndg/tack/internal/services/agents"
   ```
 
   File: `internal/daemon/daemon.go`
@@ -864,10 +864,10 @@ Extend the CLI client to support plan management.
 | 8 | 5.1 Create simple mode handler | 5 |
 | 9 | 6.1 Add plan and stream HTTP routes | 6 |
 | 10 | 7.1 Add plan client methods | 7 |
-| 11 | 7.2 Create `deck plans` command | 7 |
-| 12 | 7.3 Create `deck show` command | 7 |
-| 13 | 7.4 Create `deck approve` and `deck reject` commands | 7 |
-| 14 | 7.5 Enhance `deck plan` with flags | 7 |
+| 11 | 7.2 Create `tack plans` command | 7 |
+| 12 | 7.3 Create `tack show` command | 7 |
+| 13 | 7.4 Create `tack approve` and `tack reject` commands | 7 |
+| 14 | 7.5 Enhance `tack plan` with flags | 7 |
 | 15 | 8.1 Wire planning layer into daemon | 8 |
 | 16 | 8.2 Add objective creation endpoint enhancements | 8 |
 | 17 | 8.3 Add unit tests | 8 |

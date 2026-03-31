@@ -6,8 +6,7 @@
 *.dylib
 *.test
 *.out
-/deck
-/deck-daemon
+/tack
 /daemon
 /daytona-cleanup
 /daytona-pi-probe

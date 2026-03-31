@@ -1,4 +1,4 @@
-# Deck Phase 2: Harness Core — PRD & Implementation Plan
+# Tack Phase 2: Harness Core — PRD & Implementation Plan
 
 Build the deterministic harness infrastructure that constrains and informs agents. This phase produces the blueprint engine (YAML state machine), scoped rules engine (glob-matched context injection), tool curator (per-agent tool selection), and quality gate runner (deterministic validation in sandboxes).
 
@@ -131,7 +131,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
     - id: per_stream
       type: blueprint_ref
-      ref: ".deck/blueprints/stream.yaml"
+      ref: ".tack/blueprints/stream.yaml"
       next: merge
 
     - id: merge
@@ -223,7 +223,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   // Use go:embed to embed the defaults/ directory.
   func (r *Registry) LoadDefaults() error
 
-  // LoadFromDir loads blueprints from a directory (e.g., .deck/blueprints/ or ~/.config/deck/blueprints/).
+  // LoadFromDir loads blueprints from a directory (e.g., .tack/blueprints/ or ~/.config/tack/blueprints/).
   // Blueprints loaded later override earlier ones with the same name.
   func (r *Registry) LoadFromDir(dir string) error
 
@@ -363,7 +363,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   CREATE INDEX IF NOT EXISTS idx_executions_objective ON executions(objective_id);
   ```
 
-  Import: `database/sql`, `context`, `encoding/json`, `time`, `fmt`, `github.com/syndg/deck/internal/harness/blueprint`.
+  Import: `database/sql`, `context`, `encoding/json`, `time`, `fmt`, `github.com/syndg/tack/internal/harness/blueprint`.
   Files: `internal/db/blueprints.go`, `internal/db/migrations.go` (append)
 
 ---
@@ -569,7 +569,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
   import (
       "context"
-      "github.com/syndg/deck/internal/sandbox"
+      "github.com/syndg/tack/internal/sandbox"
   )
 
   // Runner executes quality gates inside a sandbox.
@@ -600,7 +600,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 
   `Run` iterates gates, calls `RunSingle` for each, collects results.
 
-  Import: `context`, `time`, `log/slog`, `github.com/syndg/deck/internal/sandbox`.
+  Import: `context`, `time`, `log/slog`, `github.com/syndg/tack/internal/sandbox`.
   File: `internal/harness/gates/runner.go`
 
 ---
@@ -610,8 +610,8 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
 - [x] **6.1** Wire harness into daemon
   Update `internal/daemon/daemon.go` to:
   1. Add fields: `blueprintRegistry *blueprint.Registry`, `rulesEngine *rules.Engine`, `toolCurator *tools.Curator`, `gateRunner *gates.Runner`
-  2. In `New()`: create blueprint registry, load defaults, optionally load from `.deck/blueprints/` and `~/.config/deck/blueprints/`
-  3. In `New()`: create rules engine, optionally load from `.deck/rules/` and `~/.config/deck/rules/`
+  2. In `New()`: create blueprint registry, load defaults, optionally load from `.tack/blueprints/` and `~/.config/tack/blueprints/`
+  3. In `New()`: create rules engine, optionally load from `.tack/rules/` and `~/.config/tack/rules/`
   4. In `New()`: create tool curator and gate runner
   5. Create `ExecutionStore` and add to daemon
 
@@ -638,7 +638,7 @@ Track progress with checkboxes. Log decisions/findings in `FINDINGS.md`.
   ```
 
   Register these routes in `registerRoutes()`.
-  These are read-only endpoints for now — execution creation happens through `deck plan` which will be enhanced in Phase 3 (Planning).
+  These are read-only endpoints for now — execution creation happens through `tack plan` which will be enhanced in Phase 3 (Planning).
 
   File: `internal/daemon/routes.go`
 

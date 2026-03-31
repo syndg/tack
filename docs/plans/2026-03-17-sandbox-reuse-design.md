@@ -11,7 +11,7 @@
 Sandbox creation is the most expensive operation in the Daytona pipeline (~30s per sandbox: provision + clone + install Pi + bun install). The previous model created a new sandbox per agent step, leading to:
 
 - **Resource exhaustion**: 3-stream plan creates up to 10 sandboxes (planner + 3 scouts + 3 builders + 3 reviewers + merger). Exceeds Daytona Tier 1 limit (10 vCPUs).
-- **Wrong naming**: Sandboxes named after the first agent role (`deck-{obj}-scout-{id}`). Dashboard shows 3 "scouts" when really it's 3 streams doing scout→build→review.
+- **Wrong naming**: Sandboxes named after the first agent role (`tack-{obj}-scout-{id}`). Dashboard shows 3 "scouts" when really it's 3 streams doing scout→build→review.
 - **Branch collision**: With sandbox reuse, all agents in a stream inherit the scout's branch name. Merger sees 3 identical branch names instead of 3 distinct stream branches.
 - **Slow**: Unnecessary clone + install overhead on every agent transition.
 
@@ -21,26 +21,26 @@ Sandbox creation is the most expensive operation in the Daytona pipeline (~30s p
 
 Each stream gets exactly one sandbox. All agents within that stream (scout, builder, reviewer) share it. The sandbox is created when the first agent in the stream spawns, and reused by subsequent agents.
 
-**Sandbox naming**: `deck-{obj[:8]}-{streamSlug}`
+**Sandbox naming**: `tack-{obj[:8]}-{streamSlug}`
 
 Where `streamSlug` is a URL-safe, truncated version of the stream title:
 - "CORS Middleware" → `cors-middleware`
 - "Health Check DB Verification" → `health-check-db`
 - Truncated to 30 chars, lowercase, alphanumeric + hyphens only
 
-**Branch naming**: `deck/{obj[:8]}/{streamSlug}`
+**Branch naming**: `tack/{obj[:8]}/{streamSlug}`
 
 One branch per stream, created at sandbox creation time. All agents in the stream work on this branch. The scout explores on it, the builder commits to it, the reviewer reviews it.
 
-**Sandbox labels**: Same as today but `deck.role` removed (sandbox isn't role-specific):
+**Sandbox labels**: Same as today but `tack.role` removed (sandbox isn't role-specific):
 ```
-deck.objective: {objectiveID}
-deck.stream: {streamID}
+tack.objective: {objectiveID}
+tack.stream: {streamID}
 ```
 
 ### Planner sandbox
 
-The planner is the only agent that doesn't belong to a stream. It gets its own sandbox named `deck-{obj[:8]}-planner`. This sandbox is deleted immediately after the plan is created (already implemented).
+The planner is the only agent that doesn't belong to a stream. It gets its own sandbox named `tack-{obj[:8]}-planner`. This sandbox is deleted immediately after the plan is created (already implemented).
 
 ### Merger reuses a stream sandbox
 
@@ -60,19 +60,19 @@ No new sandbox is created for the merger. This avoids Daytona CPU limits entirel
 
 The spawner's `Spawn` method changes:
 
-1. **Stream agents** (scout/builder/reviewer): Always look up existing sandbox by `deck.stream` label first. Only create if none exists (first agent in stream).
+1. **Stream agents** (scout/builder/reviewer): Always look up existing sandbox by `tack.stream` label first. Only create if none exists (first agent in stream).
 2. **Planner agents**: Create new sandbox (no stream context). Delete after completion.
 3. **Sandbox naming**: Derive from stream title, not role.
 4. **Branch naming**: Derive from stream title, not role + UUID.
 
 ```go
 // Before (per-agent):
-name = fmt.Sprintf("deck-%s-%s-%s", objShort, role, sessShort)
-branch = fmt.Sprintf("deck/%s/%s-%s", objShort, role, idShort)
+name = fmt.Sprintf("tack-%s-%s-%s", objShort, role, sessShort)
+branch = fmt.Sprintf("tack/%s/%s-%s", objShort, role, idShort)
 
 // After (per-stream):
-name = fmt.Sprintf("deck-%s-%s", objShort, streamSlug)
-branch = fmt.Sprintf("deck/%s/%s", objShort, streamSlug)
+name = fmt.Sprintf("tack-%s-%s", objShort, streamSlug)
+branch = fmt.Sprintf("tack/%s/%s", objShort, streamSlug)
 ```
 
 The `ReuseSandboxID` field on `SpawnRequest` is no longer needed for stream agents — the spawner handles reuse internally by querying sandbox labels.
@@ -84,12 +84,12 @@ Daytona's `ExecuteCommand` does not support shell compound commands (`&&`, `||`,
 ```yaml
 # Wrong (fails with exit 129):
 post_create:
-  - "git config user.name deck && git config user.email deck@localhost"
+  - "git config user.name tack && git config user.email tack@localhost"
 
 # Correct:
 post_create:
-  - "git config user.name deck"
-  - "git config user.email deck@localhost"
+  - "git config user.name tack"
+  - "git config user.email tack@localhost"
 ```
 
 The merger's git reset sequence must also use separate `Exec` calls, not `&&` chains.
@@ -120,9 +120,9 @@ None. Local sandboxes (git worktrees) work identically — the spawner creates o
 ## Implementation
 
 1. Add `streamSlug()` helper — sanitizes stream title to URL-safe name
-2. Update spawner `Spawn` — look up sandbox by `deck.stream` label before creating
-3. Update sandbox naming — `deck-{obj}-{streamSlug}` instead of `deck-{obj}-{role}-{id}`
-4. Update branch naming — `deck/{obj}/{streamSlug}` instead of `deck/{obj}/{role}-{id}`
+2. Update spawner `Spawn` — look up sandbox by `tack.stream` label before creating
+3. Update sandbox naming — `tack-{obj}-{streamSlug}` instead of `tack-{obj}-{role}-{id}`
+4. Update branch naming — `tack/{obj}/{streamSlug}` instead of `tack/{obj}/{role}-{id}`
 5. Remove `ReuseSandboxID` from coordinator's agent step handler (spawner handles it)
 6. Update merger `getMergerSandbox` — split compound git commands into separate Exec calls
 7. Update local provider `Create` — same naming changes

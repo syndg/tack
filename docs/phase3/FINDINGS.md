@@ -93,7 +93,7 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 - Added 8 route handlers to `internal/daemon/routes.go`: `handleCreatePlan`, `handleListPlans`, `handleGetPlan`, `handleApprovePlan`, `handleRejectPlan`, `handleGetObjectivePlan`, `handleListStreams`, `handleGetStream`.
 - Registered all 8 routes in `registerRoutes()`, including `GET /objectives/{id}/plan` which coexists safely with `GET /objectives/{id}` because Go 1.22 ServeMux treats `{id}` as a single path segment (no slash crossing).
 - Added `plans *db.PlanStore`, `streams *db.StreamStore`, `lifecycleManager *lifecycle.Manager` fields to `Daemon` struct in `daemon.go` (nil until task 8.1 wires them in `New()`).
-- Added `"github.com/syndg/deck/internal/services/lifecycle"` import to `daemon.go` and `"github.com/syndg/deck/internal/services/planner"` import to `routes.go`.
+- Added `"github.com/syndg/tack/internal/services/lifecycle"` import to `daemon.go` and `"github.com/syndg/tack/internal/services/planner"` import to `routes.go`.
 - `handleCreatePlan` calls `planner.ParsePlan` → `planner.ValidatePlan` → `planner.ToDomain` directly (bypassing planningService, which is task 8.1), then persists plan + streams, publishes `EventPlanCreated`, calls `lifecycleManager.MarkPlanReady`, returns the refreshed plan.
 - `isPlanNotFound` helper checks `strings.Contains(err.Error(), "not found")` since `PlanStore`/`StreamStore` return descriptive errors rather than `sql.ErrNoRows`.
 - `handleGetPlan` and `handleGetObjectivePlan` both return `{"plan": {...}, "streams": [...]}` via the `planWithStreams` struct per the PRD response format.
@@ -112,20 +112,20 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 
 ---
 
-## Task 7.4: Create deck approve and deck reject commands
+## Task 7.4: Create tack approve and tack reject commands
 
-- Created `cmd/deck/approve.go` with `approveCmd` and `rejectCmd` both registered via `init()`.
+- Created `cmd/tack/approve.go` with `approveCmd` and `rejectCmd` both registered via `init()`.
 - `approveCmd` — calls `c.ApprovePlan`, prints `"Plan {id} approved. Execution will begin."`.
 - `rejectCmd` — calls `c.RejectPlan`, prints `"Plan {id} rejected. Objective returned to planning."`.
 - Both commands use `cobra.ExactArgs(1)` and delegate entirely to the already-implemented client methods from task 7.1.
-- Tasks 7.2 (`deck plans`) and 7.3 (`deck show`) were pending at time of writing; task 7.2 is now implemented.
-- `go build ./cmd/deck/...` passes cleanly.
+- Tasks 7.2 (`tack plans`) and 7.3 (`tack show`) were pending at time of writing; task 7.2 is now implemented.
+- `go build ./cmd/tack/...` passes cleanly.
 
 ---
 
-## Task 7.2: Create deck plans command
+## Task 7.2: Create tack plans command
 
-- Created `cmd/deck/plans.go` with `plansCmd` cobra command registered via `init()`.
+- Created `cmd/tack/plans.go` with `plansCmd` cobra command registered via `init()`.
 - Uses `text/tabwriter` for aligned 4-column table: ID | OBJECTIVE | STATUS | CREATED.
 - IDs truncated to 8 chars via `truncateID` helper; keeps table compact without losing glanceability.
 - `timeAgo` helper formats elapsed time in human-readable units (s/m/h/d).
@@ -135,9 +135,9 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 
 ---
 
-## Task 7.5: Enhance deck plan with flags
+## Task 7.5: Enhance tack plan with flags
 
-- Updated `cmd/deck/plan.go`: added `planSimple`, `planBlueprint`, `planAuto` package-level vars; registered all three flags in `init()`.
+- Updated `cmd/tack/plan.go`: added `planSimple`, `planBlueprint`, `planAuto` package-level vars; registered all three flags in `init()`.
 - `--simple` path calls new `client.CreateObjectiveSimple(ctx, description, blueprint)` — added to `internal/client/client.go` since simple mode needs to decode a combined `{objective, plan}` response that the existing `CreateObjective` can't handle.
 - `CreateObjectiveSimpleResponse` struct added to `client.go` holding `Objective` and `Plan`; `CreateObjectiveSimple` POSTs `{"description": ..., "simple": true, "blueprint": ...}` and decodes into it.
 - Non-simple path keeps the existing `CreateObjective` call (server tasks 8.1/8.2 will add blueprint/auto handling later); `--blueprint` in non-simple mode will be wired server-side in task 8.2.
@@ -147,7 +147,7 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 ## Task 8.1: Wire planning layer into daemon
 
 - Added `planningService *planner.Service` field to `Daemon` struct; `plans`, `streams`, `lifecycleManager` fields were already present from task 6.1 but were nil (never wired in `New()`).
-- Added `"github.com/syndg/deck/internal/services/planner"` import to `daemon.go`; `lifecycle` was already imported.
+- Added `"github.com/syndg/tack/internal/services/planner"` import to `daemon.go`; `lifecycle` was already imported.
 - In `New()`: created `planStore` and `streamStore` via `db.NewPlanStore(conn)` and `db.NewStreamStore(conn)`.
 - In `New()`: created `lifecycleMgr` via `lifecycle.New(objectiveStore, planStore, streamStore, agentStore, eventBus, logger)`.
 - In `New()`: created `planningService` via `planner.New(planStore, streamStore, objectiveStore, agentStore, lifecycleMgr, eventBus, logger)`.
@@ -176,11 +176,11 @@ Phase 2 findings: `docs/phase2/FINDINGS.md`
 - `planner_test.go` tests `StartSimple` both with and without `AutoApprove`; the without-auto path verifies the objective stays in `planning` and the plan is `pending_approval`.
 - `decompose_test.go` covers both `ParsePlan` paths (code-block extraction and raw YAML fallback) with no DB needed.
 
-## Task 7.3: Create deck show command
+## Task 7.3: Create tack show command
 
-- Created `cmd/deck/show.go` with `showCmd` registered via `init()` → `rootCmd.AddCommand(showCmd)`.
+- Created `cmd/tack/show.go` with `showCmd` registered via `init()` → `rootCmd.AddCommand(showCmd)`.
 - Calls `c.GetPlan(cmd.Context(), args[0])` (single API call); "Objective:" line shows `plan.ObjectiveID` (truncated) since `PlanResponse` does not contain the objective description.
 - Reuses `truncateID` helper from `plans.go` (same package) for Plan/Objective ID display and fallback dep display.
 - Dependency display builds `idToIdx map[string]int` from the streams slice; maps each dep UUID to `"stream N"` label; unknown dep IDs fall back to truncated UUID.
 - Empty QualityGates → "Quality Gates: none"; empty streams → "Streams: none"; blank line after each stream entry for readability.
-- `go build ./cmd/deck/...` compiles cleanly.
+- `go build ./cmd/tack/...` compiles cleanly.

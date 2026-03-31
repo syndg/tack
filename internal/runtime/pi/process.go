@@ -180,9 +180,9 @@ func (p *PiProcess) handleEvent(event PiEvent) {
 			}
 		}
 
-		// Check for DECK_DONE signal in accumulated text
-		if idx := strings.Index(summary, "DECK_DONE:"); idx >= 0 {
-			doneSummary := summary[idx+len("DECK_DONE:"):]
+		// Check for TACK_DONE signal in accumulated text
+		if idx := strings.Index(summary, "TACK_DONE:"); idx >= 0 {
+			doneSummary := summary[idx+len("TACK_DONE:"):]
 			if nlIdx := strings.IndexByte(doneSummary, '\n'); nlIdx >= 0 {
 				doneSummary = doneSummary[:nlIdx]
 			}
@@ -193,7 +193,7 @@ func (p *PiProcess) handleEvent(event PiEvent) {
 		p.emit(runtime.AgentEvent{Type: "output", Content: summary})
 
 		// Pi in RPC mode stays alive after agent_end, waiting for more commands.
-		// Deck only needs one prompt-response cycle per agent, so kill the process
+		// Tack only needs one prompt-response cycle per agent, so kill the process
 		// to trigger EOF → readLoop exit → doneCh close → Wait() unblocks.
 		p.logger.Info("pi agent ended, killing process")
 		go p.Kill()

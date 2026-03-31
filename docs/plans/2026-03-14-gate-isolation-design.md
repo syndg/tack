@@ -21,16 +21,16 @@ With isolated worktrees, agents work in separate branches. Agent A changing an A
 Inter-agent coordination happens at **merge time** via the merge processor, not during execution via messaging.
 
 **Keep:**
-- Agent-to-human escalation (`@human` / `deck_escalate` tool)
+- Agent-to-human escalation (`@human` / `tack_escalate` tool)
 - Human-to-agent steer (inject message into running agent)
-- Agent-to-system done signal (`deck_done` tool)
+- Agent-to-system done signal (`tack_done` tool)
 - Mail storage layer (escalation history, audit trail)
 
 **Strip:**
 - Broadcast fanout to agents (`@builders`, `@all`, `@scouts`, `@reviewers`, `@leads`)
 - Relevance matrix and role-based filtering in `Broker.GetUnread`
 - Priority-based ordering for agent mail delivery
-- `deck_mail_send` tool (agent-to-agent messaging)
+- `tack_mail_send` tool (agent-to-agent messaging)
 - `before_agent_start` mail polling in Pi extension
 - `turn_end` debounced mail polling in Pi extension
 
@@ -132,12 +132,12 @@ Changes to `internal/services/mail/broker.go`:
 
 ### Strip from `internal/runtime/pi/extension/index.ts`
 
-- Remove `deck_mail_send` tool definition
+- Remove `tack_mail_send` tool definition
 - Remove `before_agent_start` mail polling hook
 - Remove `turn_end` debounced mail check
 - Keep `session_start` (initial escalation check — human may have steered)
-- Keep `deck_escalate` tool
-- Keep `deck_done` tool
+- Keep `tack_escalate` tool
+- Keep `tack_done` tool
 
 ### Strip from `internal/daemon/routes.go`
 
@@ -157,16 +157,16 @@ Changes to `internal/services/mail/broker.go`:
 Standard project layout:
 
 ```
-.deck/
+.tack/
   config.yaml          # runtime: model, provider, gates, concurrency
   blueprints/          # workflow: execution step definitions
     stream.yaml        # per-stream flow (build → lint → review → merge_ready)
   rules/               # context: project-specific agent guidance
     project.yaml
-  data/                # managed by deck (sqlite, logs)
+  data/                # managed by tack (sqlite, logs)
 ```
 
-Deck ships default blueprints (`feature.yaml` top-level, `stream.yaml` per-stream). Projects override by placing their own versions in `.deck/blueprints/`. Config at `.deck/config.yaml` is the only required file.
+Tack ships default blueprints (`feature.yaml` top-level, `stream.yaml` per-stream). Projects override by placing their own versions in `.tack/blueprints/`. Config at `.tack/config.yaml` is the only required file.
 
 ---
 

@@ -4,7 +4,7 @@
 
 ## Architecture
 
-Deck's inter-agent communication splits into two layers:
+Tack's inter-agent communication splits into two layers:
 
 **Protocol layer** (daemon, Go) — the stable contract that all adapters talk to. Owns message storage, addressing, group resolution, role-based filtering, and read-tracking. Exposed as HTTP endpoints. Runtime-agnostic — doesn't know or care whether agents run on Pi, Claude Code, or anything else.
 
@@ -126,7 +126,7 @@ All injection points call `POST /mail/{name}/read-all` immediately after fetchin
 --- You have 2 new messages ---
 [URGENT] From: lead-a7a5 (dispatch): Build the validation schemas
   Subject: Stream 1 assignment
-  Reply with: deck_mail_send to="lead-a7a5" threadId="msg-abc123"
+  Reply with: tack_mail_send to="lead-a7a5" threadId="msg-abc123"
 
 From: scout-a7a5 (status): Found 3 route files needing validation
   Subject: Scout report
@@ -139,23 +139,23 @@ Includes reply instructions so the agent knows how to respond in-thread.
 
 Three tools registered via `pi.registerTool()`:
 
-**`deck_mail_send`** — General-purpose messaging. Parameters: `to`, `subject`, `body`, `type?`, `priority?`, `threadId?`. Auto-populates `from`, `objective`, `stream` from env vars.
+**`tack_mail_send`** — General-purpose messaging. Parameters: `to`, `subject`, `body`, `type?`, `priority?`, `threadId?`. Auto-populates `from`, `objective`, `stream` from env vars.
 
-**`deck_escalate`** — Convenience wrapper. Parameters: `reason`, `to?` (defaults `@human`). Auto-sets `type: "escalation"`, `priority: "high"`.
+**`tack_escalate`** — Convenience wrapper. Parameters: `reason`, `to?` (defaults `@human`). Auto-sets `type: "escalation"`, `priority: "high"`.
 
-**`deck_done`** — Task completion signal. Parameters: `summary`. Sends `worker_done` to `@lead` with structured payload. Also emits `DECK_DONE:` via Pi notify for Go process handler.
+**`tack_done`** — Task completion signal. Parameters: `summary`. Sends `worker_done` to `@lead` with structured payload. Also emits `TACK_DONE:` via Pi notify for Go process handler.
 
 ## Claude Code Adapter (Reference Sketch)
 
 Validates runtime-agnostic design. Not built now.
 
 ```
-SessionStart:     deck mail check --inject --agent $DECK_AGENT_NAME
-UserPromptSubmit: deck mail check --inject --agent $DECK_AGENT_NAME
-PostToolUse:      deck mail check --inject --agent $DECK_AGENT_NAME --debounce 30000
+SessionStart:     tack mail check --inject --agent $TACK_AGENT_NAME
+UserPromptSubmit: tack mail check --inject --agent $TACK_AGENT_NAME
+PostToolUse:      tack mail check --inject --agent $TACK_AGENT_NAME --debounce 30000
 ```
 
-`deck mail check --inject` is a CLI subcommand that calls the daemon API, formats messages as text, writes to stdout, and marks as read.
+`tack mail check --inject` is a CLI subcommand that calls the daemon API, formats messages as text, writes to stdout, and marks as read.
 
 Tools registered as MCP tools or bash commands in the system prompt.
 
@@ -175,8 +175,8 @@ Same protocol, same daemon, same filtering. Thinner delivery mechanism.
 - Add `session_start` — initial mail fetch and injection
 - Add `before_agent_start` — per-prompt mail check (keep planner YAML hook, add mail)
 - Add `turn_end` — debounced check with priority-based delivery
-- Rewrite tools: `deck_mail_send` (with subject, priority, threadId), `deck_escalate`, `deck_done`
-- Remove `deck_status` (folded into `deck_mail_send`)
+- Rewrite tools: `tack_mail_send` (with subject, priority, threadId), `tack_escalate`, `tack_done`
+- Remove `tack_status` (folded into `tack_mail_send`)
 - Mark messages read after every injection
 
 ### No changes to

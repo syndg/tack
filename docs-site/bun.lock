@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "deck-docs",
+      "name": "tack-docs",
       "dependencies": {
         "fumadocs-core": "^16.7.5",
         "fumadocs-mdx": "^14.2.11",

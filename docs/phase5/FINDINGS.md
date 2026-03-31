@@ -20,20 +20,20 @@
 
 ## Phase 1 — Build Fix (attempt 1)
 
-- **Problem**: `ralph.sh` line 18 set `PROJECT_DIR` by navigating two levels up from the script's directory (`$(dirname "$0")/../..`). The script lives at the repo root, so this resolved to `/Volumes/External` instead of `/Volumes/External/Coding/deck`. The `go build ./...` command then ran from a directory with no `go.mod`, producing: `pattern ./...: directory prefix . does not contain main module or its selected dependencies`.
+- **Problem**: `ralph.sh` line 18 set `PROJECT_DIR` by navigating two levels up from the script's directory (`$(dirname "$0")/../..`). The script lives at the repo root, so this resolved to `/Volumes/External` instead of `/Volumes/External/Coding/tack`. The `go build ./...` command then ran from a directory with no `go.mod`, producing: `pattern ./...: directory prefix . does not contain main module or its selected dependencies`.
 - **Fix**: Changed `PROJECT_DIR` to use `$(dirname "$0")` directly (no `/../..`), since the script is at the project root.
 - `go build ./...` and `go vet ./...` both pass.
 
 ## Phase 1 — Build Fix (attempt 2)
 
 - **Problem**: Same error as attempt 1 — `pattern ./...: directory prefix . does not contain main module or its selected dependencies`. Attempt 1 correctly fixed the `ralph.sh` *file* (changed `PROJECT_DIR` from `$(dirname "$0")/../..` to `$(dirname "$0")`), but the **running** ralph.sh process still holds the stale `PROJECT_DIR=/Volumes/External` variable. Shell variables set at script startup aren't refreshed when the file is edited on disk.
-- **Go code is fine**: `go build ./...` and `go vet ./...` both pass from `/Volumes/External/Coding/deck`. The merge queue store, domain types, and migrations all compile correctly.
+- **Go code is fine**: `go build ./...` and `go vet ./...` both pass from `/Volumes/External/Coding/tack`. The merge queue store, domain types, and migrations all compile correctly.
 - **Resolution**: No Go code changes needed. The ralph.sh file fix from attempt 1 is correct but requires a **restart** of ralph.sh to take effect. The running process will continue to fail on sanity checks until restarted.
 
 ## Phase 1 — Build Fix (attempt 3)
 
 - **Same root cause as attempts 1 & 2**: The `go build ./...` error (`directory prefix . does not contain main module`) is caused by the running ralph.sh process holding a stale `PROJECT_DIR=/Volumes/External` variable. The fix on disk (line 18: `PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"`) is already correct since attempt 1.
-- **No Go code changes needed**: `go build ./...` and `go vet ./...` both pass cleanly from `/Volumes/External/Coding/deck`. All Phase 1 files (`internal/db/merge_queue.go`, `internal/db/migrations.go`, `internal/domain/types.go`) compile without errors.
+- **No Go code changes needed**: `go build ./...` and `go vet ./...` both pass cleanly from `/Volumes/External/Coding/tack`. All Phase 1 files (`internal/db/merge_queue.go`, `internal/db/migrations.go`, `internal/domain/types.go`) compile without errors.
 - **Action required**: Ralph must be **restarted** so the corrected `PROJECT_DIR` takes effect. The running process cannot self-heal this variable — it was set once at startup and the in-memory value persists regardless of file edits.
 
 ## Task 2.1: Create merge operations package
@@ -60,10 +60,10 @@
 ## Task 3.1: Create merge queue processor
 
 - Created `internal/services/merge/processor.go` with full `Processor` implementation: `Start`, `Stop`, `ProcessNext`, `EnqueueStream`, plus internal helpers `processAll`, `processEntry`, `handleMergeSuccess`, `revertMerge`, `failEntry`, `checkDependencies`, `runPostMergeGates`, `checkObjectiveComplete`, `getMergerSandbox`, `getStreamBranch`.
-- **Branch discovery**: The `domain.Stream` struct has no `Branch` field (PRD step 1 says "look up the stream to get branch name"). Resolved by using `sandboxProv.List()` with `{"deck.stream": streamID}` labels to find the stream's sandbox, then exec'ing `git rev-parse --abbrev-ref HEAD` in it. This avoids modifying the Stream struct or Sandbox interface.
+- **Branch discovery**: The `domain.Stream` struct has no `Branch` field (PRD step 1 says "look up the stream to get branch name"). Resolved by using `sandboxProv.List()` with `{"tack.stream": streamID}` labels to find the stream's sandbox, then exec'ing `git rev-parse --abbrev-ref HEAD` in it. This avoids modifying the Stream struct or Sandbox interface.
 - **Dependency ordering**: `ProcessNext` uses `ListPending()` instead of `Dequeue()` to iterate all pending entries and skip those with unsatisfied dependencies. `Dequeue()` only returns the oldest pending entry, which would cause an infinite loop if that entry's deps aren't met. `checkDependencies` treats a missing merge entry for a dependency stream (GetByStream error) as "not satisfied" rather than a hard error.
 - **Objective transition safety**: `checkObjectiveComplete` checks `obj.Status == ObjectiveStatusExecuting` before transitioning to "reviewing", since `mark_complete` (blueprint step) may fire before the async processor finishes. Publishes `EventObjectiveUpdated` manually since the processor doesn't depend on the lifecycle manager.
-- **Merger sandbox**: Uses `sandboxProv.List` with `{deck.role: merger, deck.objective: objectiveID}` to reuse an existing merger sandbox across multiple stream merges for the same objective. Creates one if none exists.
+- **Merger sandbox**: Uses `sandboxProv.List` with `{tack.role: merger, tack.objective: objectiveID}` to reuse an existing merger sandbox across multiple stream merges for the same objective. Creates one if none exists.
 - **Event flow**: `EnqueueStream` publishes `EventMergeQueued` (which the processor subscribes to). Note that `signalMergeReady` (handlers.go) also publishes `EventMergeQueued` before entries exist — the processor handles this gracefully by finding an empty queue.
 - `go build ./...` and `go vet ./...` pass with no errors.
 
@@ -103,9 +103,9 @@
 - `RetryMerge` follows the same fire-and-forget pattern as `ApprovePlan`/`RejectPlan` — closes body, returns nil on success.
 - `go build ./...` and `go vet ./...` pass with no errors.
 
-## Task 5.3: Create deck merge command
+## Task 5.3: Create tack merge command
 
-- Created `cmd/deck/merge.go` with three subcommands: `deck merge` (list queue), `deck merge retry [id]` (re-queue failed entry), `deck merge diff [stream-id]` (view diff summary).
+- Created `cmd/tack/merge.go` with three subcommands: `tack merge` (list queue), `tack merge retry [id]` (re-queue failed entry), `tack merge diff [stream-id]` (view diff summary).
 - `MergeEntry.CreatedAt` is `int64` (Unix timestamp), so wrapped with `time.Unix(e.CreatedAt, 0)` before passing to the existing `timeAgo` helper from `plans.go`.
 - Added `statusLetter` helper to map `FileDiff.Status` strings ("added", "modified", "deleted", "renamed") to single-letter indicators (A/M/D/R) for the diff output.
 - Reuses `truncateID` and `timeAgo` from `plans.go` — no duplication needed since they're in the same `main` package.

@@ -8,10 +8,10 @@
 
 ## Problem
 
-Deck has no credential management. Local sandboxes work by accident — they inherit the daemon's full `os.Environ()`, so `ANTHROPIC_API_KEY` leaks through. Daytona sandboxes only receive explicitly injected `DECK_*` vars, so agents fail immediately with no model API key.
+Tack has no credential management. Local sandboxes work by accident — they inherit the daemon's full `os.Environ()`, so `ANTHROPIC_API_KEY` leaks through. Daytona sandboxes only receive explicitly injected `TACK_*` vars, so agents fail immediately with no model API key.
 
 Additionally:
-- No `deck init` — users must hand-write `.deck/config.yaml`
+- No `tack init` — users must hand-write `.tack/config.yaml`
 - No separation between shared project config and personal settings
 - No way to manage credentials for multiple model providers
 - No onboarding experience
@@ -23,7 +23,7 @@ Additionally:
 
 Two layers. Project config is the source of truth; user config provides fallback defaults.
 
-**Project** — `.deck/config.yaml` (git-tracked, shared with team):
+**Project** — `.tack/config.yaml` (git-tracked, shared with team):
 ```yaml
 sandbox:
   provider: daytona
@@ -41,73 +41,73 @@ quality_gates:
   - bun run test
 ```
 
-**User** — `~/.config/deck/config.yaml` (personal, never tracked):
+**User** — `~/.config/tack/config.yaml` (personal, never tracked):
 ```yaml
 daemon:
   listen: "127.0.0.1:9800"
-  data_dir: "~/.config/deck/data"
+  data_dir: "~/.config/tack/data"
 agents:
   runtime: pi  # default when project doesn't specify
 ```
 
 **Resolution:** Project wins → User fallback → Hardcoded defaults.
 
-**Home directory:** `~/.config/deck/` is the canonical user home. This matches the existing CLI default paths (`root.go:34`, `main.go:17`), daemon blueprint/rule loading (`daemon.go:116`, `daemon.go:148`), and XDG conventions. No migration needed.
+**Home directory:** `~/.config/tack/` is the canonical user home. This matches the existing CLI default paths (`root.go:34`, `main.go:17`), daemon blueprint/rule loading (`daemon.go:116`, `daemon.go:148`), and XDG conventions. No migration needed.
 
 **Config discovery and merge algorithm:**
 
 `config.Load` gains a new signature: `config.Load(projectPath, userPath string) (*Config, error)`.
 
 1. Start with hardcoded defaults (`config.Default()`)
-2. If `~/.config/deck/config.yaml` exists, deep-merge it over defaults (user layer)
-3. If `.deck/config.yaml` exists, deep-merge it over the result (project layer wins)
+2. If `~/.config/tack/config.yaml` exists, deep-merge it over defaults (user layer)
+3. If `.tack/config.yaml` exists, deep-merge it over the result (project layer wins)
 
 Deep-merge rules:
 - Scalar fields: later value replaces earlier
 - Slices (quality_gates, post_create): later value replaces entirely (no append)
 - Maps: merged key-by-key (e.g., `agents.timeouts.roles` merges per-role)
 
-**Project root discovery:** Deck walks up from `cwd` looking for a `.deck/` directory (same pattern as `.git/` discovery). The first `.deck/config.yaml` found is the project config. If none found, Deck operates with user config + defaults only. The daemon also uses this rule — it resolves the project root at startup via `os.Getwd()`, which is consistent with the current behavior.
+**Project root discovery:** Tack walks up from `cwd` looking for a `.tack/` directory (same pattern as `.git/` discovery). The first `.tack/config.yaml` found is the project config. If none found, Tack operates with user config + defaults only. The daemon also uses this rule — it resolves the project root at startup via `os.Getwd()`, which is consistent with the current behavior.
 
-**`--config` flag:** The existing `--config` flag on `deck` and `deck-daemon` is **redefined** as the project config path override. It replaces the walk-up discovery for that invocation. Equivalent to `DECK_CONFIG_PATH`. The user config path is only overridable via `DECK_USER_CONFIG_PATH` (rare escape hatch, not a flag).
+**`--config` flag:** The existing `--config` flag on `tack` and `daemon` is **redefined** as the project config path override. It replaces the walk-up discovery for that invocation. Equivalent to `TACK_CONFIG_PATH`. The user config path is only overridable via `TACK_USER_CONFIG_PATH` (rare escape hatch, not a flag).
 
 ```go
 // Pseudocode
 func Load(projectPath, userPath string) (*Config, error) {
     cfg := Default()                    // hardcoded defaults
-    mergeFromFile(cfg, userPath)        // ~/.config/deck/config.yaml
-    mergeFromFile(cfg, projectPath)     // .deck/config.yaml (wins)
+    mergeFromFile(cfg, userPath)        // ~/.config/tack/config.yaml
+    mergeFromFile(cfg, projectPath)     // .tack/config.yaml (wins)
     return cfg, nil
 }
 ```
 
-**`deck config` subcommand:**
+**`tack config` subcommand:**
 
 Manages both layers via a single command. Default target is project config (most common action). `--user` flag targets the user layer. Project config location follows the same walk-up discovery as the rest of the CLI.
 
 ```
-deck config set <key> <value>              # project .deck/config.yaml
-deck config set --user <key> <value>       # user ~/.config/deck/config.yaml
-deck config get <key>                      # resolved value (merged)
-deck config get --user <key>               # user-layer value only
-deck config get --project <key>            # project-layer value only
-deck config list                           # all resolved config
-deck config list --user                    # user config only
-deck config remove <key>                   # remove from project config
-deck config remove --user <key>            # remove from user config
+tack config set <key> <value>              # project .tack/config.yaml
+tack config set --user <key> <value>       # user ~/.config/tack/config.yaml
+tack config get <key>                      # resolved value (merged)
+tack config get --user <key>               # user-layer value only
+tack config get --project <key>            # project-layer value only
+tack config list                           # all resolved config
+tack config list --user                    # user config only
+tack config remove <key>                   # remove from project config
+tack config remove --user <key>            # remove from user config
 ```
 
 Dotted keys for nested values:
 ```
-deck config set agents.runtime pi
-deck config set --user daemon.listen 127.0.0.1:9800
-deck config get agents.pi.model
-deck config remove quality_gates
+tack config set agents.runtime pi
+tack config set --user daemon.listen 127.0.0.1:9800
+tack config get agents.pi.model
+tack config remove quality_gates
 ```
 
 ### Credentials Store
 
-Single file: `~/.config/deck/credentials.yaml` with `0600` permissions. Each entry is typed.
+Single file: `~/.config/tack/credentials.yaml` with `0600` permissions. Each entry is typed.
 
 **Supported credential types:**
 
@@ -174,7 +174,7 @@ sandbox:
 **Value resolution** — any string value supports three formats:
 - `"sk-ant-..."` — literal value
 - `"ANTHROPIC_API_KEY"` — environment variable lookup
-- `"!op read 'op://vault/deck/anthropic'"` — shell command (1Password, keychain, etc.)
+- `"!op read 'op://vault/tack/anthropic'"` — shell command (1Password, keychain, etc.)
 
 Shell commands are executed once and cached for the process lifetime. Timeout: 10 seconds.
 
@@ -188,19 +188,19 @@ Shell commands are executed once and cached for the process lifetime. Timeout: 1
 
 1. **System essentials** (allowlisted): `PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TMPDIR`, `XDG_*`
 2. **Sandbox-level env** (`s.envVars`): set at sandbox creation time
-3. **Per-execution env** (`opts.Env`): set by spawner — `DECK_*` vars + resolved credentials
+3. **Per-execution env** (`opts.Env`): set by spawner — `TACK_*` vars + resolved credentials
 
-No other host environment variables pass through. This makes local sandboxes behave like Daytona sandboxes — agents only see what Deck explicitly provides.
+No other host environment variables pass through. This makes local sandboxes behave like Daytona sandboxes — agents only see what Tack explicitly provides.
 
 **Post-create commands** (`provider.go:206`): Also use the restricted env (system essentials only + sandbox envVars). They don't need model credentials — they just install dependencies.
 
-**Worktree management commands** (`git worktree add`, `git branch -D`, etc.): These run from the daemon process via `exec.Command`, not inside the sandbox, so they inherit the full daemon env. This is correct — they're Deck-internal operations, not agent-visible.
+**Worktree management commands** (`git worktree add`, `git branch -D`, etc.): These run from the daemon process via `exec.Command`, not inside the sandbox, so they inherit the full daemon env. This is correct — they're Tack-internal operations, not agent-visible.
 
 ### Credential Injection
 
 When the spawner creates an agent, it reads the provider from project config and maps it to the correct env var for the runtime.
 
-**Mapping table** (hardcoded in Deck, initial scope — `api_key`, `setup_token`, and `pat`):
+**Mapping table** (hardcoded in Tack, initial scope — `api_key`, `setup_token`, and `pat`):
 
 | Provider | Type | Env var injected |
 |---|---|---|
@@ -217,21 +217,21 @@ When the spawner creates an agent, it reads the provider from project config and
 - Git credential: always injected as `GITHUB_TOKEN` (or `GITLAB_TOKEN` etc., derived from git host config)
 - Sandbox credentials (Daytona): never injected — daemon-side only
 
-**Initial scope:** `api_key`, `setup_token`, and `pat` types. The `oauth` type is reserved in the schema but not recognized at runtime — if present, Deck logs a warning: "OAuth credentials not yet supported, use api_key or setup_token".
+**Initial scope:** `api_key`, `setup_token`, and `pat` types. The `oauth` type is reserved in the schema but not recognized at runtime — if present, Tack logs a warning: "OAuth credentials not yet supported, use api_key or setup_token".
 
 **Flow:**
 1. Spawner reads project config → `agents.pi.provider: anthropic`
-2. Looks up `anthropic` in `~/.config/deck/credentials.yaml`
+2. Looks up `anthropic` in `~/.config/tack/credentials.yaml`
 3. Resolves the value (literal / env var / shell command)
 4. Maps to env var name for the runtime
-5. Adds to sandbox env alongside `DECK_*` vars
+5. Adds to sandbox env alongside `TACK_*` vars
 
-### `deck init`
+### `tack init`
 
 Interactive wizard using [charmbracelet/huh](https://github.com/charmbracelet/huh). Run once per project.
 
 ```
-$ deck init
+$ tack init
 
 → Which runtime? (pi / claude-code)
   > pi
@@ -245,43 +245,43 @@ $ deck init
 → Run `claude setup-token` in another terminal, then paste the token:
   > sk-ant-oat01-...
   ✓ Validated (sk-ant-oat01- prefix, 120 chars)
-  ✓ Stored in ~/.config/deck/credentials.yaml
+  ✓ Stored in ~/.config/tack/credentials.yaml
 
 → GitHub token (for PRs, clone, push):
   > ghp_...
-  ✓ Stored in ~/.config/deck/credentials.yaml
+  ✓ Stored in ~/.config/tack/credentials.yaml
 
 → Sandbox provider? (local / daytona)
   > daytona
 
 → Daytona API key:
   > dtn_...
-  ✓ Stored in ~/.config/deck/credentials.yaml
+  ✓ Stored in ~/.config/tack/credentials.yaml
 
 → Post-create commands? (e.g., bun install, npm install)
   > bun install
 
-✓ Created .deck/config.yaml
-✓ Credentials saved to ~/.config/deck/credentials.yaml
+✓ Created .tack/config.yaml
+✓ Credentials saved to ~/.config/tack/credentials.yaml
 ```
 
-Skips credential prompts for providers already in `~/.config/deck/credentials.yaml` (second project, same provider).
+Skips credential prompts for providers already in `~/.config/tack/credentials.yaml` (second project, same provider).
 
-### `deck auth`
+### `tack auth`
 
 Standalone subcommand for ongoing credential management.
 
 ```
-deck auth add <provider>       — add or replace a credential
-deck auth remove <provider>    — remove a credential
-deck auth list                 — show stored credentials (values masked)
-deck auth test <provider>      — verify credential works (hit the API)
+tack auth add <provider>       — add or replace a credential
+tack auth remove <provider>    — remove a credential
+tack auth list                 — show stored credentials (values masked)
+tack auth test <provider>      — verify credential works (hit the API)
 ```
 
-`deck auth refresh` deferred to the OAuth follow-up.
+`tack auth refresh` deferred to the OAuth follow-up.
 
 ```
-$ deck auth list
+$ tack auth list
   anthropic    api_key   ✓ valid
   openai       api_key   ✓ valid
   github       pat       ✓ valid
@@ -298,7 +298,7 @@ The **Daytona sandbox provider** owns repo bootstrap. Today the provider only ca
 2. **Bootstrap phase** (new, owned by provider):
    - If snapshot: `sandbox.Git.Pull()` to fetch latest (credentials passed via SDK options)
    - If no snapshot: `sandbox.Git.Clone()` the repo (credentials passed via SDK options)
-   - `sandbox.Git.CreateBranch()` + `sandbox.Git.Checkout()` for the deck working branch
+   - `sandbox.Git.CreateBranch()` + `sandbox.Git.Checkout()` for the tack working branch
    - Run post-create commands via `sandbox.Process.ExecuteCommand()`
 3. Return ready sandbox to spawner
 
@@ -315,7 +315,7 @@ The `credentials.Store` is a read-only interface that resolves credentials by na
 
 #### Snapshot model (speed + freshness)
 
-**One-time:** `deck snapshot create`
+**One-time:** `tack snapshot create`
 1. Auto-detects repo URL from `git remote get-url origin`
 2. Builds Daytona image: base OS + tooling + git clone (using stored git credential) + post-create commands (e.g., `bun install`)
 3. Hashes the lockfile, stores hash in snapshot labels
@@ -324,18 +324,18 @@ The `credentials.Store` is a read-only interface that resolves credentials by na
 **Per-sandbox boot** (during execution, ~5s):
 1. Create sandbox from snapshot (deps pre-installed, repo present)
 2. Provider bootstrap: `sandbox.Git.Pull()` using git credential (delta only)
-3. Provider bootstrap: `sandbox.Git.CreateBranch()` + `Checkout()` for `deck/{obj}/{role}-{id}`
+3. Provider bootstrap: `sandbox.Git.CreateBranch()` + `Checkout()` for `tack/{obj}/{role}-{id}`
 4. Spawner injects model provider credential + git token as env vars
 5. Runtime starts agent process
 
 #### Staleness detection
 
-Deck hashes the lockfile (`package-lock.json`, `bun.lockb`, `go.sum`, etc.) at snapshot creation time and stores it in the snapshot's labels.
+Tack hashes the lockfile (`package-lock.json`, `bun.lockb`, `go.sum`, etc.) at snapshot creation time and stores it in the snapshot's labels.
 
 At sandbox creation:
 - Compare current lockfile hash with snapshot label
 - If different: warn and fall back to running post-create commands after pull
-- User can run `deck snapshot update` to rebuild
+- User can run `tack snapshot update` to rebuild
 
 #### No-snapshot fallback
 
@@ -343,7 +343,7 @@ If no snapshot exists (first run or user skips snapshot creation):
 1. Create sandbox from base image (ubuntu + git + runtime tooling)
 2. Provider bootstrap: `sandbox.Git.Clone()` with git credential
 3. Provider bootstrap: run post-create commands
-4. Provider bootstrap: create + checkout deck branch
+4. Provider bootstrap: create + checkout tack branch
 5. Spawner injects credentials, runtime starts agent
 
 Slower (~30-60s) but works without any snapshot setup.
@@ -352,13 +352,13 @@ Slower (~30-60s) but works without any snapshot setup.
 
 ```
 # Project (git-tracked)
-.deck/
+.tack/
   config.yaml          # runtime, provider, gates, blueprints, post-create
   blueprints/          # custom blueprints (optional)
   rules/               # file-scope rules (optional)
 
 # User (personal, never tracked)
-~/.config/deck/
+~/.config/tack/
   config.yaml          # fallback defaults (listen addr, data dir)
   credentials.yaml     # all credentials (0600 perms)
   blueprints/          # user-level blueprint overrides
@@ -370,26 +370,26 @@ Slower (~30-60s) but works without any snapshot setup.
 
 1. **Local env isolation** — regression test: local sandbox `Exec` does NOT inherit `SUPER_SECRET_HOST_VAR` from `os.Environ()`, only receives allowlisted system vars + explicitly injected vars
 2. **Config precedence** — project config overrides user config; user config overrides defaults; credentials resolve literal/env/shell correctly
-3. **Project root discovery** — walk-up from nested subdirectory finds `.deck/config.yaml`; `--config` flag overrides discovery
+3. **Project root discovery** — walk-up from nested subdirectory finds `.tack/config.yaml`; `--config` flag overrides discovery
 4. **Credential injection** — spawner injects correct env var per provider/type (`api_key` and `setup_token`); `setup_token` validated and injected as `ANTHROPIC_API_KEY`; git token always injected; daytona key never injected
 5. **Daytona bootstrap with snapshot** — provider creates from snapshot, pulls latest, checks out branch, post-create runs
 6. **Daytona bootstrap without snapshot** — provider creates from image, clones repo, installs deps, checks out branch
 
 ### Implementation Order
 
-1. **Credentials store** — `~/.config/deck/credentials.yaml` read/write, value resolution (literal/env/shell), `0600` permissions
+1. **Credentials store** — `~/.config/tack/credentials.yaml` read/write, value resolution (literal/env/shell), `0600` permissions
 2. **Config layering** — project root walk-up discovery, project + user config merge with project-wins precedence
-3. **`deck config`** — set, get, list, remove with `--user` flag
+3. **`tack config`** — set, get, list, remove with `--user` flag
 4. **Local env isolation** — replace `os.Environ()` with minimal allowlist in `LocalSandbox.Exec/ExecStreaming`
 5. **Credential injection** — spawner reads provider from config, maps to env var, injects into sandbox
-6. **`deck auth`** — add, remove, list, test subcommands (huh for interactive prompts)
-7. **`deck init`** — interactive wizard with charmbracelet/huh
+6. **`tack auth`** — add, remove, list, test subcommands (huh for interactive prompts)
+7. **`tack init`** — interactive wizard with charmbracelet/huh
 8. **Daytona bootstrap** — provider owns clone/fetch + branch checkout + post-create
-9. **`deck snapshot`** — create, update, staleness detection
+9. **`tack snapshot`** — create, update, staleness detection
 
 ### Deferred (follow-up)
 
-- **Full OAuth (PKCE + auto-refresh):** Adds `deck auth refresh`, `deck auth login <provider>` (browser-based), and spawn-time auto-refresh. When implemented, adds `anthropic | oauth | ANTHROPIC_OAUTH_TOKEN` to the mapping table. Pi reads `ANTHROPIC_OAUTH_TOKEN` as a separate env var (verified in `pi-mono/packages/ai/src/env-api-keys.ts:71-73`).
+- **Full OAuth (PKCE + auto-refresh):** Adds `tack auth refresh`, `tack auth login <provider>` (browser-based), and spawn-time auto-refresh. When implemented, adds `anthropic | oauth | ANTHROPIC_OAUTH_TOKEN` to the mapping table. Pi reads `ANTHROPIC_OAUTH_TOKEN` as a separate env var (verified in `pi-mono/packages/ai/src/env-api-keys.ts:71-73`).
 
   **Reference implementation from Pi** (`pi-mono/packages/ai/src/utils/oauth/anthropic.ts`):
   - Client ID: `9d1c250a-e61b-44d9-88ed-5944d1962f5e`

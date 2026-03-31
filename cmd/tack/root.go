@@ -21,7 +21,7 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "tack",
-	Short: "Deck - agentic workflow orchestrator",
+	Short: "Tack - agentic workflow orchestrator",
 }
 
 func Execute() {
@@ -41,7 +41,7 @@ func init() {
 func loadConfig() (*config.Config, error) {
 	projectCfg := config.ResolveProjectConfig(cfgPath)
 	userCfg := config.UserConfigPath
-	if v := os.Getenv("DECK_USER_CONFIG_PATH"); v != "" {
+	if v := os.Getenv("TACK_USER_CONFIG_PATH"); v != "" {
 		userCfg = v
 	}
 	cfg, err := config.Load(projectCfg, userCfg)
@@ -54,7 +54,7 @@ func loadConfig() (*config.Config, error) {
 
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
-	Short: "Start the Deck daemon",
+	Short: "Start the Tack daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {

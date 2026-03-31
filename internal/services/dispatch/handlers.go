@@ -487,7 +487,7 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 	if messages.PRTitle != "" {
 		title = messages.PRTitle
 	}
-	body := fmt.Sprintf("Automated PR created by Deck.\n\nObjective: %s\nObjective ID: %s", obj.Description, obj.ID)
+	body := fmt.Sprintf("Automated PR created by Tack.\n\nObjective: %s\nObjective ID: %s", obj.Description, obj.ID)
 	if messages.PRBody != "" {
 		body = messages.PRBody
 	}

@@ -1,35 +1,35 @@
 /**
- * Deck Agent Pi Extension
+ * Tack Agent Pi Extension
  *
  * Runtime adapter for the agent orchestration protocol.
  * Handles escalation, task completion, and file scope enforcement.
  *
  * Hooks:
- *   - tool_call:  Enforces file scope from DECK_FILE_SCOPE env var
+ *   - tool_call:  Enforces file scope from TACK_FILE_SCOPE env var
  *
  * Tools:
- *   - deck_escalate:   Escalate an issue to the human operator
- *   - deck_done:       Task completion signal
+ *   - tack_escalate:   Escalate an issue to the human operator
+ *   - tack_done:       Task completion signal
  */
 
 import { Type } from "@sinclair/typebox";
 
 // --- Environment ---
 
-const DAEMON_URL = process.env.DECK_DAEMON_URL ?? "http://127.0.0.1:9800";
-const AGENT_TOKEN = process.env.DECK_AGENT_TOKEN ?? "";
-const AGENT_NAME = process.env.DECK_AGENT_NAME ?? "unknown";
-const AGENT_ROLE = process.env.DECK_AGENT_ROLE ?? "";
-const OBJECTIVE_ID = process.env.DECK_OBJECTIVE_ID ?? "";
-const STREAM_ID = process.env.DECK_STREAM_ID ?? "";
-const FILE_SCOPE = (process.env.DECK_FILE_SCOPE ?? "")
+const DAEMON_URL = process.env.TACK_DAEMON_URL ?? "http://127.0.0.1:9800";
+const AGENT_TOKEN = process.env.TACK_AGENT_TOKEN ?? "";
+const AGENT_NAME = process.env.TACK_AGENT_NAME ?? "unknown";
+const AGENT_ROLE = process.env.TACK_AGENT_ROLE ?? "";
+const OBJECTIVE_ID = process.env.TACK_OBJECTIVE_ID ?? "";
+const STREAM_ID = process.env.TACK_STREAM_ID ?? "";
+const FILE_SCOPE = (process.env.TACK_FILE_SCOPE ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
 
 // --- Helpers ---
 
-async function deckFetch(
+async function tackFetch(
   path: string,
   opts: RequestInit = {}
 ): Promise<Response> {
@@ -64,7 +64,7 @@ function matchesScope(filePath: string, patterns: string[]): boolean {
 
 // --- Extension Factory ---
 
-export default function deckExtension(pi: any) {
+export default function tackExtension(pi: any) {
   // --- Lifecycle Hooks ---
 
   // Planner system prompt augmentation
@@ -130,10 +130,10 @@ You may include analysis and reasoning text before the YAML block, but the YAML 
 
   // --- Tools ---
 
-  // deck_escalate: Escalate an issue to the human operator
+  // tack_escalate: Escalate an issue to the human operator
   pi.registerTool({
-    name: "deck_escalate",
-    label: "Deck Escalate",
+    name: "tack_escalate",
+    label: "Tack Escalate",
     description:
       "Escalate an issue to the human operator. Use when you encounter a blocker " +
       "that you cannot resolve within your file scope.",
@@ -144,7 +144,7 @@ You may include analysis and reasoning text before the YAML block, but the YAML 
       _toolCallId: string,
       params: { reason: string }
     ) {
-      const resp = await deckFetch("/mail", {
+      const resp = await tackFetch("/mail", {
         method: "POST",
         body: JSON.stringify({
           from: AGENT_NAME,
@@ -179,13 +179,13 @@ You may include analysis and reasoning text before the YAML block, but the YAML 
     },
   });
 
-  // deck_done: Task completion signal
+  // tack_done: Task completion signal
   pi.registerTool({
-    name: "deck_done",
-    label: "Deck Done",
+    name: "tack_done",
+    label: "Tack Done",
     description: "Signal that the current task is complete",
     promptGuidelines: [
-      "Call deck_done when you have finished your assigned task to signal completion to the orchestrator.",
+      "Call tack_done when you have finished your assigned task to signal completion to the orchestrator.",
     ],
     parameters: Type.Object({
       summary: Type.String({
@@ -199,10 +199,10 @@ You may include analysis and reasoning text before the YAML block, but the YAML 
       _onUpdate: any,
       ctx: any
     ) {
-      // Use Pi's notify to signal completion — the DECK_DONE: prefix is
+      // Use Pi's notify to signal completion — the TACK_DONE: prefix is
       // detected by the Go process handler via JSONL events.
       if (ctx?.ui?.notify) {
-        ctx.ui.notify(`DECK_DONE:${params.summary}`);
+        ctx.ui.notify(`TACK_DONE:${params.summary}`);
       }
       return {
         content: [

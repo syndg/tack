@@ -13,7 +13,7 @@ import (
 // UserConfigPath is the default location for user-level config.
 const UserConfigPath = "~/.config/tack/config.yaml"
 
-// ProjectConfigDir is the directory name Deck looks for in project roots.
+// ProjectConfigDir is the directory name Tack looks for in project roots.
 const ProjectConfigDir = ".tack"
 
 // DefaultBaseBranch is the fallback base branch when not configured.

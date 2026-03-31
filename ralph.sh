@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# ralph.sh — Deck Phase 5 Merge & Review Builder
+# ralph.sh — Tack Phase 5 Merge & Review Builder
 # Executes tasks from PRD.md in headless mode with parallel task support.
 # Runs sanity checks between phases. Self-heals on build failures (max 3 attempts).
 # Commits once per phase. Tracks findings in FINDINGS.md.
@@ -45,7 +45,7 @@ TASKS=(
   "4.2|4|Replace merge_queue stub in handlers"
   "5.1|5|Add merge queue HTTP routes"
   "5.2|5|Add merge queue client methods"
-  "5.3|5|Create deck merge command"
+  "5.3|5|Create tack merge command"
   "6.1|6|Add unit tests"
 )
 
@@ -169,7 +169,7 @@ run_task() {
     task_log="${LOG_FILE%.log}.${task_id}.log"
   fi
 
-  local prompt="You are implementing a Go project called Deck — an agentic workflow orchestrator.
+  local prompt="You are implementing a Go project called Tack — an agentic workflow orchestrator.
 
 PROJECT DIRECTORY: $PROJECT_DIR
 
@@ -341,7 +341,7 @@ fix_build() {
 
   log "  Fix attempt ${attempt}/${MAX_FIX_ATTEMPTS}..."
 
-  local prompt="You are implementing a Go project called Deck — an agentic workflow orchestrator.
+  local prompt="You are implementing a Go project called Tack — an agentic workflow orchestrator.
 
 PROJECT DIRECTORY: $PROJECT_DIR
 
@@ -400,7 +400,7 @@ EOF
 # ── Main loop ─────────────────────────────────────────────
 main() {
   echo "" > "$LOG_FILE"
-  log "${BOLD}Ralph — Deck Phase 5 Merge & Review Builder${NC}"
+  log "${BOLD}Ralph — Tack Phase 5 Merge & Review Builder${NC}"
   log "Project: $PROJECT_DIR"
   log ""
 

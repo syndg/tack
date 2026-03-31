@@ -30,8 +30,8 @@ Phase 1 findings: `docs/phase1/FINDINGS.md`
 ## Task 6.1: Wire harness into daemon
 
 - Added 5 new fields to `Daemon` struct: `blueprintRegistry`, `blueprintEngine`, `rulesEngine`, `toolCurator`, `gateRunner`, plus `executions` (`*db.ExecutionStore`).
-- `New()` initializes blueprint registry with `LoadDefaults()`, then optionally loads from `.deck/blueprints/` and `~/.config/deck/blueprints/` if those directories exist. Default load failure is fatal; optional dir load failures are logged as warnings.
-- Rules engine optionally loads from `.deck/rules/` and `~/.config/deck/rules/` if those directories exist. Missing dirs are silently skipped; load errors are warnings.
+- `New()` initializes blueprint registry with `LoadDefaults()`, then optionally loads from `.tack/blueprints/` and `~/.config/tack/blueprints/` if those directories exist. Default load failure is fatal; optional dir load failures are logged as warnings.
+- Rules engine optionally loads from `.tack/rules/` and `~/.config/tack/rules/` if those directories exist. Missing dirs are silently skipped; load errors are warnings.
 - Tool curator and gate runner are simple constructor calls (stateless, no loading needed).
 - Blueprint engine is created with the registry reference, ready for handler registration by future phases.
 - `os.UserHomeDir()` is called once and reused for both blueprint and rules user-level directory resolution.
@@ -177,7 +177,7 @@ Phase 1 findings: `docs/phase1/FINDINGS.md`
 
 - Fixed blueprint unreachable-step validation in `internal/harness/blueprint/loader.go`. Validation now traverses the step graph from the entry step instead of treating any referenced step as reachable.
 - Added a regression test in `internal/harness/blueprint/loader_test.go` covering unreachable subgraphs (`entry -> done` plus an orphaned `orphan -> orphan_done` chain).
-- Changed blueprint load precedence in `internal/daemon/daemon.go` so defaults load first, user blueprints load second, and project-local `.deck/blueprints/` load last. This aligns implementation with the design doc: project blueprints override user-level blueprints.
+- Changed blueprint load precedence in `internal/daemon/daemon.go` so defaults load first, user blueprints load second, and project-local `.tack/blueprints/` load last. This aligns implementation with the design doc: project blueprints override user-level blueprints.
 - Added daemon integration coverage for `GET /blueprints`, `GET /blueprints/{name}`, and `GET /executions` in `internal/daemon/daemon_integration_test.go`.
 - Added `ExecutionStore` integration coverage in `internal/db/db_integration_test.go` to exercise create/get/update/get-by-objective/list flows for persisted blueprint executions.
 - Aligned the shipped `internal/harness/blueprint/defaults/stream.yaml` with the design doc by adding the optional `scout` step ahead of `build`. This keeps the default blueprint contract closer to the intended product architecture while deferring actual scout-agent execution behavior to later phases.

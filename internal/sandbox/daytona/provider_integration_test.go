@@ -89,8 +89,8 @@ func TestIntegration_CreateExecDelete(t *testing.T) {
 	t.Logf("exec cwd: %q", res.Stdout)
 
 	// --- Exec: with Env ---
-	res, err = sb.Exec(ctx, "echo $DECK_TEST_VAR", sandbox.ExecOpts{
-		Env: map[string]string{"DECK_TEST_VAR": "it-works"},
+	res, err = sb.Exec(ctx, "echo $TACK_TEST_VAR", sandbox.ExecOpts{
+		Env: map[string]string{"TACK_TEST_VAR": "it-works"},
 	})
 	if err != nil {
 		t.Fatalf("Exec env: %v", err)

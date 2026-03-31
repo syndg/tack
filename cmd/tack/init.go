@@ -18,7 +18,7 @@ func init() {
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Initialize a Deck project",
+	Short: "Initialize a Tack project",
 	RunE:  runInit,
 }
 
@@ -28,8 +28,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("getting working directory: %w", err)
 	}
-	deckDir := filepath.Join(cwd, ".tack")
-	configPath := filepath.Join(deckDir, "config.yaml")
+	tackDir := filepath.Join(cwd, ".tack")
+	configPath := filepath.Join(tackDir, "config.yaml")
 
 	if _, err := os.Stat(configPath); err == nil {
 		var overwrite bool
@@ -172,7 +172,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// --- Write .tack/config.yaml ---
-	if err := os.MkdirAll(deckDir, 0o755); err != nil {
+	if err := os.MkdirAll(tackDir, 0o755); err != nil {
 		return fmt.Errorf("creating .tack directory: %w", err)
 	}
 
@@ -293,7 +293,7 @@ func promptGitCredential(store *credentials.Store) error {
 	return nil
 }
 
-// ensureDeckConfig is a no-arg helper that checks .tack/ exists in the current project root.
-func ensureDeckConfig() string {
+// ensureTackConfig is a no-arg helper that checks .tack/ exists in the current project root.
+func ensureTackConfig() string {
 	return config.ResolveProjectConfig("")
 }

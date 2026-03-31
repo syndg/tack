@@ -14,7 +14,7 @@ import (
 	"github.com/syndg/tack/internal/services/merge"
 )
 
-// Client communicates with the Deck daemon over HTTP.
+// Client communicates with the Tack daemon over HTTP.
 type Client struct {
 	baseURL    string
 	httpClient *http.Client

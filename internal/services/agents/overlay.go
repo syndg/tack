@@ -43,7 +43,7 @@ func BuildOverlay(input OverlayInput) string {
 	var b strings.Builder
 
 	// 1. Agent identity and role
-	fmt.Fprintf(&b, "# Deck Agent: %s\n\n", input.AgentName)
+	fmt.Fprintf(&b, "# Tack Agent: %s\n\n", input.AgentName)
 	b.WriteString("## Role\n")
 	fmt.Fprintf(&b, "You are a %s agent. %s\n\n", input.Role.Name, input.Role.Description)
 
@@ -113,14 +113,14 @@ func BuildOverlay(input OverlayInput) string {
 	if input.Messages != nil && input.Messages.Any() {
 		b.WriteString("## Delivery Metadata\n")
 		b.WriteString("At the very end of your final response, emit exactly one line starting with `TACK_MESSAGES:` followed by compact JSON containing the requested fields below.\n")
-		b.WriteString("Do not wrap it in a code fence. Keep it on a single line so Deck can parse it reliably.\n")
+		b.WriteString("Do not wrap it in a code fence. Keep it on a single line so Tack can parse it reliably.\n")
 		b.WriteString("If your runtime supports tack.done(), include that same final `TACK_MESSAGES:` line in the summary you pass to tack.done().\n")
 		if input.CommitMode == "agent" {
 			b.WriteString("If you are committing manually, you may write the commit first, then emit the final TACK_MESSAGES line in your response.\n")
 		}
 		b.WriteString("\nRequested fields:\n")
 		if input.Messages.Commit {
-			b.WriteString("- `commit_message`: the exact git commit message Deck should use (subject line with optional body)\n")
+			b.WriteString("- `commit_message`: the exact git commit message Tack should use (subject line with optional body)\n")
 		}
 		if input.Messages.PR {
 			b.WriteString("- `pr_title`: concise pull request title\n")
@@ -155,18 +155,18 @@ func BuildOverlay(input OverlayInput) string {
 		b.WriteString("1. Stage all code changes\n")
 		b.WriteString("2. Write a clear, descriptive commit message summarizing what you changed and why\n")
 		b.WriteString("3. Run: git commit -m \"<your message>\"\n")
-		b.WriteString("4. Do NOT push — Deck handles merging\n\n")
+		b.WriteString("4. Do NOT push — Tack handles merging\n\n")
 	case "none":
 		// No commit instructions for analysis/scout agents.
 	default: // "auto" or empty
 		b.WriteString("## Commit Policy\n")
-		b.WriteString("- Do NOT run git add or git commit — Deck commits your changes automatically\n\n")
+		b.WriteString("- Do NOT run git add or git commit — Tack commits your changes automatically\n\n")
 	}
 
 	// 9. Constraints
 	b.WriteString("## Constraints\n")
 	b.WriteString("- Do NOT modify files outside your scope\n")
-	b.WriteString("- Do NOT push to git (Deck handles merging)\n")
+	b.WriteString("- Do NOT push to git (Tack handles merging)\n")
 	b.WriteString("- Do NOT install new dependencies without escalating\n")
 
 	return b.String()
@@ -189,7 +189,7 @@ quality_gates:
 func BuildPlannerOverlay(objective *domain.Objective, guidance string) string {
 	var b strings.Builder
 
-	b.WriteString("# Deck Agent: planner\n\n")
+	b.WriteString("# Tack Agent: planner\n\n")
 
 	b.WriteString("## Role\n")
 	b.WriteString("You are a Planner agent. Explore the codebase and decompose the objective into parallel work streams.\n\n")

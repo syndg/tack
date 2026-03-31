@@ -48,8 +48,8 @@ func TestPiProcess_OutputEvent(t *testing.T) {
 func TestPiProcess_ToolCallEvent(t *testing.T) {
 	handle := &mockProcessHandle{
 		lines: []string{
-			`{"type":"tool_execution_start","toolName":"deck_mail_send","args":{"to":"@human","body":"status"}}`,
-			`{"type":"tool_execution_end","toolName":"deck_mail_send"}`,
+			`{"type":"tool_execution_start","toolName":"tack_mail_send","args":{"to":"@human","body":"status"}}`,
+			`{"type":"tool_execution_end","toolName":"tack_mail_send"}`,
 			`{"type":"agent_end"}`,
 		},
 	}
@@ -67,7 +67,7 @@ func TestPiProcess_ToolCallEvent(t *testing.T) {
 	if events[0].Type != "tool_call" {
 		t.Errorf("event[0].Type = %q, want tool_call", events[0].Type)
 	}
-	if events[0].Content != `deck_mail_send: {"to":"@human","body":"status"}` {
+	if events[0].Content != `tack_mail_send: {"to":"@human","body":"status"}` {
 		t.Errorf("event[0].Content = %q", events[0].Content)
 	}
 }
@@ -156,11 +156,11 @@ func TestPiProcess_RPCError_WithoutAgentEnd_FailsResult(t *testing.T) {
 	}
 }
 
-func TestPiProcess_DeckDoneSignal(t *testing.T) {
-	// DECK_DONE: prefix in accumulated text overrides the result summary.
+func TestPiProcess_TackDoneSignal(t *testing.T) {
+	// TACK_DONE: prefix in accumulated text overrides the result summary.
 	handle := &mockProcessHandle{
 		lines: []string{
-			`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Some output\nDECK_DONE:all tasks completed\nMore text"}}`,
+			`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Some output\nTACK_DONE:all tasks completed\nMore text"}}`,
 			`{"type":"agent_end"}`,
 		},
 	}
