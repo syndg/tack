@@ -51,6 +51,10 @@ func (d *Daemon) registerRoutes() {
 	d.mux.HandleFunc("POST /merge-queue/{id}/retry", d.handleRetryMerge)
 	d.mux.HandleFunc("GET /streams/{id}/diff", d.handleGetStreamDiff)
 
+	// Runs
+	d.mux.HandleFunc("GET /runs/{id}/snapshot", d.handleGetRunSnapshot)
+	d.mux.HandleFunc("GET /objectives/{id}/run", d.handleGetObjectiveRunSnapshot)
+
 	// Blueprints & System
 	d.mux.HandleFunc("GET /blueprints", d.handleListBlueprints)
 	d.mux.HandleFunc("GET /blueprints/{name}", d.handleGetBlueprint)

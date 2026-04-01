@@ -186,6 +186,76 @@ type MergeEntry struct {
 	UpdatedAt   int64       `json:"updated_at"`
 }
 
+// Run-centric orchestration
+
+type RunStatus string
+
+const (
+	RunStatusActive    RunStatus = "active"
+	RunStatusBlocked   RunStatus = "blocked"
+	RunStatusCompleted RunStatus = "completed"
+	RunStatusPartial   RunStatus = "partial"
+	RunStatusFailed    RunStatus = "failed"
+)
+
+// Run is the durable aggregate that owns objective orchestration.
+type Run struct {
+	ID          string    `json:"id"`
+	ObjectiveID string    `json:"objective_id"`
+	Status      RunStatus `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// CommandKind identifies the type of intervention on a run.
+type CommandKind string
+
+const (
+	CommandApprove CommandKind = "approve"
+	CommandRetry   CommandKind = "retry"
+	CommandAbort   CommandKind = "abort"
+)
+
+// Command represents an intervention on a run.
+type Command struct {
+	Kind     CommandKind `json:"kind"`
+	StreamID string     `json:"stream_id,omitempty"`
+	Guidance string     `json:"guidance,omitempty"`
+	Reason   string     `json:"reason,omitempty"`
+}
+
+// BlockedState describes why a run is blocked.
+type BlockedState struct {
+	Kind   string `json:"kind"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// Outcome describes the terminal result of a run.
+type Outcome struct {
+	Status  RunStatus `json:"status"`
+	Summary string    `json:"summary,omitempty"`
+}
+
+// RunStreamState is a snapshot of a single stream within a run.
+type RunStreamState struct {
+	StreamID string       `json:"stream_id"`
+	Title    string       `json:"title"`
+	Status   StreamStatus `json:"status"`
+	Error    string       `json:"error,omitempty"`
+}
+
+// Snapshot is the observable state of a run at a point in time.
+type Snapshot struct {
+	RunID       string           `json:"run_id"`
+	ObjectiveID string           `json:"objective_id"`
+	Status      RunStatus        `json:"status"`
+	Blocked     *BlockedState    `json:"blocked,omitempty"`
+	Streams     []RunStreamState `json:"streams,omitempty"`
+	Outcome     *Outcome         `json:"outcome,omitempty"`
+	CreatedAt   time.Time        `json:"created_at"`
+	UpdatedAt   time.Time        `json:"updated_at"`
+}
+
 // Events
 
 type EventType string

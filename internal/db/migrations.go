@@ -101,6 +101,16 @@ CREATE TABLE IF NOT EXISTS executions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_executions_objective ON executions(objective_id);
+
+CREATE TABLE IF NOT EXISTS runs (
+    id TEXT PRIMARY KEY,
+    objective_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_runs_objective ON runs(objective_id);
 `
 
 // RunMigrations executes all schema migrations against the database.

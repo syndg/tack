@@ -32,6 +32,7 @@ import (
 	mail "github.com/syndg/tack/internal/services/mail"
 	"github.com/syndg/tack/internal/services/merge"
 	"github.com/syndg/tack/internal/services/planner"
+	"github.com/syndg/tack/internal/services/runs"
 )
 
 // Daemon is the main HTTP server that orchestrates all Tack services.
@@ -52,6 +53,9 @@ type Daemon struct {
 	spawner         *dispatch.Spawner
 	scheduler       *dispatch.Scheduler
 	coordinator     dispatch.Orchestrator
+
+	runStore       *db.RunStore
+	runsService    *runs.Service
 
 	mergeQueueStore *db.MergeQueueStore
 	mergeProcessor  *merge.Processor
@@ -98,6 +102,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 	executionStore := db.NewExecutionStore(conn)
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
+	runStore := db.NewRunStore(conn)
 	eventBus := events.NewPersistentBus(eventStore, logger)
 
 	lifecycleMgr := lifecycle.New(objectiveStore, planStore, streamStore, agentStore, eventBus, logger)
@@ -314,6 +319,9 @@ func New(cfg *config.Config) (*Daemon, error) {
 		return nil, fmt.Errorf("creating coordinator: %w", err)
 	}
 
+	// Create runs service.
+	runsService := runs.New(runStore, objectiveStore, planStore, streamStore, executionStore, logger)
+
 	// Create daemon lifecycle context (cancelled in Shutdown).
 	daemonCtx, daemonCancel := context.WithCancel(context.Background())
 
@@ -336,6 +344,9 @@ func New(cfg *config.Config) (*Daemon, error) {
 		spawner:         spawner,
 		scheduler:       scheduler,
 		coordinator:     coordinator,
+
+		runStore:    runStore,
+		runsService: runsService,
 
 		mergeQueueStore: mergeQueueStore,
 		mergeProcessor:  mergeProcessor,
