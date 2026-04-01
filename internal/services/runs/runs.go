@@ -13,12 +13,17 @@ package runs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/services/dispatch"
 )
+
+// ErrInvalidState is returned when an operation is invalid for the current state.
+var ErrInvalidState = errors.New("invalid state")
 
 // Runs is the run-centric orchestration boundary.
 //
@@ -35,12 +40,13 @@ type Runs interface {
 
 // Service implements the Runs boundary.
 type Service struct {
-	runs       *db.RunStore
-	objectives *db.ObjectiveStore
-	plans      *db.PlanStore
-	streams    *db.StreamStore
-	executions *db.ExecutionStore
-	logger     *slog.Logger
+	runs        *db.RunStore
+	objectives  *db.ObjectiveStore
+	plans       *db.PlanStore
+	streams     *db.StreamStore
+	executions  *db.ExecutionStore
+	coordinator dispatch.Orchestrator
+	logger      *slog.Logger
 }
 
 // New creates a new runs Service.
@@ -50,22 +56,57 @@ func New(
 	plans *db.PlanStore,
 	streams *db.StreamStore,
 	executions *db.ExecutionStore,
+	coordinator dispatch.Orchestrator,
 	logger *slog.Logger,
 ) *Service {
 	return &Service{
-		runs:       runs,
-		objectives: objectives,
-		plans:      plans,
-		streams:    streams,
-		executions: executions,
-		logger:     logger.With("component", "runs"),
+		runs:        runs,
+		objectives:  objectives,
+		plans:       plans,
+		streams:     streams,
+		executions:  executions,
+		coordinator: coordinator,
+		logger:      logger.With("component", "runs"),
 	}
 }
 
 // Start creates a new run for an objective and begins execution.
-// Not yet implemented — will be wired in #23.
+// It validates the objective is in a startable state, creates a durable
+// Run record, delegates execution to the coordinator, and returns a
+// snapshot reflecting the run's initial state.
 func (s *Service) Start(ctx context.Context, objectiveID string) (domain.Snapshot, error) {
-	return domain.Snapshot{}, fmt.Errorf("runs.Start not yet implemented")
+	obj, err := s.objectives.Get(ctx, objectiveID)
+	if err != nil {
+		return domain.Snapshot{}, fmt.Errorf("getting objective: %w", err)
+	}
+
+	if obj.Status != domain.ObjectiveStatusPlanning &&
+		obj.Status != domain.ObjectiveStatusApproved {
+		return domain.Snapshot{}, fmt.Errorf(
+			"objective %s cannot start execution (status: %s): %w",
+			objectiveID, obj.Status, ErrInvalidState,
+		)
+	}
+
+	run := &domain.Run{ObjectiveID: objectiveID}
+	if err := s.runs.Create(ctx, run); err != nil {
+		return domain.Snapshot{}, fmt.Errorf("creating run: %w", err)
+	}
+
+	s.logger.Info("starting run", "run_id", run.ID, "objective_id", objectiveID)
+
+	if err := s.coordinator.Execute(ctx, objectiveID); err != nil {
+		// Mark run as failed since execution couldn't start.
+		_ = s.runs.UpdateStatus(ctx, run.ID, domain.RunStatusFailed)
+		return domain.Snapshot{}, fmt.Errorf("starting execution: %w", err)
+	}
+
+	snap, err := s.Snapshot(ctx, run.ID)
+	if err != nil {
+		return domain.Snapshot{}, fmt.Errorf("building initial snapshot: %w", err)
+	}
+
+	return snap, nil
 }
 
 // Command sends an intervention to a run.

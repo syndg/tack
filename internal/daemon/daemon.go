@@ -319,8 +319,9 @@ func New(cfg *config.Config) (*Daemon, error) {
 		return nil, fmt.Errorf("creating coordinator: %w", err)
 	}
 
-	// Create runs service.
-	runsService := runs.New(runStore, objectiveStore, planStore, streamStore, executionStore, logger)
+	// Create runs service — the run-centric orchestration boundary.
+	// Delegates execution to the coordinator internally.
+	runsService := runs.New(runStore, objectiveStore, planStore, streamStore, executionStore, coordinator, logger)
 
 	// Create daemon lifecycle context (cancelled in Shutdown).
 	daemonCtx, daemonCancel := context.WithCancel(context.Background())

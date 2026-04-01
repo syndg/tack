@@ -11,6 +11,7 @@ import (
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/services/dispatch"
 	"github.com/syndg/tack/internal/services/planner"
+	"github.com/syndg/tack/internal/services/runs"
 )
 
 // CreateObjectiveRequest is the JSON body for POST /objectives.
@@ -146,26 +147,29 @@ func (d *Daemon) handleGetObjectivePlan(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, planWithStreams{Plan: plan, Streams: streams})
 }
 
-// handleExecuteObjective manually triggers blueprint execution for an objective.
+// handleExecuteObjective triggers blueprint execution for an objective through
+// the run-centric orchestration boundary. Creates a durable Run record and
+// returns its initial snapshot.
 func (d *Daemon) handleExecuteObjective(w http.ResponseWriter, r *http.Request) {
-	if d.coordinator == nil {
-		writeError(w, http.StatusServiceUnavailable, "coordinator not available")
+	if d.runsService == nil {
+		writeError(w, http.StatusServiceUnavailable, "runs service not available")
 		return
 	}
 
 	id := r.PathValue("id")
-	if err := d.coordinator.Execute(r.Context(), id); err != nil {
+	snap, err := d.runsService.Start(r.Context(), id)
+	if err != nil {
 		switch {
 		case errors.Is(err, dispatch.ErrNotFound):
 			writeError(w, http.StatusNotFound, "objective not found")
-		case errors.Is(err, dispatch.ErrInvalidState):
+		case errors.Is(err, dispatch.ErrInvalidState), errors.Is(err, runs.ErrInvalidState):
 			writeError(w, http.StatusConflict, err.Error())
 		default:
-			d.logger.Error("starting execution", "objective_id", id, "error", err)
+			d.logger.Error("starting run", "objective_id", id, "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to start execution")
 		}
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "executing", "objective_id": id})
+	writeJSON(w, http.StatusAccepted, snap)
 }
