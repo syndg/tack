@@ -10,6 +10,14 @@
 // scheduler, and agent tracker are implementation details — callers interact
 // only through Start, Command, Snapshot, and Run.
 //
+// Retry flow (issue #25):
+//   - Snapshot exposes retryable failure information: failed streams with an
+//     associated execution are marked Retryable=true and include the last
+//     step error from the failed execution. Callers inspect the snapshot to
+//     identify which streams can be retried and why they failed.
+//   - Command(retry) routes through the run boundary with guidance, resolves
+//     the failed execution from the stream, and delegates to the coordinator.
+//
 // Migration status (issue #28):
 //   - Coordinator lifecycle (Start/Stop): internalized — runs.Run() and
 //     runs.Stop() manage the coordinator and merge processor as internal
@@ -29,6 +37,7 @@ import (
 
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/services/dispatch"
 	"github.com/syndg/tack/internal/services/events"
 )
@@ -440,6 +449,8 @@ func (s *Service) resolveBlocked(ctx context.Context, run *domain.Run) *domain.B
 }
 
 // resolveStreams gathers stream states for the objective's plan.
+// For failed streams with an associated execution, it extracts the last error
+// from the execution's StepStates and marks the stream as retryable.
 func (s *Service) resolveStreams(ctx context.Context, objectiveID string) []domain.RunStreamState {
 	plan, err := s.plans.GetByObjective(ctx, objectiveID)
 	if err != nil {
@@ -453,11 +464,31 @@ func (s *Service) resolveStreams(ctx context.Context, objectiveID string) []doma
 
 	result := make([]domain.RunStreamState, len(streams))
 	for i, st := range streams {
-		result[i] = domain.RunStreamState{
+		rss := domain.RunStreamState{
 			StreamID: st.ID,
 			Title:    st.Title,
 			Status:   st.Status,
 		}
+
+		// For failed streams, extract error from the execution and mark retryable.
+		if st.Status == domain.StreamStatusFailed && st.ExecutionID != "" {
+			rss.Retryable = true
+			if exec, err := s.executions.Get(ctx, st.ExecutionID); err == nil {
+				rss.Error = lastStepError(exec)
+			}
+		}
+
+		result[i] = rss
 	}
 	return result
+}
+
+// lastStepError extracts the error message from the first failed step in an execution.
+func lastStepError(exec *blueprint.Execution) string {
+	for _, state := range exec.StepStates {
+		if state.Status == blueprint.StepStatusFailed && state.Error != "" {
+			return state.Error
+		}
+	}
+	return ""
 }

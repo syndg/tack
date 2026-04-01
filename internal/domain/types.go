@@ -238,10 +238,11 @@ type Outcome struct {
 
 // RunStreamState is a snapshot of a single stream within a run.
 type RunStreamState struct {
-	StreamID string       `json:"stream_id"`
-	Title    string       `json:"title"`
-	Status   StreamStatus `json:"status"`
-	Error    string       `json:"error,omitempty"`
+	StreamID  string       `json:"stream_id"`
+	Title     string       `json:"title"`
+	Status    StreamStatus `json:"status"`
+	Error     string       `json:"error,omitempty"`
+	Retryable bool         `json:"retryable,omitempty"`
 }
 
 // Snapshot is the observable state of a run at a point in time.

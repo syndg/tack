@@ -906,3 +906,230 @@ func TestCommandAbortRejectsTerminalRun(t *testing.T) {
 		t.Errorf("expected ErrInvalidState, got: %v", err)
 	}
 }
+
+func TestSnapshotExposesRetryableFailureInfo(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+	logger := slog.Default()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+
+	// Setup: objective + plan + two streams (one completed, one failed with execution).
+	obj := &domain.Objective{Description: "retryable info test", Status: domain.ObjectiveStatusExecuting}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+
+	plan := &domain.Plan{ObjectiveID: obj.ID}
+	if err := planStore.Create(ctx, plan); err != nil {
+		t.Fatalf("creating plan: %v", err)
+	}
+
+	okStream := &domain.Stream{PlanID: plan.ID, Title: "ok-stream", Description: "completed"}
+	if err := streamStore.Create(ctx, okStream); err != nil {
+		t.Fatalf("creating ok stream: %v", err)
+	}
+	if err := streamStore.UpdateStatus(ctx, okStream.ID, domain.StreamStatusExecuting); err != nil {
+		t.Fatalf("executing stream: %v", err)
+	}
+	if err := streamStore.UpdateStatus(ctx, okStream.ID, domain.StreamStatusCompleted); err != nil {
+		t.Fatalf("completing stream: %v", err)
+	}
+
+	failStream := &domain.Stream{PlanID: plan.ID, Title: "fail-stream", Description: "will fail"}
+	if err := streamStore.Create(ctx, failStream); err != nil {
+		t.Fatalf("creating fail stream: %v", err)
+	}
+
+	// Create a failed sub-execution with a step error.
+	subExec := &blueprint.Execution{
+		ID:          "sub-exec-fail",
+		ObjectiveID: obj.ID,
+		ParentID:    "parent-exec",
+		StreamID:    failStream.ID,
+		Status:      "failed",
+		StepStates: map[string]*blueprint.StepState{
+			"build_step": {
+				StepID: "build_step",
+				Status: blueprint.StepStatusFailed,
+				Error:  "compilation failed: undefined variable foo",
+			},
+		},
+	}
+	if err := executionStore.Create(ctx, subExec); err != nil {
+		t.Fatalf("creating sub-execution: %v", err)
+	}
+
+	// Mark stream as failed with execution reference.
+	if err := streamStore.UpdateStatus(ctx, failStream.ID, domain.StreamStatusFailed); err != nil {
+		t.Fatalf("marking stream failed: %v", err)
+	}
+	if err := streamStore.UpdateExecutionID(ctx, failStream.ID, subExec.ID); err != nil {
+		t.Fatalf("setting stream execution ID: %v", err)
+	}
+
+	// Create run.
+	run := &domain.Run{ObjectiveID: obj.ID}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+
+	// Take snapshot and verify retryable failure info.
+	snap, err := svc.Snapshot(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	if len(snap.Streams) != 2 {
+		t.Fatalf("len(Streams) = %d, want 2", len(snap.Streams))
+	}
+
+	// Find the failed stream in the snapshot.
+	var failState *domain.RunStreamState
+	var okState *domain.RunStreamState
+	for i := range snap.Streams {
+		if snap.Streams[i].Title == "fail-stream" {
+			failState = &snap.Streams[i]
+		}
+		if snap.Streams[i].Title == "ok-stream" {
+			okState = &snap.Streams[i]
+		}
+	}
+
+	if failState == nil {
+		t.Fatal("failed stream not found in snapshot")
+	}
+	if failState.Status != domain.StreamStatusFailed {
+		t.Errorf("failed stream status = %q, want %q", failState.Status, domain.StreamStatusFailed)
+	}
+	if !failState.Retryable {
+		t.Error("failed stream should be marked as retryable")
+	}
+	if failState.Error != "compilation failed: undefined variable foo" {
+		t.Errorf("failed stream error = %q, want %q", failState.Error, "compilation failed: undefined variable foo")
+	}
+
+	// Completed stream should NOT be retryable.
+	if okState == nil {
+		t.Fatal("ok stream not found in snapshot")
+	}
+	if okState.Retryable {
+		t.Error("completed stream should not be retryable")
+	}
+	if okState.Error != "" {
+		t.Errorf("completed stream error = %q, want empty", okState.Error)
+	}
+}
+
+func TestRetryFailedStreamEndToEnd(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+	logger := slog.Default()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+
+	orch := &mockOrchestrator{}
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+
+	// 1. Setup: objective with a failed stream.
+	obj := &domain.Objective{Description: "e2e retry", Status: domain.ObjectiveStatusExecuting}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+
+	plan := &domain.Plan{ObjectiveID: obj.ID}
+	if err := planStore.Create(ctx, plan); err != nil {
+		t.Fatalf("creating plan: %v", err)
+	}
+
+	stream := &domain.Stream{PlanID: plan.ID, Title: "retry-stream", Description: "will fail then retry"}
+	if err := streamStore.Create(ctx, stream); err != nil {
+		t.Fatalf("creating stream: %v", err)
+	}
+
+	subExec := &blueprint.Execution{
+		ID:          "sub-exec-retry",
+		ObjectiveID: obj.ID,
+		ParentID:    "parent",
+		StreamID:    stream.ID,
+		Status:      "failed",
+		StepStates: map[string]*blueprint.StepState{
+			"agent_step": {
+				StepID: "agent_step",
+				Status: blueprint.StepStatusFailed,
+				Error:  "tests failed: 3 assertions broken",
+			},
+		},
+	}
+	if err := executionStore.Create(ctx, subExec); err != nil {
+		t.Fatalf("creating sub-execution: %v", err)
+	}
+
+	if err := streamStore.UpdateStatus(ctx, stream.ID, domain.StreamStatusFailed); err != nil {
+		t.Fatalf("marking stream failed: %v", err)
+	}
+	if err := streamStore.UpdateExecutionID(ctx, stream.ID, subExec.ID); err != nil {
+		t.Fatalf("setting stream execution ID: %v", err)
+	}
+
+	run := &domain.Run{ObjectiveID: obj.ID}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+	if err := runStore.UpdateStatus(ctx, run.ID, domain.RunStatusPartial); err != nil {
+		t.Fatalf("marking run partial: %v", err)
+	}
+
+	// 2. Verify snapshot shows retryable failure before retry.
+	snap, err := svc.Snapshot(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("pre-retry Snapshot: %v", err)
+	}
+	if len(snap.Streams) != 1 {
+		t.Fatalf("pre-retry streams = %d, want 1", len(snap.Streams))
+	}
+	if !snap.Streams[0].Retryable {
+		t.Error("pre-retry: stream should be retryable")
+	}
+	if snap.Streams[0].Error == "" {
+		t.Error("pre-retry: stream should have error message")
+	}
+
+	// 3. Retry through Command boundary with guidance.
+	retrySnap, err := svc.Command(ctx, run.ID, domain.Command{
+		Kind:     domain.CommandRetry,
+		StreamID: stream.ID,
+		Guidance: "fix the broken assertions by checking the expected values",
+	})
+	if err != nil {
+		t.Fatalf("Command(retry): %v", err)
+	}
+
+	// 4. Verify coordinator.Retry was called with correct execution ID and guidance.
+	if !orch.retryCalled {
+		t.Fatal("coordinator.Retry was not called")
+	}
+	if orch.retryID != subExec.ID {
+		t.Errorf("coordinator.Retry id = %q, want %q", orch.retryID, subExec.ID)
+	}
+	if orch.retryGuidance != "fix the broken assertions by checking the expected values" {
+		t.Errorf("coordinator.Retry guidance = %q, want expected value", orch.retryGuidance)
+	}
+
+	// 5. Verify run transitioned back to active after retry.
+	if retrySnap.Status != domain.RunStatusActive {
+		t.Errorf("post-retry status = %q, want %q", retrySnap.Status, domain.RunStatusActive)
+	}
+}
