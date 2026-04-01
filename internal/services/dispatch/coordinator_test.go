@@ -177,70 +177,12 @@ func (e *testEnv) createObjective(t *testing.T, id string) {
 	}
 }
 
-// --- Execute flow tests ---
-
-func TestExecute_StartsBlueprint(t *testing.T) {
-	env := setupTestCoordinator(t)
-	env.createObjective(t, "obj-1")
-
-	ctx := context.Background()
-	env.coord.ctx = ctx
-
-	err := env.coord.Execute(ctx, "obj-1")
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-
-	// Verify objective transitioned to executing.
-	obj, err := env.objectives.Get(ctx, "obj-1")
-	if err != nil {
-		t.Fatalf("getting objective: %v", err)
-	}
-	// Objective may be executing or already completed (execution runs in goroutine with fast mock handlers).
-	if obj.Status != domain.ObjectiveStatusExecuting && obj.Status != domain.ObjectiveStatusCompleted && obj.Status != domain.ObjectiveStatusFailed {
-		t.Fatalf("objective status = %s, want executing/completed/failed", obj.Status)
-	}
-
-	// Verify execution was created.
-	execs, err := env.executions.List(ctx)
-	if err != nil {
-		t.Fatalf("listing executions: %v", err)
-	}
-	if len(execs) == 0 {
-		t.Fatal("expected at least one execution to be created")
-	}
-	if execs[0].ObjectiveID != "obj-1" {
-		t.Fatalf("execution.ObjectiveID = %q, want %q", execs[0].ObjectiveID, "obj-1")
-	}
-}
-
-func TestExecute_RejectsNonStartableObjective(t *testing.T) {
-	env := setupTestCoordinator(t)
-	ctx := context.Background()
-
-	// Create an objective in "executing" status — not startable.
-	obj := &domain.Objective{
-		ID:          "obj-running",
-		Description: "already running",
-		Status:      domain.ObjectiveStatusExecuting,
-		Blueprint:   "Hotfix",
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-	}
-	if err := env.objectives.Create(ctx, obj); err != nil {
-		t.Fatalf("creating objective: %v", err)
-	}
-
-	err := env.coord.Execute(ctx, "obj-running")
-	if err == nil {
-		t.Fatal("expected error for non-startable objective")
-	}
-	if !errors.Is(err, ErrInvalidState) {
-		t.Fatalf("expected ErrInvalidState, got: %v", err)
-	}
-}
-
 // --- Approve flow tests ---
+//
+// Note: Execute flow tests (TestExecute_StartsBlueprint, TestExecute_RejectsNonStartableObjective)
+// were removed — these are now superseded by run-scoped boundary tests in runs/runs_test.go
+// (TestStartCreatesRunAndDelegates, TestStartRejectsExecutingObjective) and scenario tests
+// in runs/runs_scenario_test.go. Callers no longer invoke coordinator.Execute directly.
 
 func TestApprove_AbsorbsFullDance(t *testing.T) {
 	env := setupTestCoordinator(t)
