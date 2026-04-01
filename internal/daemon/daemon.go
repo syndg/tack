@@ -36,6 +36,9 @@ import (
 )
 
 // Daemon is the main HTTP server that orchestrates all Tack services.
+// All execution orchestration flows through the runs service boundary.
+// The daemon does not hold direct references to the coordinator, scheduler,
+// spawner, or merge processor — those are internal to the runs service.
 type Daemon struct {
 	cfg        *config.Config
 	db         *db.DB
@@ -50,15 +53,11 @@ type Daemon struct {
 	mailBroker      *mail.Broker
 	sandboxProvider sandbox.SandboxProvider
 	agentRuntime    runtime.AgentRuntime
-	spawner         *dispatch.Spawner
-	scheduler       *dispatch.Scheduler
-	coordinator     dispatch.Orchestrator
 
-	runStore       *db.RunStore
-	runsService    *runs.Service
+	runStore    *db.RunStore
+	runsService *runs.Service
 
 	mergeQueueStore *db.MergeQueueStore
-	mergeProcessor  *merge.Processor
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -319,10 +318,11 @@ func New(cfg *config.Config) (*Daemon, error) {
 		return nil, fmt.Errorf("creating coordinator: %w", err)
 	}
 
-	// Create runs service — the run-centric orchestration boundary.
-	// Owns the lifecycle of coordinator and merge processor as internal
-	// implementation details. The daemon interacts only through runs.
-	runsService := runs.New(runStore, objectiveStore, planStore, streamStore, executionStore, coordinator, mergeProcessor, eventBus, logger)
+	// Create runs service — the single orchestration boundary.
+	// Owns coordinator, merge processor, scheduler, spawner, and agent tracker
+	// as internal implementation details. The daemon routes all orchestration
+	// (start, approve, retry, abort, kill) through this boundary.
+	runsService := runs.New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, coordinator, mergeProcessor, eventBus, logger)
 
 	// Create daemon lifecycle context (cancelled in Shutdown).
 	daemonCtx, daemonCancel := context.WithCancel(context.Background())
@@ -343,15 +343,11 @@ func New(cfg *config.Config) (*Daemon, error) {
 		mailBroker:      mailBroker,
 		sandboxProvider: sandboxProv,
 		agentRuntime:    agentRuntime,
-		spawner:         spawner,
-		scheduler:       scheduler,
-		coordinator:     coordinator,
 
 		runStore:    runStore,
 		runsService: runsService,
 
 		mergeQueueStore: mergeQueueStore,
-		mergeProcessor:  mergeProcessor,
 
 		lifecycleManager: lifecycleMgr,
 		planningService:  planningService,

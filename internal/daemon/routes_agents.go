@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/services/runs"
 )
 
 // handleListAgents returns all agent sessions as a JSON array.
@@ -43,19 +44,45 @@ func (d *Daemon) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleKillAgent terminates an active agent session.
-// This still delegates to the coordinator directly since agent kill is a
-// low-level operation that doesn't map cleanly to a run-level abort (which
-// would stop the entire run, not just one agent). The coordinator's Kill
-// method is an internal detail owned by the runs service.
+// Routes through the run-centric boundary when a Run exists for the agent's
+// objective; falls back to the coordinator for sessions that predate the runs API.
 func (d *Daemon) handleKillAgent(w http.ResponseWriter, r *http.Request) {
-	if d.coordinator == nil {
-		writeError(w, http.StatusServiceUnavailable, "coordinator not available")
+	id := r.PathValue("id")
+
+	// Look up the agent to find its objective and route through runs.
+	session, err := d.agents.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "agent session not found")
+			return
+		}
+		d.logger.Error("loading agent session for kill", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to kill agent")
 		return
 	}
 
-	id := r.PathValue("id")
+	if run, err := d.runStore.GetByObjective(r.Context(), session.ObjectiveID); err == nil {
+		// Run exists — route through the run-centric boundary.
+		snap, err := d.runsService.Command(r.Context(), run.ID, domain.Command{
+			Kind:      domain.CommandKill,
+			SessionID: id,
+		})
+		if err != nil {
+			switch {
+			case errors.Is(err, runs.ErrInvalidState):
+				writeError(w, http.StatusConflict, err.Error())
+			default:
+				d.logger.Error("killing agent via run", "session_id", id, "error", err)
+				writeError(w, http.StatusInternalServerError, "failed to kill agent")
+			}
+			return
+		}
+		writeJSON(w, http.StatusOK, snap)
+		return
+	}
 
-	if err := d.coordinator.Kill(r.Context(), id); err != nil {
+	// No run — fall back to direct coordinator call (pre-migration path).
+	if err := d.runsService.KillAgent(r.Context(), id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "agent session not found")
 			return

@@ -214,14 +214,16 @@ const (
 	CommandApprove CommandKind = "approve"
 	CommandRetry   CommandKind = "retry"
 	CommandAbort   CommandKind = "abort"
+	CommandKill    CommandKind = "kill"
 )
 
 // Command represents an intervention on a run.
 type Command struct {
-	Kind     CommandKind `json:"kind"`
-	StreamID string     `json:"stream_id,omitempty"`
-	Guidance string     `json:"guidance,omitempty"`
-	Reason   string     `json:"reason,omitempty"`
+	Kind      CommandKind `json:"kind"`
+	StreamID  string      `json:"stream_id,omitempty"`
+	SessionID string      `json:"session_id,omitempty"` // for kill: target agent session
+	Guidance  string      `json:"guidance,omitempty"`
+	Reason    string      `json:"reason,omitempty"`
 }
 
 // BlockedState describes why a run is blocked.

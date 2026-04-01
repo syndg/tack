@@ -81,19 +81,15 @@ func (d *Daemon) handleApproveExecution(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// No run — fall back to direct coordinator call (pre-migration path).
-	if d.coordinator == nil {
-		writeError(w, http.StatusServiceUnavailable, "coordinator not available")
-		return
-	}
-	if err := d.coordinator.Approve(r.Context(), executionID); err != nil {
+	// No run — fall back to direct coordinator via runs service (pre-migration path).
+	if err := d.runsService.ApproveExecution(r.Context(), executionID); err != nil {
 		switch {
 		case errors.Is(err, dispatch.ErrNotFound):
 			writeError(w, http.StatusNotFound, "execution not found")
 		case errors.Is(err, dispatch.ErrInvalidState):
 			writeError(w, http.StatusConflict, err.Error())
 		default:
-			d.logger.Error("approving execution", "execution_id", executionID, "error", err)
+			d.logger.Error("approving execution (legacy)", "execution_id", executionID, "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to approve execution")
 		}
 		return
@@ -147,19 +143,15 @@ func (d *Daemon) handleRetryExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No run — fall back to direct coordinator call (pre-migration path).
-	if d.coordinator == nil {
-		writeError(w, http.StatusServiceUnavailable, "coordinator not available")
-		return
-	}
-	if err := d.coordinator.Retry(r.Context(), executionID, req.Guidance); err != nil {
+	// No run — fall back to direct coordinator via runs service (pre-migration path).
+	if err := d.runsService.RetryExecution(r.Context(), executionID, req.Guidance); err != nil {
 		switch {
 		case errors.Is(err, dispatch.ErrNotFound):
 			writeError(w, http.StatusNotFound, err.Error())
 		case errors.Is(err, dispatch.ErrInvalidState):
 			writeError(w, http.StatusConflict, err.Error())
 		default:
-			d.logger.Error("retrying stream execution", "execution_id", executionID, "error", err)
+			d.logger.Error("retrying stream execution (legacy)", "execution_id", executionID, "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to retry execution")
 		}
 		return

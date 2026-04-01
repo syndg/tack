@@ -10,6 +10,29 @@
 // scheduler, and agent tracker are implementation details — callers interact
 // only through Start, Command, Snapshot, and Run.
 //
+// The daemon no longer holds direct references to the coordinator, scheduler,
+// spawner, or merge processor. All orchestration flows through this boundary:
+//
+//   - Start: creates a run and delegates to coordinator.Execute
+//   - Command(approve): finds blocked execution, delegates to coordinator.Approve
+//   - Command(retry): resolves failed stream execution, delegates to coordinator.Retry
+//   - Command(abort): stops the coordinator, marks run failed
+//   - Command(kill): terminates a specific agent session within a run
+//   - Snapshot: assembles observable state from persisted records
+//   - Run/Stop: manages coordinator and merge processor lifecycle
+//
+// Pre-migration escape hatches (ApproveExecution, RetryExecution, KillAgent)
+// are provided for executions that predate the run API. These delegate directly
+// to the coordinator without run-level state transitions and should be removed
+// once all executions are created through Start.
+//
+// Recovery (issue #26):
+//   - Run() reconciles in-flight runs on daemon restart. Active/blocked runs
+//     are checked against their objective's current state: terminal objectives
+//     sync immediately, waiting_human objectives mark the run blocked, and
+//     executing objectives are left active (the coordinator resumes them).
+//   - Orphaned runs (objective missing) are marked failed.
+//
 // Retry flow (issue #25):
 //   - Snapshot exposes retryable failure information: failed streams with an
 //     associated execution are marked Retryable=true and include the last
@@ -17,15 +40,6 @@
 //     identify which streams can be retried and why they failed.
 //   - Command(retry) routes through the run boundary with guidance, resolves
 //     the failed execution from the stream, and delegates to the coordinator.
-//
-// Migration status (issue #28):
-//   - Coordinator lifecycle (Start/Stop): internalized — runs.Run() and
-//     runs.Stop() manage the coordinator and merge processor as internal
-//     services. The daemon no longer starts or stops them directly.
-//   - Run status sync: internalized — the background loop subscribes to
-//     objective lifecycle events and keeps Run records in sync automatically.
-//   - Remaining seams (scheduler, agent tracker) are still accessed by the
-//     coordinator internally; future slices will pull them further inward.
 package runs
 
 import (
@@ -75,6 +89,7 @@ type Service struct {
 	plans      *db.PlanStore
 	streams    *db.StreamStore
 	executions *db.ExecutionStore
+	agents     *db.AgentStore
 
 	// Internal orchestration services — owned by runs, not exposed to callers.
 	coordinator    dispatch.Orchestrator
@@ -91,6 +106,7 @@ func New(
 	plans *db.PlanStore,
 	streams *db.StreamStore,
 	executions *db.ExecutionStore,
+	agents *db.AgentStore,
 	coordinator dispatch.Orchestrator,
 	mergeProcessor MergeService,
 	eventBus *events.PersistentBus,
@@ -102,6 +118,7 @@ func New(
 		plans:          plans,
 		streams:        streams,
 		executions:     executions,
+		agents:         agents,
 		coordinator:    coordinator,
 		mergeProcessor: mergeProcessor,
 		eventBus:       eventBus,
@@ -170,6 +187,8 @@ func (s *Service) Command(ctx context.Context, runID string, cmd domain.Command)
 		return s.commandRetry(ctx, run, cmd)
 	case domain.CommandAbort:
 		return s.commandAbort(ctx, run, cmd)
+	case domain.CommandKill:
+		return s.commandKill(ctx, run, cmd)
 	default:
 		return domain.Snapshot{}, fmt.Errorf("unknown command kind %q: %w", cmd.Kind, ErrInvalidState)
 	}
@@ -274,6 +293,56 @@ func (s *Service) commandAbort(ctx context.Context, run *domain.Run, cmd domain.
 	return s.Snapshot(ctx, run.ID)
 }
 
+// commandKill terminates a specific agent session within a run.
+// Unlike abort (which stops the entire run), kill targets a single agent
+// and leaves the run active so other streams can continue.
+func (s *Service) commandKill(ctx context.Context, run *domain.Run, cmd domain.Command) (domain.Snapshot, error) {
+	if cmd.SessionID == "" {
+		return domain.Snapshot{}, fmt.Errorf("kill command requires session_id: %w", ErrInvalidState)
+	}
+
+	// Verify the agent session belongs to this run's objective.
+	session, err := s.agents.Get(ctx, cmd.SessionID)
+	if err != nil {
+		return domain.Snapshot{}, fmt.Errorf("loading agent session %s: %w", cmd.SessionID, err)
+	}
+	if session.ObjectiveID != run.ObjectiveID {
+		return domain.Snapshot{}, fmt.Errorf(
+			"agent session %s belongs to objective %s, not run %s (objective %s): %w",
+			cmd.SessionID, session.ObjectiveID, run.ID, run.ObjectiveID, ErrInvalidState,
+		)
+	}
+
+	if err := s.coordinator.Kill(ctx, cmd.SessionID); err != nil {
+		return domain.Snapshot{}, fmt.Errorf("killing agent session: %w", err)
+	}
+
+	s.logger.Info("agent killed via run",
+		"run_id", run.ID, "session_id", cmd.SessionID)
+	return s.Snapshot(ctx, run.ID)
+}
+
+// KillAgent terminates an agent session directly through the coordinator.
+// This is a low-level escape hatch for agent sessions that predate the run API.
+// Prefer Command(kill) when a run exists for the agent's objective.
+func (s *Service) KillAgent(ctx context.Context, sessionID string) error {
+	return s.coordinator.Kill(ctx, sessionID)
+}
+
+// ApproveExecution approves a human gate directly through the coordinator.
+// This is a low-level escape hatch for executions that predate the run API.
+// Prefer Command(approve) when a run exists for the execution's objective.
+func (s *Service) ApproveExecution(ctx context.Context, executionID string) error {
+	return s.coordinator.Approve(ctx, executionID)
+}
+
+// RetryExecution retries a failed execution directly through the coordinator.
+// This is a low-level escape hatch for executions that predate the run API.
+// Prefer Command(retry) when a run exists for the execution's objective.
+func (s *Service) RetryExecution(ctx context.Context, executionID string, guidance string) error {
+	return s.coordinator.Retry(ctx, executionID, guidance)
+}
+
 // Snapshot returns the observable state of a run by assembling current
 // persisted state from the run record, objective, plan, streams, and
 // execution.
@@ -323,10 +392,18 @@ func (s *Service) SnapshotByObjective(ctx context.Context, objectiveID string) (
 // It owns the lifecycle of internal services (coordinator, merge processor)
 // and keeps Run records synchronized with objective state changes.
 //
+// On startup, Run reconciles in-flight runs that were active or blocked when
+// the daemon last shut down. It checks each run's objective state and updates
+// the run record accordingly — terminal objectives sync immediately, executing
+// objectives are resumed by the coordinator's own recovery, and waiting_human
+// objectives are marked blocked so snapshots reflect the correct gate state.
+//
 // The daemon should call Run(ctx) once at startup and Stop() at shutdown.
 // Callers no longer need to manage coordinator or merge processor directly.
 func (s *Service) Run(ctx context.Context) error {
 	// Start internal orchestration services.
+	// The coordinator's Start() recovers in-flight executions (resumes
+	// runExecution goroutines for running top-level executions).
 	if err := s.coordinator.Start(ctx); err != nil {
 		return fmt.Errorf("starting coordinator: %w", err)
 	}
@@ -335,6 +412,11 @@ func (s *Service) Run(ctx context.Context) error {
 			return fmt.Errorf("starting merge processor: %w", err)
 		}
 	}
+
+	// Reconcile run records that were in-flight before the daemon restarted.
+	// This must happen after coordinator.Start() so that execution recovery
+	// has already claimed running executions.
+	s.recoverRuns(ctx)
 
 	// Subscribe to objective lifecycle events to keep Run records in sync.
 	// When the coordinator transitions an objective (completed, partial, failed,
@@ -359,6 +441,78 @@ func (s *Service) Run(ctx context.Context) error {
 
 	s.logger.Info("runs orchestration loop started")
 	return nil
+}
+
+// recoverRuns reconciles run records that were active or blocked when the
+// daemon last shut down. For each in-flight run, it checks the objective's
+// current state and updates the run record:
+//
+//   - Terminal objective (completed/partial/failed) → sync run status
+//   - Waiting for human approval → mark run blocked
+//   - Still executing → leave as active (coordinator resumes the execution)
+//   - Objective missing or in unexpected state → mark run failed
+func (s *Service) recoverRuns(ctx context.Context) {
+	activeRuns, err := s.runs.ListActive(ctx)
+	if err != nil {
+		s.logger.Warn("failed to list active runs for recovery", "error", err)
+		return
+	}
+
+	if len(activeRuns) == 0 {
+		return
+	}
+
+	s.logger.Info("recovering in-flight runs", "count", len(activeRuns))
+
+	for _, run := range activeRuns {
+		obj, err := s.objectives.Get(ctx, run.ObjectiveID)
+		if err != nil {
+			// Objective missing — mark run as failed so it doesn't stay orphaned.
+			s.logger.Warn("objective not found during run recovery, marking run failed",
+				"run_id", run.ID, "objective_id", run.ObjectiveID, "error", err)
+			_ = s.runs.UpdateStatus(ctx, run.ID, domain.RunStatusFailed)
+			continue
+		}
+
+		var newStatus domain.RunStatus
+		switch obj.Status {
+		case domain.ObjectiveStatusCompleted:
+			newStatus = domain.RunStatusCompleted
+		case domain.ObjectiveStatusPartial:
+			newStatus = domain.RunStatusPartial
+		case domain.ObjectiveStatusFailed:
+			newStatus = domain.RunStatusFailed
+		case domain.ObjectiveStatusExecuting:
+			// Coordinator's recoverExecutions handles resuming the execution.
+			// Check if there's a waiting_human execution that should block the run.
+			if exec, err := s.executions.GetByObjective(ctx, run.ObjectiveID); err == nil {
+				if exec.Status == "waiting_human" {
+					newStatus = domain.RunStatusBlocked
+				}
+			}
+			// Otherwise leave as active — coordinator is driving the execution.
+		default:
+			// Objective in unexpected pre-execution state (planning, approved)
+			// but run was active — mark failed since execution is no longer running.
+			s.logger.Warn("objective in unexpected state during run recovery",
+				"run_id", run.ID, "objective_id", run.ObjectiveID, "status", obj.Status)
+			newStatus = domain.RunStatusFailed
+		}
+
+		if newStatus == "" || newStatus == run.Status {
+			continue
+		}
+
+		if err := s.runs.UpdateStatus(ctx, run.ID, newStatus); err != nil {
+			s.logger.Warn("failed to update run during recovery",
+				"run_id", run.ID, "target_status", newStatus, "error", err)
+			continue
+		}
+
+		s.logger.Info("recovered run",
+			"run_id", run.ID, "objective_id", run.ObjectiveID,
+			"old_status", run.Status, "new_status", newStatus)
+	}
 }
 
 // Stop shuts down all internal orchestration services.

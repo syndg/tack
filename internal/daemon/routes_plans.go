@@ -117,15 +117,25 @@ func (d *Daemon) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auto-resume: if there's a paused execution waiting for plan approval, resume it.
-	if d.coordinator != nil {
+	// Auto-resume: if there's a run waiting for plan approval, resume through
+	// the run-centric boundary. Falls back to direct coordinator for pre-migration.
+	if run, err := d.runStore.GetByObjective(r.Context(), plan.ObjectiveID); err == nil {
+		if _, err := d.runsService.Command(r.Context(), run.ID, domain.Command{Kind: domain.CommandApprove}); err != nil {
+			d.logger.Warn("auto-resume after plan approval failed",
+				"run_id", run.ID, "plan_id", id, "error", err)
+		} else {
+			d.logger.Info("auto-resumed run after plan approval",
+				"run_id", run.ID, "plan_id", id)
+		}
+	} else {
+		// No run — fall back to direct coordinator for pre-migration executions.
 		exec, err := d.executions.GetByObjective(r.Context(), plan.ObjectiveID)
 		if err == nil && exec.Status == "waiting_human" {
-			if err := d.coordinator.Approve(r.Context(), exec.ID); err != nil {
-				d.logger.Warn("auto-resume after plan approval failed",
+			if err := d.runsService.ApproveExecution(r.Context(), exec.ID); err != nil {
+				d.logger.Warn("auto-resume after plan approval failed (legacy)",
 					"execution_id", exec.ID, "plan_id", id, "error", err)
 			} else {
-				d.logger.Info("auto-resumed execution after plan approval",
+				d.logger.Info("auto-resumed execution after plan approval (legacy)",
 					"execution_id", exec.ID, "plan_id", id)
 			}
 		}

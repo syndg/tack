@@ -92,8 +92,9 @@ func TestSnapshotCreateAndLoad(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Create an objective.
 	obj := &domain.Objective{Description: "test objective"}
@@ -169,8 +170,9 @@ func TestSnapshotByObjective(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Create objective + run.
 	obj := &domain.Objective{Description: "test objective"}
@@ -202,8 +204,9 @@ func TestSnapshotTerminalOutcome(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	obj := &domain.Objective{Description: "test objective"}
 	if err := objectiveStore.Create(ctx, obj); err != nil {
@@ -245,8 +248,9 @@ func TestSnapshotNotFound(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	_, err := svc.Snapshot(ctx, "nonexistent")
 	if err == nil {
@@ -265,9 +269,10 @@ func TestStartCreatesRunAndDelegates(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Create an objective in "approved" state (startable).
 	obj := &domain.Objective{Description: "test start", Status: domain.ObjectiveStatusApproved}
@@ -320,8 +325,9 @@ func TestStartRejectsExecutingObjective(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Create an objective already executing.
 	obj := &domain.Objective{Description: "already running", Status: domain.ObjectiveStatusExecuting}
@@ -349,9 +355,10 @@ func TestStartMarksRunFailedOnExecuteError(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{executeErr: errors.New("blueprint not found")}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	obj := &domain.Objective{Description: "will fail", Status: domain.ObjectiveStatusApproved}
 	if err := objectiveStore.Create(ctx, obj); err != nil {
@@ -383,10 +390,11 @@ func TestRunStartsInternalServices(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
 	merger := &mockMergeService{}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, orch, merger, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, merger, newTestEventBus(t, database), logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -418,9 +426,10 @@ func TestRunStatusSyncsOnObjectiveCompleted(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 	eventBus := newTestEventBus(t, database)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
 
 	// Start the orchestration loop.
 	runCtx, cancel := context.WithCancel(ctx)
@@ -470,9 +479,10 @@ func TestRunStatusSyncsOnObjectivePartial(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 	eventBus := newTestEventBus(t, database)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -517,9 +527,10 @@ func TestRunStatusSyncsOnObjectiveFailed(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 	eventBus := newTestEventBus(t, database)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -564,9 +575,10 @@ func TestRunStatusIgnoresNonTerminalTransitions(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 	eventBus := newTestEventBus(t, database)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -614,9 +626,10 @@ func TestCommandApproveUnblocksRun(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Setup: objective + run (blocked) + execution (waiting_human).
 	obj := &domain.Objective{Description: "approve test", Status: domain.ObjectiveStatusExecuting}
@@ -672,8 +685,9 @@ func TestCommandApproveRejectsNonWaitingExecution(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	obj := &domain.Objective{Description: "approve reject test", Status: domain.ObjectiveStatusExecuting}
 	if err := objectiveStore.Create(ctx, obj); err != nil {
@@ -714,9 +728,10 @@ func TestCommandRetryDelegatesToCoordinator(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Setup: objective + plan + failed stream with execution.
 	obj := &domain.Objective{Description: "retry test", Status: domain.ObjectiveStatusExecuting}
@@ -801,8 +816,9 @@ func TestCommandRetryRequiresStreamID(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	obj := &domain.Objective{Description: "retry no stream", Status: domain.ObjectiveStatusExecuting}
 	if err := objectiveStore.Create(ctx, obj); err != nil {
@@ -833,9 +849,10 @@ func TestCommandAbortStopsAndFailsRun(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	obj := &domain.Objective{Description: "abort test", Status: domain.ObjectiveStatusExecuting}
 	if err := objectiveStore.Create(ctx, obj); err != nil {
@@ -883,8 +900,9 @@ func TestCommandAbortRejectsTerminalRun(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	obj := &domain.Objective{Description: "abort terminal", Status: domain.ObjectiveStatusCompleted}
 	if err := objectiveStore.Create(ctx, obj); err != nil {
@@ -918,8 +936,9 @@ func TestSnapshotExposesRetryableFailureInfo(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Setup: objective + plan + two streams (one completed, one failed with execution).
 	obj := &domain.Objective{Description: "retryable info test", Status: domain.ObjectiveStatusExecuting}
@@ -1028,6 +1047,373 @@ func TestSnapshotExposesRetryableFailureInfo(t *testing.T) {
 	}
 }
 
+// --- Recovery tests (issue #26) ---
+
+// TestRecoverRunsSyncsTerminalObjectives verifies that when the daemon restarts,
+// active runs whose objectives reached a terminal state are reconciled correctly.
+func TestRecoverRunsSyncsTerminalObjectives(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+	logger := slog.Default()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+
+	// Setup: three objectives in different terminal states, each with an active run.
+	tests := []struct {
+		name         string
+		objStatus    domain.ObjectiveStatus
+		wantRunStatus domain.RunStatus
+	}{
+		{"completed", domain.ObjectiveStatusCompleted, domain.RunStatusCompleted},
+		{"partial", domain.ObjectiveStatusPartial, domain.RunStatusPartial},
+		{"failed", domain.ObjectiveStatusFailed, domain.RunStatusFailed},
+	}
+
+	runIDs := make([]string, len(tests))
+	for i, tc := range tests {
+		obj := &domain.Objective{Description: "recovery-" + tc.name, Status: tc.objStatus}
+		if err := objectiveStore.Create(ctx, obj); err != nil {
+			t.Fatalf("creating objective %s: %v", tc.name, err)
+		}
+		run := &domain.Run{ObjectiveID: obj.ID}
+		if err := runStore.Create(ctx, run); err != nil {
+			t.Fatalf("creating run %s: %v", tc.name, err)
+		}
+		runIDs[i] = run.ID
+	}
+
+	// Simulate restart: create a new service and call Run().
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if err := svc.Run(runCtx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	defer svc.Stop()
+
+	// Verify each run was reconciled to match its objective's terminal state.
+	for i, tc := range tests {
+		snap, err := svc.Snapshot(ctx, runIDs[i])
+		if err != nil {
+			t.Fatalf("Snapshot(%s): %v", tc.name, err)
+		}
+		if snap.Status != tc.wantRunStatus {
+			t.Errorf("run %s: status = %q, want %q", tc.name, snap.Status, tc.wantRunStatus)
+		}
+		if snap.Outcome == nil {
+			t.Errorf("run %s: expected terminal outcome", tc.name)
+		}
+	}
+}
+
+// TestRecoverRunsMarksBlockedForWaitingHuman verifies that an active run
+// whose execution is waiting_human gets marked blocked during recovery.
+func TestRecoverRunsMarksBlockedForWaitingHuman(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+	logger := slog.Default()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+
+	// Setup: objective still executing, but execution is waiting for human approval.
+	obj := &domain.Objective{Description: "blocked-recovery", Status: domain.ObjectiveStatusExecuting}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+
+	exec := &blueprint.Execution{
+		ID:          "exec-waiting",
+		ObjectiveID: obj.ID,
+		Status:      "waiting_human",
+	}
+	if err := executionStore.Create(ctx, exec); err != nil {
+		t.Fatalf("creating execution: %v", err)
+	}
+
+	run := &domain.Run{ObjectiveID: obj.ID}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+
+	// Simulate restart.
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if err := svc.Run(runCtx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	defer svc.Stop()
+
+	snap, err := svc.Snapshot(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.Status != domain.RunStatusBlocked {
+		t.Errorf("status = %q, want %q", snap.Status, domain.RunStatusBlocked)
+	}
+	if snap.Blocked == nil {
+		t.Fatal("expected Blocked state")
+	}
+	if snap.Blocked.Kind != "human_approval" {
+		t.Errorf("Blocked.Kind = %q, want %q", snap.Blocked.Kind, "human_approval")
+	}
+}
+
+// TestRecoverRunsLeavesActiveExecutingObjective verifies that an active run
+// whose objective is still executing stays active (coordinator handles resumption).
+func TestRecoverRunsLeavesActiveExecutingObjective(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+	logger := slog.Default()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+
+	// Setup: objective executing, execution running — coordinator will resume it.
+	obj := &domain.Objective{Description: "active-recovery", Status: domain.ObjectiveStatusExecuting}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+
+	exec := &blueprint.Execution{
+		ID:          "exec-running",
+		ObjectiveID: obj.ID,
+		Status:      "running",
+	}
+	if err := executionStore.Create(ctx, exec); err != nil {
+		t.Fatalf("creating execution: %v", err)
+	}
+
+	run := &domain.Run{ObjectiveID: obj.ID}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+
+	// Simulate restart.
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if err := svc.Run(runCtx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	defer svc.Stop()
+
+	snap, err := svc.Snapshot(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.Status != domain.RunStatusActive {
+		t.Errorf("status = %q, want %q", snap.Status, domain.RunStatusActive)
+	}
+	if snap.Outcome != nil {
+		t.Error("expected no terminal outcome for active run")
+	}
+}
+
+// TestRecoverRunsOrphanedObjective verifies that a run whose objective no longer
+// exists in the database is marked failed during recovery.
+func TestRecoverRunsOrphanedObjective(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+	logger := slog.Default()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+
+	// Setup: run pointing to a nonexistent objective.
+	run := &domain.Run{ObjectiveID: "nonexistent-objective-id"}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+
+	// Simulate restart.
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if err := svc.Run(runCtx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	defer svc.Stop()
+
+	snap, err := svc.Snapshot(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.Status != domain.RunStatusFailed {
+		t.Errorf("status = %q, want %q", snap.Status, domain.RunStatusFailed)
+	}
+	if snap.Outcome == nil || snap.Outcome.Status != domain.RunStatusFailed {
+		t.Error("expected failed outcome for orphaned run")
+	}
+}
+
+// TestRecoverRunsFullRestartScenario is an end-to-end test simulating a daemon
+// restart with multiple runs in various states. It verifies that snapshots
+// reflect the correct post-recovery state.
+func TestRecoverRunsFullRestartScenario(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+	logger := slog.Default()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+
+	// --- Pre-restart state ---
+
+	// Run A: objective completed while daemon was down.
+	objA := &domain.Objective{Description: "run-A completed", Status: domain.ObjectiveStatusCompleted}
+	if err := objectiveStore.Create(ctx, objA); err != nil {
+		t.Fatalf("creating objA: %v", err)
+	}
+	planA := &domain.Plan{ObjectiveID: objA.ID}
+	if err := planStore.Create(ctx, planA); err != nil {
+		t.Fatalf("creating planA: %v", err)
+	}
+	streamA := &domain.Stream{PlanID: planA.ID, Title: "stream-A", Description: "done"}
+	if err := streamStore.Create(ctx, streamA); err != nil {
+		t.Fatalf("creating streamA: %v", err)
+	}
+	// Transition through valid states: pending → executing → completed.
+	if err := streamStore.UpdateStatus(ctx, streamA.ID, domain.StreamStatusExecuting); err != nil {
+		t.Fatalf("updating streamA to executing: %v", err)
+	}
+	if err := streamStore.UpdateStatus(ctx, streamA.ID, domain.StreamStatusCompleted); err != nil {
+		t.Fatalf("updating streamA to completed: %v", err)
+	}
+	runA := &domain.Run{ObjectiveID: objA.ID}
+	if err := runStore.Create(ctx, runA); err != nil {
+		t.Fatalf("creating runA: %v", err)
+	}
+
+	// Run B: objective still executing, waiting for human approval.
+	objB := &domain.Objective{Description: "run-B blocked", Status: domain.ObjectiveStatusExecuting}
+	if err := objectiveStore.Create(ctx, objB); err != nil {
+		t.Fatalf("creating objB: %v", err)
+	}
+	execB := &blueprint.Execution{
+		ID: "exec-B", ObjectiveID: objB.ID, Status: "waiting_human",
+	}
+	if err := executionStore.Create(ctx, execB); err != nil {
+		t.Fatalf("creating execB: %v", err)
+	}
+	runB := &domain.Run{ObjectiveID: objB.ID}
+	if err := runStore.Create(ctx, runB); err != nil {
+		t.Fatalf("creating runB: %v", err)
+	}
+
+	// Run C: objective still executing, execution running (coordinator resumes).
+	objC := &domain.Objective{Description: "run-C active", Status: domain.ObjectiveStatusExecuting}
+	if err := objectiveStore.Create(ctx, objC); err != nil {
+		t.Fatalf("creating objC: %v", err)
+	}
+	execC := &blueprint.Execution{
+		ID: "exec-C", ObjectiveID: objC.ID, Status: "running",
+	}
+	if err := executionStore.Create(ctx, execC); err != nil {
+		t.Fatalf("creating execC: %v", err)
+	}
+	runC := &domain.Run{ObjectiveID: objC.ID}
+	if err := runStore.Create(ctx, runC); err != nil {
+		t.Fatalf("creating runC: %v", err)
+	}
+
+	// Run D: already completed before restart — should not be touched.
+	objD := &domain.Objective{Description: "run-D already done", Status: domain.ObjectiveStatusCompleted}
+	if err := objectiveStore.Create(ctx, objD); err != nil {
+		t.Fatalf("creating objD: %v", err)
+	}
+	runD := &domain.Run{ObjectiveID: objD.ID}
+	if err := runStore.Create(ctx, runD); err != nil {
+		t.Fatalf("creating runD: %v", err)
+	}
+	if err := runStore.UpdateStatus(ctx, runD.ID, domain.RunStatusCompleted); err != nil {
+		t.Fatalf("marking runD completed: %v", err)
+	}
+
+	// --- Simulate restart ---
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if err := svc.Run(runCtx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	defer svc.Stop()
+
+	// --- Verify post-recovery snapshots ---
+
+	// Run A: should be completed with outcome and stream state.
+	snapA, err := svc.Snapshot(ctx, runA.ID)
+	if err != nil {
+		t.Fatalf("Snapshot(A): %v", err)
+	}
+	if snapA.Status != domain.RunStatusCompleted {
+		t.Errorf("run A: status = %q, want %q", snapA.Status, domain.RunStatusCompleted)
+	}
+	if snapA.Outcome == nil || snapA.Outcome.Status != domain.RunStatusCompleted {
+		t.Error("run A: expected completed outcome")
+	}
+	if len(snapA.Streams) != 1 || snapA.Streams[0].Status != domain.StreamStatusCompleted {
+		t.Error("run A: expected one completed stream")
+	}
+
+	// Run B: should be blocked (human_approval).
+	snapB, err := svc.Snapshot(ctx, runB.ID)
+	if err != nil {
+		t.Fatalf("Snapshot(B): %v", err)
+	}
+	if snapB.Status != domain.RunStatusBlocked {
+		t.Errorf("run B: status = %q, want %q", snapB.Status, domain.RunStatusBlocked)
+	}
+	if snapB.Blocked == nil || snapB.Blocked.Kind != "human_approval" {
+		t.Error("run B: expected human_approval blocked state")
+	}
+
+	// Run C: should stay active (coordinator resumes execution).
+	snapC, err := svc.Snapshot(ctx, runC.ID)
+	if err != nil {
+		t.Fatalf("Snapshot(C): %v", err)
+	}
+	if snapC.Status != domain.RunStatusActive {
+		t.Errorf("run C: status = %q, want %q", snapC.Status, domain.RunStatusActive)
+	}
+
+	// Run D: already completed — should not have changed.
+	snapD, err := svc.Snapshot(ctx, runD.ID)
+	if err != nil {
+		t.Fatalf("Snapshot(D): %v", err)
+	}
+	if snapD.Status != domain.RunStatusCompleted {
+		t.Errorf("run D: status = %q, want %q (should be unchanged)", snapD.Status, domain.RunStatusCompleted)
+	}
+}
+
 func TestRetryFailedStreamEndToEnd(t *testing.T) {
 	database := openTestDB(t)
 	conn := database.Conn()
@@ -1039,9 +1425,10 @@ func TestRetryFailedStreamEndToEnd(t *testing.T) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// 1. Setup: objective with a failed stream.
 	obj := &domain.Objective{Description: "e2e retry", Status: domain.ObjectiveStatusExecuting}
