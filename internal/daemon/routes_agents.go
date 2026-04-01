@@ -42,7 +42,11 @@ func (d *Daemon) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, session)
 }
 
-// handleKillAgent terminates an active agent session via the coordinator.
+// handleKillAgent terminates an active agent session.
+// This still delegates to the coordinator directly since agent kill is a
+// low-level operation that doesn't map cleanly to a run-level abort (which
+// would stop the entire run, not just one agent). The coordinator's Kill
+// method is an internal detail owned by the runs service.
 func (d *Daemon) handleKillAgent(w http.ResponseWriter, r *http.Request) {
 	if d.coordinator == nil {
 		writeError(w, http.StatusServiceUnavailable, "coordinator not available")

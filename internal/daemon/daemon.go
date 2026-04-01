@@ -320,8 +320,9 @@ func New(cfg *config.Config) (*Daemon, error) {
 	}
 
 	// Create runs service — the run-centric orchestration boundary.
-	// Delegates execution to the coordinator internally.
-	runsService := runs.New(runStore, objectiveStore, planStore, streamStore, executionStore, coordinator, logger)
+	// Owns the lifecycle of coordinator and merge processor as internal
+	// implementation details. The daemon interacts only through runs.
+	runsService := runs.New(runStore, objectiveStore, planStore, streamStore, executionStore, coordinator, mergeProcessor, eventBus, logger)
 
 	// Create daemon lifecycle context (cancelled in Shutdown).
 	daemonCtx, daemonCancel := context.WithCancel(context.Background())
@@ -379,15 +380,13 @@ func New(cfg *config.Config) (*Daemon, error) {
 
 // Start begins event processing and HTTP serving. It blocks until the server
 // is shut down. Returns nil if shutdown was triggered via Shutdown.
+//
+// All orchestration lifecycle is managed through the runs service boundary.
+// The coordinator and merge processor are started internally by runs.Run().
 func (d *Daemon) Start() error {
-	if d.coordinator != nil {
-		if err := d.coordinator.Start(d.ctx); err != nil {
-			return fmt.Errorf("starting coordinator: %w", err)
-		}
-	}
-	if d.mergeProcessor != nil {
-		if err := d.mergeProcessor.Start(d.ctx); err != nil {
-			return fmt.Errorf("starting merge processor: %w", err)
+	if d.runsService != nil {
+		if err := d.runsService.Run(d.ctx); err != nil {
+			return fmt.Errorf("starting runs orchestration: %w", err)
 		}
 	}
 	d.logger.Info("Tack daemon listening", "addr", d.cfg.Daemon.Listen)
@@ -406,17 +405,16 @@ func localWorktreeDir(cfg *config.Config) string {
 	return filepath.Join(os.TempDir(), "tack-worktrees")
 }
 
-// Shutdown gracefully shuts down the coordinator, HTTP server, and database.
+// Shutdown gracefully shuts down orchestration, HTTP server, and database.
+// Orchestration shutdown is handled through the runs service boundary —
+// it stops the merge processor and coordinator internally.
 func (d *Daemon) Shutdown(ctx context.Context) error {
 	d.logger.Info("shutting down daemon")
 	if d.cancel != nil {
 		d.cancel()
 	}
-	if d.mergeProcessor != nil {
-		d.mergeProcessor.Stop()
-	}
-	if d.coordinator != nil {
-		d.coordinator.Stop()
+	if d.runsService != nil {
+		d.runsService.Stop()
 	}
 	if err := d.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("shutting down server: %w", err)

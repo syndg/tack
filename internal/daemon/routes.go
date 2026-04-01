@@ -51,8 +51,12 @@ func (d *Daemon) registerRoutes() {
 	d.mux.HandleFunc("POST /merge-queue/{id}/retry", d.handleRetryMerge)
 	d.mux.HandleFunc("GET /streams/{id}/diff", d.handleGetStreamDiff)
 
-	// Runs
+	// Runs — the run-centric orchestration boundary.
+	// POST /runs/{id}/command is the primary intervention endpoint. The
+	// execution-level approve/retry routes above are kept for backwards
+	// compatibility but will be removed once all callers migrate.
 	d.mux.HandleFunc("GET /runs/{id}/snapshot", d.handleGetRunSnapshot)
+	d.mux.HandleFunc("POST /runs/{id}/command", d.handleRunCommand)
 	d.mux.HandleFunc("GET /objectives/{id}/run", d.handleGetObjectiveRunSnapshot)
 
 	// Blueprints & System
