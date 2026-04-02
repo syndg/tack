@@ -42,10 +42,9 @@
 // should internalize spawner construction behind this boundary so that
 // callers provide only leaf infrastructure.
 //
-// Pre-migration escape hatches (ApproveExecution, RetryExecution, KillAgent)
-// are provided for executions that predate the run API. These delegate directly
-// to the coordinator without run-level state transitions and should be removed
-// once all executions are created through Start.
+// All executions are created through Start, ensuring every objective has a
+// Run record. There are no legacy escape hatches — all interventions flow
+// through Command.
 //
 // # Recovery (issue #26)
 //
@@ -484,27 +483,6 @@ func (s *Service) commandKill(ctx context.Context, run *domain.Run, cmd domain.C
 	s.logger.Info("agent killed via run",
 		"run_id", run.ID, "session_id", cmd.SessionID)
 	return s.Snapshot(ctx, run.ID)
-}
-
-// KillAgent terminates an agent session directly through the coordinator.
-// This is a low-level escape hatch for agent sessions that predate the run API.
-// Prefer Command(kill) when a run exists for the agent's objective.
-func (s *Service) KillAgent(ctx context.Context, sessionID string) error {
-	return s.coordinator.Kill(ctx, sessionID)
-}
-
-// ApproveExecution approves a human gate directly through the coordinator.
-// This is a low-level escape hatch for executions that predate the run API.
-// Prefer Command(approve) when a run exists for the execution's objective.
-func (s *Service) ApproveExecution(ctx context.Context, executionID string) error {
-	return s.coordinator.Approve(ctx, executionID)
-}
-
-// RetryExecution retries a failed execution directly through the coordinator.
-// This is a low-level escape hatch for executions that predate the run API.
-// Prefer Command(retry) when a run exists for the execution's objective.
-func (s *Service) RetryExecution(ctx context.Context, executionID string, guidance string) error {
-	return s.coordinator.Retry(ctx, executionID, guidance)
 }
 
 // Snapshot returns the observable state of a run by assembling current

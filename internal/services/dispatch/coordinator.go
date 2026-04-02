@@ -174,8 +174,9 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 }
 
 // Start subscribes to events and begins processing.
-// Subscribes to objective lifecycle events only; stream execution is coordinated
-// from within the blueprint_ref handler to avoid double-claiming streams.
+// Execution is triggered exclusively through runs.Start() — the coordinator
+// no longer listens for EventObjectiveCreated. It still listens for
+// EventMergeCompleted to drive partial→completed upgrades on the retry path.
 func (c *Coordinator) Start(ctx context.Context) error {
 	c.ctx = ctx
 	sub, unsub := c.eventBus.Subscribe(128)
@@ -191,8 +192,6 @@ func (c *Coordinator) Start(ctx context.Context) error {
 					return
 				}
 				switch event.Type {
-				case domain.EventObjectiveCreated:
-					c.handleObjectiveCreated(ctx, event)
 				case domain.EventMergeCompleted:
 					// After a merge completes, check if a partial objective
 					// can now be upgraded to completed (retry path).
@@ -329,22 +328,6 @@ func (c *Coordinator) resumeExecution(exec *blueprint.Execution) {
 		"objective_id", exec.ObjectiveID,
 	)
 	go c.runExecution(execCtx, exec)
-}
-
-// handleObjectiveCreated processes EventObjectiveCreated events.
-func (c *Coordinator) handleObjectiveCreated(ctx context.Context, event domain.Event) {
-	if event.Objective == "" {
-		return
-	}
-
-	go func() {
-		if err := c.Execute(ctx, event.Objective); err != nil {
-			c.logger.Error("failed to start execution for new objective",
-				"objective_id", event.Objective,
-				"error", err,
-			)
-		}
-	}()
 }
 
 // Execute begins blueprint execution for an objective.

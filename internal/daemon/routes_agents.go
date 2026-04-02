@@ -44,12 +44,10 @@ func (d *Daemon) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleKillAgent terminates an active agent session.
-// Routes through the run-centric boundary when a Run exists for the agent's
-// objective; falls back to the coordinator for sessions that predate the runs API.
+// Routes through the run-centric boundary via the agent's objective.
 func (d *Daemon) handleKillAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	// Look up the agent to find its objective and route through runs.
 	session, err := d.agents.Get(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -61,36 +59,25 @@ func (d *Daemon) handleKillAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if run, err := d.runStore.GetByObjective(r.Context(), session.ObjectiveID); err == nil {
-		// Run exists — route through the run-centric boundary.
-		snap, err := d.runsService.Command(r.Context(), run.ID, domain.Command{
-			Kind:      domain.CommandKill,
-			SessionID: id,
-		})
-		if err != nil {
-			switch {
-			case errors.Is(err, runs.ErrInvalidState):
-				writeError(w, http.StatusConflict, err.Error())
-			default:
-				d.logger.Error("killing agent via run", "session_id", id, "error", err)
-				writeError(w, http.StatusInternalServerError, "failed to kill agent")
-			}
-			return
-		}
-		writeJSON(w, http.StatusOK, snap)
+	run, err := d.runStore.GetByObjective(r.Context(), session.ObjectiveID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "no run found for agent's objective")
 		return
 	}
 
-	// No run — fall back to direct coordinator call (pre-migration path).
-	if err := d.runsService.KillAgent(r.Context(), id); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "agent session not found")
-			return
+	snap, err := d.runsService.Command(r.Context(), run.ID, domain.Command{
+		Kind:      domain.CommandKill,
+		SessionID: id,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, runs.ErrInvalidState):
+			writeError(w, http.StatusConflict, err.Error())
+		default:
+			d.logger.Error("killing agent via run", "session_id", id, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to kill agent")
 		}
-		d.logger.Error("killing agent session", "id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to kill agent")
 		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, snap)
 }

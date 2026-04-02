@@ -58,6 +58,15 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to start simple mode")
 			return
 		}
+
+		// Start execution through the run-centric boundary so a Run record
+		// exists for all subsequent interventions (approve, retry, kill).
+		if _, err := d.runsService.Start(r.Context(), obj.ID); err != nil {
+			d.logger.Error("starting run for simple objective", "objective_id", obj.ID, "error", err)
+			writeError(w, http.StatusInternalServerError, "objective created but failed to start execution")
+			return
+		}
+
 		writeJSON(w, http.StatusCreated, createObjectiveSimpleResponse{
 			Objective: obj,
 			Plan:      plan,
@@ -81,6 +90,14 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 		Payload:   obj.Description,
 		CreatedAt: time.Now(),
 	})
+
+	// Start execution through the run-centric boundary. The event above
+	// is informational (SSE); execution is driven by runsService.Start().
+	if _, err := d.runsService.Start(r.Context(), obj.ID); err != nil {
+		d.logger.Error("starting run for objective", "objective_id", obj.ID, "error", err)
+		writeError(w, http.StatusInternalServerError, "objective created but failed to start execution")
+		return
+	}
 
 	writeJSON(w, http.StatusCreated, obj)
 }

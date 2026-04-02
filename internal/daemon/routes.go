@@ -53,8 +53,8 @@ func (d *Daemon) registerRoutes() {
 
 	// Runs — the run-centric orchestration boundary.
 	// POST /runs/{id}/command is the primary intervention endpoint. The
-	// execution-level approve/retry routes above are kept for backwards
-	// compatibility but will be removed once all callers migrate.
+	// execution-level approve/retry and agent kill routes above are
+	// convenience wrappers that resolve the run and delegate to Command.
 	d.mux.HandleFunc("GET /runs/{id}/snapshot", d.handleGetRunSnapshot)
 	d.mux.HandleFunc("POST /runs/{id}/command", d.handleRunCommand)
 	d.mux.HandleFunc("GET /objectives/{id}/run", d.handleGetObjectiveRunSnapshot)
