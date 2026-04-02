@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -121,6 +122,48 @@ func TestCreate_UsesBaseRefWhenProvided(t *testing.T) {
 	}
 	if res.ExitCode != 0 || strings.TrimSpace(res.Stdout) != "merged" {
 		t.Fatalf("sandbox did not start from base ref: exit=%d stdout=%q stderr=%q", res.ExitCode, res.Stdout, res.Stderr)
+	}
+}
+
+func TestCreate_SkipIgnoredCopyLeavesIgnoredFilesOut(t *testing.T) {
+	repoDir := initTestRepo(t)
+	p := newTestProvider(t, repoDir)
+	ctx := context.Background()
+
+	if err := os.WriteFile(filepath.Join(repoDir, ".gitignore"), []byte("cache/\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile .gitignore: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoDir, "cache"), 0o755); err != nil {
+		t.Fatalf("MkdirAll cache: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "cache", "seed.txt"), []byte("seed"), 0o644); err != nil {
+		t.Fatalf("WriteFile seed: %v", err)
+	}
+
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = repoDir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v", err)
+	}
+	baseRef := strings.TrimSpace(string(out))
+
+	sb, err := p.Create(ctx, sandbox.CreateOpts{
+		Branch:          "tack/objective/merge",
+		BaseRef:         baseRef,
+		SkipIgnoredCopy: true,
+		Labels:          map[string]string{"tack.objective": "obj-skip-copy", "tack.role": "merger"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, err := sb.Exec(ctx, "test ! -e cache/seed.txt", sandbox.ExecOpts{})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("ignored file was copied despite SkipIgnoredCopy: stdout=%q stderr=%q", res.Stdout, res.Stderr)
 	}
 }
 

@@ -205,8 +205,10 @@ func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox
 	}
 
 	// Copy gitignored files (node_modules, build caches, .env) from main repo.
-	if err := copyIgnoredFiles(p.repoRoot, worktreePath, p.logger); err != nil {
-		p.logger.Warn("copy-ignored failed, continuing", "error", err)
+	if !opts.SkipIgnoredCopy {
+		if err := copyIgnoredFiles(p.repoRoot, worktreePath, p.logger); err != nil {
+			p.logger.Warn("copy-ignored failed, continuing", "error", err)
+		}
 	}
 
 	// Run post-create commands (e.g., "bun install").

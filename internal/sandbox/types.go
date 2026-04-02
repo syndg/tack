@@ -12,16 +12,17 @@ const (
 )
 
 type CreateOpts struct {
-	Name       string            `json:"name"`
-	Branch     string            `json:"branch"`
-	BaseRef    string            `json:"base_ref,omitempty"`
-	Labels     map[string]string `json:"labels"`
-	Snapshot   string            `json:"snapshot"`
-	Resources  ResourceSpec      `json:"resources"`
-	EnvVars    map[string]string `json:"env_vars"`
-	AutoStop   time.Duration     `json:"auto_stop"`
-	AutoDelete time.Duration     `json:"auto_delete"`
-	Ephemeral  bool              `json:"ephemeral"`
+	Name            string            `json:"name"`
+	Branch          string            `json:"branch"`
+	BaseRef         string            `json:"base_ref,omitempty"`
+	Labels          map[string]string `json:"labels"`
+	Snapshot        string            `json:"snapshot"`
+	Resources       ResourceSpec      `json:"resources"`
+	EnvVars         map[string]string `json:"env_vars"`
+	AutoStop        time.Duration     `json:"auto_stop"`
+	AutoDelete      time.Duration     `json:"auto_delete"`
+	Ephemeral       bool              `json:"ephemeral"`
+	SkipIgnoredCopy bool              `json:"skip_ignored_copy,omitempty"`
 }
 
 type ResourceSpec struct {
