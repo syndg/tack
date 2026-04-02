@@ -53,7 +53,7 @@ func newMockSandboxProvider() *mockSandboxProvider {
 }
 
 func (m *mockSandboxProvider) Create(_ context.Context, opts sandbox.CreateOpts) (sandbox.Sandbox, error) {
-	sb := &mockSandboxEntry{id: opts.Name, labels: opts.Labels}
+	sb := &mockSandboxEntry{id: opts.Name, labels: opts.Labels, envVars: opts.EnvVars}
 	m.sandboxes[sb.id] = sb
 	return sb, nil
 }
@@ -73,8 +73,9 @@ func (m *mockSandboxProvider) Delete(_ context.Context, id string) error {
 }
 
 type mockSandboxEntry struct {
-	id     string
-	labels map[string]string
+	id      string
+	labels  map[string]string
+	envVars map[string]string
 }
 
 func (m *mockSandboxEntry) ID() string                    { return m.id }
@@ -110,7 +111,7 @@ func setupSpawnerTest(t *testing.T) (*Spawner, *mockRuntime, *mockSandboxProvide
 	rulesEng := rules.NewEngine(slog.Default())
 	toolCurator := tools.NewCurator(slog.Default())
 
-	spawner := NewSpawner(agentStore, rt, sp, rulesEng, toolCurator, bus, nil, "", slog.Default(), "http://localhost:8080")
+	spawner := NewSpawner(agentStore, rt, sp, rulesEng, toolCurator, bus, nil, "", slog.Default(), "http://localhost:8080", "Tack", "tack@local")
 	return spawner, rt, sp, agentStore, bus
 }
 
@@ -119,6 +120,35 @@ func makeSpawnObjective(id string) *domain.Objective {
 		ID:          id,
 		Description: "test objective for spawner",
 		Status:      domain.ObjectiveStatusApproved,
+	}
+}
+
+func TestSpawn_InjectsGitIdentityIntoSandboxAndAgentEnv(t *testing.T) {
+	spawner, rt, sp, _, _ := setupSpawnerTest(t)
+	ctx := context.Background()
+
+	obj := makeSpawnObjective("obj-git-env-1234")
+	req := SpawnRequest{Objective: obj, Role: "builder", TaskSpec: "implement feature"}
+
+	result, err := spawner.Spawn(ctx, req)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	sb := sp.sandboxes[result.Sandbox.ID()]
+	if sb == nil {
+		t.Fatalf("expected sandbox entry for %s", result.Sandbox.ID())
+	}
+	if got := sb.envVars["GIT_AUTHOR_NAME"]; got != "Tack" {
+		t.Fatalf("sandbox GIT_AUTHOR_NAME = %q, want %q", got, "Tack")
+	}
+	if got := sb.envVars["GIT_AUTHOR_EMAIL"]; got != "tack@local" {
+		t.Fatalf("sandbox GIT_AUTHOR_EMAIL = %q, want %q", got, "tack@local")
+	}
+	if got := rt.lastOpts.EnvVars["GIT_COMMITTER_NAME"]; got != "Tack" {
+		t.Fatalf("agent GIT_COMMITTER_NAME = %q, want %q", got, "Tack")
+	}
+	if got := rt.lastOpts.EnvVars["GIT_COMMITTER_EMAIL"]; got != "tack@local" {
+		t.Fatalf("agent GIT_COMMITTER_EMAIL = %q, want %q", got, "tack@local")
 	}
 }
 

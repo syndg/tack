@@ -317,6 +317,8 @@ func New(cfg *config.Config) (*Daemon, error) {
 		Timeouts:        cfg.Agents.Timeouts,
 		MaxConcurrent:   cfg.Agents.MaxConcurrent,
 		BaseBranch:      cfg.Daemon.BaseBranch,
+		GitAuthorName:   cfg.Git.AuthorName,
+		GitAuthorEmail:  cfg.Git.AuthorEmail,
 		Runs:            runStore,
 		Objectives:      objectiveStore,
 		Plans:           planStore,

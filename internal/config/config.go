@@ -26,6 +26,7 @@ type Config struct {
 	Planning     PlanningConfig `yaml:"planning"`
 	Watchdog     WatchdogConfig `yaml:"watchdog"`
 	Tools        ToolsConfig    `yaml:"tools"`
+	Git          GitConfig      `yaml:"git"`
 	QualityGates []string       `yaml:"quality_gates"`
 	ProjectRoot  string         `yaml:"-" json:"-"`
 }
@@ -128,6 +129,11 @@ type ToolsConfig struct {
 	MaxPerAgent   int      `yaml:"max_per_agent"`
 	AlwaysInclude []string `yaml:"always_include"`
 	AlwaysExclude []string `yaml:"always_exclude"`
+}
+
+type GitConfig struct {
+	AuthorName  string `yaml:"author_name"`
+	AuthorEmail string `yaml:"author_email"`
 }
 
 // Load reads config with two-layer merge: defaults → user config → project config.
@@ -261,6 +267,10 @@ func Default() *Config {
 			MaxPerAgent:   20,
 			AlwaysInclude: []string{},
 			AlwaysExclude: []string{},
+		},
+		Git: GitConfig{
+			AuthorName:  "Tack",
+			AuthorEmail: "tack@local",
 		},
 		QualityGates: []string{"go vet ./...", "go test ./...", "go build ./..."},
 	}

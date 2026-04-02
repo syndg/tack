@@ -61,16 +61,18 @@ var gitHostEnvVars = map[string]string{
 // It is constructed internally by the runs service ([runs.New]) and never
 // exposed to callers outside the orchestration boundary.
 type Spawner struct {
-	agentStore  *db.AgentStore
-	rt          runtime.AgentRuntime
-	sp          sandbox.SandboxProvider
-	rulesEngine *rules.Engine
-	toolCurator *tools.Curator
-	eventBus    *events.PersistentBus
-	creds       *credentials.Store
-	provider    string // model provider name (e.g., "anthropic")
-	logger      *slog.Logger
-	daemonURL   string
+	agentStore     *db.AgentStore
+	rt             runtime.AgentRuntime
+	sp             sandbox.SandboxProvider
+	rulesEngine    *rules.Engine
+	toolCurator    *tools.Curator
+	eventBus       *events.PersistentBus
+	creds          *credentials.Store
+	provider       string // model provider name (e.g., "anthropic")
+	logger         *slog.Logger
+	daemonURL      string
+	gitAuthorName  string
+	gitAuthorEmail string
 }
 
 // NewSpawner creates a new Spawner.
@@ -85,18 +87,22 @@ func NewSpawner(
 	provider string,
 	logger *slog.Logger,
 	daemonURL string,
+	gitAuthorName string,
+	gitAuthorEmail string,
 ) *Spawner {
 	return &Spawner{
-		agentStore:  agentStore,
-		rt:          rt,
-		sp:          sp,
-		rulesEngine: rulesEngine,
-		toolCurator: toolCurator,
-		eventBus:    eventBus,
-		creds:       creds,
-		provider:    provider,
-		logger:      logger,
-		daemonURL:   daemonURL,
+		agentStore:     agentStore,
+		rt:             rt,
+		sp:             sp,
+		rulesEngine:    rulesEngine,
+		toolCurator:    toolCurator,
+		eventBus:       eventBus,
+		creds:          creds,
+		provider:       provider,
+		logger:         logger,
+		daemonURL:      daemonURL,
+		gitAuthorName:  gitAuthorName,
+		gitAuthorEmail: gitAuthorEmail,
 	}
 }
 
@@ -147,6 +153,10 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	var sb sandbox.Sandbox
 	var err error
 
+	sandboxEnvVars := map[string]string{}
+	s.injectCredentials(sandboxEnvVars)
+	s.injectGitIdentity(sandboxEnvVars)
+
 	if req.Stream != nil {
 		// Stream agent (scout/builder/reviewer): reuse existing stream sandbox.
 		existing, listErr := s.sp.List(ctx, map[string]string{
@@ -189,6 +199,7 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 			Branch:    branch,
 			BaseRef:   baseRef,
 			Labels:    labels,
+			EnvVars:   sandboxEnvVars,
 			Ephemeral: !role.Persistent,
 		})
 		if err != nil {
@@ -243,13 +254,15 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 
 	// 7. Spawn agent process via runtime.
 	agentToken := uuid.New().String()
-	envVars := map[string]string{
-		"TACK_DAEMON_URL":   s.daemonURL,
-		"TACK_AGENT_TOKEN":  agentToken,
-		"TACK_AGENT_NAME":   agentName,
-		"TACK_OBJECTIVE_ID": req.Objective.ID,
-		"TACK_AGENT_ROLE":   req.Role,
+	envVars := make(map[string]string, len(sandboxEnvVars)+6)
+	for k, v := range sandboxEnvVars {
+		envVars[k] = v
 	}
+	envVars["TACK_DAEMON_URL"] = s.daemonURL
+	envVars["TACK_AGENT_TOKEN"] = agentToken
+	envVars["TACK_AGENT_NAME"] = agentName
+	envVars["TACK_OBJECTIVE_ID"] = req.Objective.ID
+	envVars["TACK_AGENT_ROLE"] = req.Role
 	if req.Stream != nil {
 		envVars["TACK_STREAM_ID"] = req.Stream.ID
 		envVars["TACK_STREAM_TITLE"] = req.Stream.Title
@@ -260,9 +273,6 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	if req.TaskSpec != "" {
 		envVars["TACK_TASK_SPEC"] = req.TaskSpec
 	}
-
-	// Inject model provider credential (only the configured provider).
-	s.injectCredentials(envVars)
 
 	process, err := s.rt.Spawn(ctx, sb, runtime.AgentOpts{
 		Role:    req.Role,
@@ -413,6 +423,16 @@ func (s *Spawner) injectCredentials(envVars map[string]string) {
 			envVars[envName] = tok
 		}
 	}
+}
+
+func (s *Spawner) injectGitIdentity(envVars map[string]string) {
+	if s.gitAuthorName == "" || s.gitAuthorEmail == "" {
+		return
+	}
+	envVars["GIT_AUTHOR_NAME"] = s.gitAuthorName
+	envVars["GIT_AUTHOR_EMAIL"] = s.gitAuthorEmail
+	envVars["GIT_COMMITTER_NAME"] = s.gitAuthorName
+	envVars["GIT_COMMITTER_EMAIL"] = s.gitAuthorEmail
 }
 
 // GetSandbox retrieves a sandbox by ID from the provider.

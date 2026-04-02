@@ -105,6 +105,38 @@ func TestLayeredLoad_ProjectWinsOverUser(t *testing.T) {
 	}
 }
 
+func TestLoad_DefaultGitIdentity(t *testing.T) {
+	cfg, err := Load("", "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Git.AuthorName != "Tack" {
+		t.Fatalf("AuthorName = %q, want %q", cfg.Git.AuthorName, "Tack")
+	}
+	if cfg.Git.AuthorEmail != "tack@local" {
+		t.Fatalf("AuthorEmail = %q, want %q", cfg.Git.AuthorEmail, "tack@local")
+	}
+}
+
+func TestLayeredLoad_ProjectGitIdentityWins(t *testing.T) {
+	dir := t.TempDir()
+	userPath := filepath.Join(dir, "user.yaml")
+	os.WriteFile(userPath, []byte("git:\n  author_name: User Tack\n  author_email: user@example.com\n"), 0o644)
+	projPath := filepath.Join(dir, "project.yaml")
+	os.WriteFile(projPath, []byte("git:\n  author_name: Project Tack\n  author_email: project@example.com\n"), 0o644)
+
+	cfg, err := Load(projPath, userPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Git.AuthorName != "Project Tack" {
+		t.Fatalf("AuthorName = %q, want %q", cfg.Git.AuthorName, "Project Tack")
+	}
+	if cfg.Git.AuthorEmail != "project@example.com" {
+		t.Fatalf("AuthorEmail = %q, want %q", cfg.Git.AuthorEmail, "project@example.com")
+	}
+}
+
 func TestLayeredLoad_SlicesReplace(t *testing.T) {
 	dir := t.TempDir()
 

@@ -181,6 +181,10 @@ type Config struct {
 	// BaseBranch is the git base branch for merge operations.
 	BaseBranch string
 
+	// Git identity defaults for sandboxed commits.
+	GitAuthorName  string
+	GitAuthorEmail string
+
 	// --- Always-required fields ---
 
 	// MergeProcessor owns the merge queue lifecycle and merge operations.
@@ -258,6 +262,7 @@ func New(cfg Config) (*Service, error) {
 			cfg.Agents, cfg.AgentRuntime, cfg.SandboxProvider,
 			cfg.RulesEngine, cfg.ToolCurator, cfg.EventBus,
 			cfg.Credentials, cfg.ModelProvider, logger, cfg.DaemonURL,
+			cfg.GitAuthorName, cfg.GitAuthorEmail,
 		)
 
 		// Scheduler: stream dependency resolution and concurrency limiting.
