@@ -17,9 +17,12 @@
 //     Config.MaxConcurrent. Never exposed to callers.
 //   - Step handlers: deterministic and human blueprint step implementations.
 //     Created inside [New] and registered with the blueprint engine.
+//   - Spawner: agent process creation, sandbox reuse, credential injection.
+//     Created inside [New] from Config.AgentRuntime, Config.SandboxProvider,
+//     Config.RulesEngine, Config.ToolCurator, and Config.Credentials.
 //   - Coordinator: blueprint execution engine, agent tracker, approval dance.
-//     Created inside [New] from the internally-constructed scheduler, the
-//     provided spawner, and other Config dependencies.
+//     Created inside [New] from the internally-constructed scheduler and
+//     spawner plus other Config dependencies.
 //   - Merge processor: provided via Config.MergeProcessor; lifecycle (Start/
 //     Stop) managed by [Service.Run] and [Service.Stop].
 //
@@ -34,19 +37,13 @@
 //   - Snapshot: assembles observable state from persisted records
 //   - Run/Stop: manages coordinator and merge processor lifecycle
 //
-// # Remaining migration (issue #31)
-//
-// The spawner is still constructed externally (by the daemon) and passed via
-// Config because it has many infrastructure dependencies (agent runtime,
-// sandbox provider, rules engine, tool curator, credentials). A future slice
-// should internalize spawner construction behind this boundary so that
-// callers provide only leaf infrastructure.
-//
-// All other orchestration internals are fully owned by this boundary:
-// the coordinator no longer auto-starts execution from events, all
-// executions are created through Start (ensuring every objective has a
-// Run record), and all interventions flow through Command with no legacy
-// escape hatches.
+// All orchestration internals are fully owned by this boundary: the
+// spawner, scheduler, step handlers, and coordinator are constructed
+// inside [New]. The coordinator no longer auto-starts execution from
+// events — all executions are created through Start (ensuring every
+// objective has a Run record), and all interventions flow through
+// Command with no legacy escape hatches. Callers provide only leaf
+// infrastructure via [Config].
 //
 // # Recovery (issue #26)
 //
@@ -75,10 +72,14 @@ import (
 	"strings"
 
 	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/credentials"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/harness/gates"
+	"github.com/syndg/tack/internal/harness/rules"
+	"github.com/syndg/tack/internal/harness/tools"
+	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/sandbox"
 	"github.com/syndg/tack/internal/services/agents"
 	"github.com/syndg/tack/internal/services/dispatch"
@@ -134,9 +135,6 @@ type Config struct {
 	// coordinator.
 	Engine *blueprint.Engine
 
-	// Spawner creates agent processes and manages sandbox lifecycle.
-	Spawner *dispatch.Spawner
-
 	// Lifecycle manages objective state transitions.
 	Lifecycle *lifecycle.Manager
 
@@ -151,6 +149,24 @@ type Config struct {
 
 	// SandboxProvider creates and manages sandboxes.
 	SandboxProvider sandbox.SandboxProvider
+
+	// AgentRuntime runs agent processes inside sandboxes.
+	AgentRuntime runtime.AgentRuntime
+
+	// RulesEngine evaluates project rules for agent overlays.
+	RulesEngine *rules.Engine
+
+	// ToolCurator curates per-role tool lists for agents.
+	ToolCurator *tools.Curator
+
+	// Credentials provides API keys and tokens for agent injection.
+	Credentials *credentials.Store
+
+	// ModelProvider is the default model provider name (e.g., "anthropic").
+	ModelProvider string
+
+	// DaemonURL is the URL agents use to call back to the daemon.
+	DaemonURL string
 
 	// ActivityLogger logs agent activity events. Optional: nil disables.
 	ActivityLogger *agents.ActivityLogger
@@ -222,8 +238,8 @@ func New(cfg Config) (*Service, error) {
 		if cfg.Engine == nil {
 			missing = append(missing, "Engine")
 		}
-		if cfg.Spawner == nil {
-			missing = append(missing, "Spawner")
+		if cfg.AgentRuntime == nil {
+			missing = append(missing, "AgentRuntime")
 		}
 		if cfg.Lifecycle == nil {
 			missing = append(missing, "Lifecycle")
@@ -234,6 +250,14 @@ func New(cfg Config) (*Service, error) {
 		if len(missing) > 0 {
 			return nil, fmt.Errorf("runs.Config: missing required fields for coordinator construction: %s", strings.Join(missing, ", "))
 		}
+
+		// Spawner: agent process creation, sandbox reuse, credential injection.
+		// Created here as an internal implementation detail of the runs boundary.
+		spawner := dispatch.NewSpawner(
+			cfg.Agents, cfg.AgentRuntime, cfg.SandboxProvider,
+			cfg.RulesEngine, cfg.ToolCurator, cfg.EventBus,
+			cfg.Credentials, cfg.ModelProvider, logger, cfg.DaemonURL,
+		)
 
 		// Scheduler: stream dependency resolution and concurrency limiting.
 		// Created here as an internal implementation detail of the runs boundary.
@@ -258,7 +282,7 @@ func New(cfg Config) (*Service, error) {
 		coordinator, err = dispatch.NewCoordinator(dispatch.Config{
 			Engine:         cfg.Engine,
 			Scheduler:      scheduler,
-			Spawner:        cfg.Spawner,
+			Spawner:        spawner,
 			Lifecycle:      cfg.Lifecycle,
 			MergeEnqueuer:  cfg.MergeProcessor,
 			PlanCreator:    cfg.PlanCreator,

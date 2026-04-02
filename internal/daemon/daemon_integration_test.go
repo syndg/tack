@@ -572,20 +572,23 @@ exit 0
 
 	// Wait for execution to reach waiting_human at the approve step, then
 	// explicitly approve via the run-centric boundary.
-	// The auto-resume in handleApprovePlan can race with the execution goroutine.
-	var needsApprove bool
+	// The auto-resume in handleApprovePlan can race with the execution
+	// goroutine reaching the human step.
+	var waitingExecID string
 	waitForCondition(t, 10*time.Second, func() bool {
-		snap, err := c.ObjectiveRunSnapshot(context.Background(), obj.ID)
-		if err == nil && snap.Blocked != nil {
-			needsApprove = true
-			return true
+		execs := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
+		for _, e := range execs {
+			if e["objective_id"] == obj.ID && (e["parent_id"] == nil || e["parent_id"] == "") && e["status"] == "waiting_human" {
+				waitingExecID, _ = e["id"].(string)
+				return true
+			}
 		}
 		// Also check if it already completed (auto-resume won the race).
 		got, err := c.GetObjective(context.Background(), obj.ID)
 		return err == nil && (got.Status == "completed" || got.Status == "failed")
 	})
 
-	if needsApprove {
+	if waitingExecID != "" {
 		snap, err := c.ObjectiveRunSnapshot(context.Background(), obj.ID)
 		if err != nil {
 			t.Fatalf("ObjectiveRunSnapshot: %v", err)
@@ -784,6 +787,32 @@ exit 0
 		t.Fatalf("ApprovePlan: %v", err)
 	}
 
+	// Wait for execution to reach waiting_human at the approve step, then
+	// explicitly approve. The auto-resume in handleApprovePlan can race with
+	// the execution goroutine reaching the human step.
+	var msWaitingExecID string
+	waitForCondition(t, 10*time.Second, func() bool {
+		execs := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
+		for _, e := range execs {
+			if e["objective_id"] == obj.ID && (e["parent_id"] == nil || e["parent_id"] == "") && e["status"] == "waiting_human" {
+				msWaitingExecID, _ = e["id"].(string)
+				return true
+			}
+		}
+		got, err := c.GetObjective(context.Background(), obj.ID)
+		return err == nil && (got.Status == "partial" || got.Status == "completed" || got.Status == "failed")
+	})
+
+	if msWaitingExecID != "" {
+		snap, err := c.ObjectiveRunSnapshot(context.Background(), obj.ID)
+		if err != nil {
+			t.Fatalf("ObjectiveRunSnapshot for approve: %v", err)
+		}
+		if _, err := c.RunCommand(context.Background(), snap.RunID, domain.Command{Kind: domain.CommandApprove}); err != nil {
+			t.Fatalf("RunCommand(approve): %v", err)
+		}
+	}
+
 	// Wait for objective to reach "partial" (stream two fails, one and three complete).
 	waitForCondition(t, 30*time.Second, func() bool {
 		got, err := c.GetObjective(context.Background(), obj.ID)
@@ -911,6 +940,32 @@ exit 0
 
 	if err := c.ApprovePlan(context.Background(), plan.Plan.ID); err != nil {
 		t.Fatalf("ApprovePlan: %v", err)
+	}
+
+	// Wait for execution to reach waiting_human, then explicitly approve.
+	// The auto-resume in handleApprovePlan can race with the execution
+	// goroutine reaching the human step.
+	var retryWaitingExecID string
+	waitForCondition(t, 10*time.Second, func() bool {
+		execs := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
+		for _, e := range execs {
+			if e["objective_id"] == obj.ID && (e["parent_id"] == nil || e["parent_id"] == "") && e["status"] == "waiting_human" {
+				retryWaitingExecID, _ = e["id"].(string)
+				return true
+			}
+		}
+		got, err := c.GetObjective(context.Background(), obj.ID)
+		return err == nil && (got.Status == "partial" || got.Status == "completed" || got.Status == "failed")
+	})
+
+	if retryWaitingExecID != "" {
+		snap, err := c.ObjectiveRunSnapshot(context.Background(), obj.ID)
+		if err != nil {
+			t.Fatalf("ObjectiveRunSnapshot for approve: %v", err)
+		}
+		if _, err := c.RunCommand(context.Background(), snap.RunID, domain.Command{Kind: domain.CommandApprove}); err != nil {
+			t.Fatalf("RunCommand(approve): %v", err)
+		}
 	}
 
 	// Wait for objective to reach "partial" (stream fails on first attempt).
