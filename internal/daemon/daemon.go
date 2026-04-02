@@ -35,6 +35,9 @@ import (
 	"github.com/syndg/tack/internal/services/runs"
 )
 
+// Ensure merge.Processor satisfies the runs.MergeOrchestrator interface.
+var _ runs.MergeOrchestrator = (*merge.Processor)(nil)
+
 // Daemon is the main HTTP server that orchestrates all Tack services.
 // All execution orchestration flows through the runs service boundary.
 // The daemon does not hold direct references to the coordinator, scheduler,
@@ -269,9 +272,6 @@ func New(cfg *config.Config) (*Daemon, error) {
 	// Create spawner.
 	spawner := dispatch.NewSpawner(agentStore, agentRuntime, sandboxProv, rulesEng, toolCur, eventBus, creds, modelProvider, logger, daemonURL)
 
-	// Create scheduler.
-	scheduler := dispatch.NewScheduler(streamStore, planStore, cfg.Agents.MaxConcurrent, eventBus, logger)
-
 	// Create merge queue store and processor.
 	mergeQueueStore := db.NewMergeQueueStore(conn)
 	gitMerger := merge.NewGitMerger(logger)
@@ -282,11 +282,6 @@ func New(cfg *config.Config) (*Daemon, error) {
 		eventBus, cfg.Daemon.BaseBranch, logger,
 	)
 
-	// Create step handlers and register deterministic + human types.
-	handlers := dispatch.NewHandlers(scheduler, gateRun, lifecycleMgr, mergeProcessor, planStore, streamStore, objectiveStore, executionStore, agentStore, sandboxProv, eventBus, cfg.Daemon.BaseBranch, logger)
-	bpEngine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
-	bpEngine.RegisterHandler(blueprint.StepTypeHuman, handlers.HandleHuman)
-
 	// Create activity logger for agent event tracking.
 	activityLogDir := filepath.Join(cfg.Daemon.DataDir, "activity")
 	activityLogger, err := agents.NewActivityLogger(activityLogDir, logger)
@@ -295,34 +290,36 @@ func New(cfg *config.Config) (*Daemon, error) {
 		return nil, fmt.Errorf("creating activity logger: %w", err)
 	}
 
-	// Create coordinator.
-	coordinator, err := dispatch.NewCoordinator(dispatch.Config{
-		Engine:         bpEngine,
-		Scheduler:      scheduler,
-		Spawner:        spawner,
-		Lifecycle:      lifecycleMgr,
-		MergeEnqueuer:  mergeProcessor,
-		PlanCreator:    planningService,
-		MailSender:     mailBroker,
-		Executions:     executionStore,
-		Objectives:     objectiveStore,
-		Plans:          planStore,
-		Streams:        streamStore,
-		EventBus:       eventBus,
-		ActivityLogger: activityLogger,
-		Timeouts:       cfg.Agents.Timeouts,
-		Logger:         logger,
+	// Create runs service — the single orchestration boundary.
+	// Internally constructs the scheduler, step handlers, and coordinator.
+	// The daemon provides raw infrastructure; the runs service owns all
+	// orchestration construction and lifecycle.
+	runsService, err := runs.New(runs.Config{
+		Engine:          bpEngine,
+		Spawner:         spawner,
+		Lifecycle:       lifecycleMgr,
+		MergeProcessor:  mergeProcessor,
+		PlanCreator:     planningService,
+		MailSender:      mailBroker,
+		GateRunner:      gateRun,
+		SandboxProvider: sandboxProv,
+		ActivityLogger:  activityLogger,
+		Timeouts:        cfg.Agents.Timeouts,
+		MaxConcurrent:   cfg.Agents.MaxConcurrent,
+		BaseBranch:      cfg.Daemon.BaseBranch,
+		Runs:            runStore,
+		Objectives:      objectiveStore,
+		Plans:           planStore,
+		Streams:         streamStore,
+		Executions:      executionStore,
+		Agents:          agentStore,
+		EventBus:        eventBus,
+		Logger:          logger,
 	})
 	if err != nil {
 		_ = database.Close()
-		return nil, fmt.Errorf("creating coordinator: %w", err)
+		return nil, fmt.Errorf("creating runs service: %w", err)
 	}
-
-	// Create runs service — the single orchestration boundary.
-	// Owns coordinator, merge processor, scheduler, spawner, and agent tracker
-	// as internal implementation details. The daemon routes all orchestration
-	// (start, approve, retry, abort, kill) through this boundary.
-	runsService := runs.New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, coordinator, mergeProcessor, eventBus, logger)
 
 	// Create daemon lifecycle context (cancelled in Shutdown).
 	daemonCtx, daemonCancel := context.WithCancel(context.Background())

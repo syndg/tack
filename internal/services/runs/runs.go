@@ -5,13 +5,26 @@
 // agent sessions, merge queue bookkeeping, scheduler state, merge progression)
 // and exposes only semantic operations: start, intervene, inspect, recover.
 //
-// Ownership boundary: the runs service owns the lifecycle of all internal
-// orchestration services. The coordinator (execution engine), merge processor,
-// scheduler, and agent tracker are implementation details — callers interact
-// only through Start, Command, Snapshot, and Run.
+// # Ownership boundary
 //
-// The daemon no longer holds direct references to the coordinator, scheduler,
-// spawner, or merge processor. All orchestration flows through this boundary:
+// The runs service owns the construction and lifecycle of all internal
+// orchestration services. Callers provide raw infrastructure (stores, engine,
+// sandbox provider, etc.) via [Config]; the runs service constructs the full
+// orchestration stack internally:
+//
+//   - Scheduler: dependency-aware stream scheduling and concurrency limiting.
+//     Created inside [New] from Config.Streams, Config.Plans, and
+//     Config.MaxConcurrent. Never exposed to callers.
+//   - Step handlers: deterministic and human blueprint step implementations.
+//     Created inside [New] and registered with the blueprint engine.
+//   - Coordinator: blueprint execution engine, agent tracker, approval dance.
+//     Created inside [New] from the internally-constructed scheduler, the
+//     provided spawner, and other Config dependencies.
+//   - Merge processor: provided via Config.MergeProcessor; lifecycle (Start/
+//     Stop) managed by [Service.Run] and [Service.Stop].
+//
+// The daemon does not construct or hold references to the scheduler,
+// coordinator, or step handlers. All orchestration flows through this boundary:
 //
 //   - Start: creates a run and delegates to coordinator.Execute
 //   - Command(approve): finds blocked execution, delegates to coordinator.Approve
@@ -21,25 +34,35 @@
 //   - Snapshot: assembles observable state from persisted records
 //   - Run/Stop: manages coordinator and merge processor lifecycle
 //
+// # Migration direction
+//
+// The spawner is still constructed externally (by the daemon) and passed via
+// Config because it has many infrastructure dependencies (agent runtime,
+// sandbox provider, rules engine, tool curator, credentials). A future slice
+// should internalize spawner construction behind this boundary so that
+// callers provide only leaf infrastructure.
+//
 // Pre-migration escape hatches (ApproveExecution, RetryExecution, KillAgent)
 // are provided for executions that predate the run API. These delegate directly
 // to the coordinator without run-level state transitions and should be removed
 // once all executions are created through Start.
 //
-// Recovery (issue #26):
-//   - Run() reconciles in-flight runs on daemon restart. Active/blocked runs
-//     are checked against their objective's current state: terminal objectives
-//     sync immediately, waiting_human objectives mark the run blocked, and
-//     executing objectives are left active (the coordinator resumes them).
-//   - Orphaned runs (objective missing) are marked failed.
+// # Recovery (issue #26)
 //
-// Retry flow (issue #25):
-//   - Snapshot exposes retryable failure information: failed streams with an
-//     associated execution are marked Retryable=true and include the last
-//     step error from the failed execution. Callers inspect the snapshot to
-//     identify which streams can be retried and why they failed.
-//   - Command(retry) routes through the run boundary with guidance, resolves
-//     the failed execution from the stream, and delegates to the coordinator.
+// Run() reconciles in-flight runs on daemon restart. Active/blocked runs
+// are checked against their objective's current state: terminal objectives
+// sync immediately, waiting_human objectives mark the run blocked, and
+// executing objectives are left active (the coordinator resumes them).
+// Orphaned runs (objective missing) are marked failed.
+//
+// # Retry flow (issue #25)
+//
+// Snapshot exposes retryable failure information: failed streams with an
+// associated execution are marked Retryable=true and include the last
+// step error from the failed execution. Callers inspect the snapshot to
+// identify which streams can be retried and why they failed.
+// Command(retry) routes through the run boundary with guidance, resolves
+// the failed execution from the stream, and delegates to the coordinator.
 package runs
 
 import (
@@ -48,12 +71,18 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
+	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/gates"
+	"github.com/syndg/tack/internal/sandbox"
+	"github.com/syndg/tack/internal/services/agents"
 	"github.com/syndg/tack/internal/services/dispatch"
 	"github.com/syndg/tack/internal/services/events"
+	"github.com/syndg/tack/internal/services/lifecycle"
 )
 
 // ErrInvalidState is returned when an operation is invalid for the current state.
@@ -74,12 +103,82 @@ type Runs interface {
 	Stop()
 }
 
-// MergeService is the lifecycle boundary for the merge processor.
-// Extracted as an interface so the runs package does not depend on
-// the merge package directly.
-type MergeService interface {
+// MergeOrchestrator is the merge-processor surface needed by the runs
+// boundary. It combines lifecycle (Start/Stop), merge-queue enqueue, and
+// merge-entry reset into a single interface. merge.Processor satisfies this.
+type MergeOrchestrator interface {
 	Start(ctx context.Context) error
 	Stop()
+	// MergeEnqueuer methods — used by coordinator step handlers.
+	EnqueueStream(ctx context.Context, streamID string) error
+	MergerSandboxID(objectiveID string) string
+	// MergeHelper method — used by step handlers for restart recovery.
+	ResetMergingEntries(ctx context.Context, streamID string)
+}
+
+// Config bundles all dependencies needed to construct the runs orchestration
+// stack. The runs service owns construction of internal helpers (scheduler,
+// step handlers, coordinator) — callers provide raw infrastructure only.
+type Config struct {
+	// Orchestrator overrides internal coordinator construction (testing only).
+	// When non-nil, the service uses this orchestrator directly and ignores
+	// the fields below marked "construction-only". When nil, the service
+	// constructs the full orchestration stack internally.
+	Orchestrator dispatch.Orchestrator
+
+	// --- Construction-only fields (ignored when Orchestrator is set) ---
+
+	// Engine is the blueprint execution engine. The runs service registers
+	// step handlers with it and passes it to the internally-constructed
+	// coordinator.
+	Engine *blueprint.Engine
+
+	// Spawner creates agent processes and manages sandbox lifecycle.
+	Spawner *dispatch.Spawner
+
+	// Lifecycle manages objective state transitions.
+	Lifecycle *lifecycle.Manager
+
+	// PlanCreator creates plans from planner agent output.
+	PlanCreator dispatch.PlanCreator
+
+	// MailSender sends mail messages (escalations). Optional: nil disables.
+	MailSender dispatch.MailSender
+
+	// GateRunner runs quality gates in sandboxes.
+	GateRunner *gates.Runner
+
+	// SandboxProvider creates and manages sandboxes.
+	SandboxProvider sandbox.SandboxProvider
+
+	// ActivityLogger logs agent activity events. Optional: nil disables.
+	ActivityLogger *agents.ActivityLogger
+
+	// Timeouts configures per-role agent timeout behavior.
+	Timeouts config.TimeoutConfig
+
+	// MaxConcurrent caps the number of concurrently executing streams.
+	MaxConcurrent int
+
+	// BaseBranch is the git base branch for merge operations.
+	BaseBranch string
+
+	// --- Always-required fields ---
+
+	// MergeProcessor owns the merge queue lifecycle and merge operations.
+	// Must satisfy MergeOrchestrator. When Orchestrator is set (testing),
+	// only Start/Stop are used.
+	MergeProcessor MergeOrchestrator
+
+	Runs       *db.RunStore
+	Objectives *db.ObjectiveStore
+	Plans      *db.PlanStore
+	Streams    *db.StreamStore
+	Executions *db.ExecutionStore
+	Agents     *db.AgentStore
+
+	EventBus *events.PersistentBus
+	Logger   *slog.Logger
 }
 
 // Service implements the Runs boundary.
@@ -92,38 +191,103 @@ type Service struct {
 	agents     *db.AgentStore
 
 	// Internal orchestration services — owned by runs, not exposed to callers.
+	// The scheduler, step handlers, and agent tracker are further internal to
+	// the coordinator and never escape the runs boundary.
 	coordinator    dispatch.Orchestrator
-	mergeProcessor MergeService
+	mergeProcessor MergeOrchestrator
 	eventBus       *events.PersistentBus
 
 	logger *slog.Logger
 }
 
-// New creates a new runs Service.
-func New(
-	runs *db.RunStore,
-	objectives *db.ObjectiveStore,
-	plans *db.PlanStore,
-	streams *db.StreamStore,
-	executions *db.ExecutionStore,
-	agents *db.AgentStore,
-	coordinator dispatch.Orchestrator,
-	mergeProcessor MergeService,
-	eventBus *events.PersistentBus,
-	logger *slog.Logger,
-) *Service {
-	return &Service{
-		runs:           runs,
-		objectives:     objectives,
-		plans:          plans,
-		streams:        streams,
-		executions:     executions,
-		agents:         agents,
-		coordinator:    coordinator,
-		mergeProcessor: mergeProcessor,
-		eventBus:       eventBus,
-		logger:         logger.With("component", "runs"),
+// New constructs a runs Service from the provided Config.
+//
+// When cfg.Orchestrator is nil (production path), New constructs the full
+// internal orchestration stack: scheduler, step handlers, and coordinator.
+// The scheduler is an implementation detail of this boundary — callers never
+// see or interact with it. When cfg.Orchestrator is non-nil (test path),
+// the provided mock is used directly and construction-only fields are ignored.
+func New(cfg Config) (*Service, error) {
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
 	}
+	logger = logger.With("component", "runs")
+
+	coordinator := cfg.Orchestrator
+	if coordinator == nil {
+		// Construct the internal orchestration stack.
+		var missing []string
+		if cfg.Engine == nil {
+			missing = append(missing, "Engine")
+		}
+		if cfg.Spawner == nil {
+			missing = append(missing, "Spawner")
+		}
+		if cfg.Lifecycle == nil {
+			missing = append(missing, "Lifecycle")
+		}
+		if cfg.PlanCreator == nil {
+			missing = append(missing, "PlanCreator")
+		}
+		if len(missing) > 0 {
+			return nil, fmt.Errorf("runs.Config: missing required fields for coordinator construction: %s", strings.Join(missing, ", "))
+		}
+
+		// Scheduler: stream dependency resolution and concurrency limiting.
+		// Created here as an internal implementation detail of the runs boundary.
+		maxConcurrent := cfg.MaxConcurrent
+		if maxConcurrent <= 0 {
+			maxConcurrent = 5
+		}
+		scheduler := dispatch.NewScheduler(cfg.Streams, cfg.Plans, maxConcurrent, cfg.EventBus, logger)
+
+		// Step handlers for deterministic and human blueprint steps.
+		handlers := dispatch.NewHandlers(
+			scheduler, cfg.GateRunner, cfg.Lifecycle, cfg.MergeProcessor,
+			cfg.Plans, cfg.Streams, cfg.Objectives, cfg.Executions, cfg.Agents,
+			cfg.SandboxProvider, cfg.EventBus, cfg.BaseBranch, logger,
+		)
+		cfg.Engine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
+		cfg.Engine.RegisterHandler(blueprint.StepTypeHuman, handlers.HandleHuman)
+
+		// Coordinator: drives blueprint execution, owns agent tracker.
+		// Agent and blueprint_ref step handlers are registered inside NewCoordinator.
+		var err error
+		coordinator, err = dispatch.NewCoordinator(dispatch.Config{
+			Engine:         cfg.Engine,
+			Scheduler:      scheduler,
+			Spawner:        cfg.Spawner,
+			Lifecycle:      cfg.Lifecycle,
+			MergeEnqueuer:  cfg.MergeProcessor,
+			PlanCreator:    cfg.PlanCreator,
+			MailSender:     cfg.MailSender,
+			Executions:     cfg.Executions,
+			Objectives:     cfg.Objectives,
+			Plans:          cfg.Plans,
+			Streams:        cfg.Streams,
+			EventBus:       cfg.EventBus,
+			ActivityLogger: cfg.ActivityLogger,
+			Timeouts:       cfg.Timeouts,
+			Logger:         logger,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("constructing coordinator: %w", err)
+		}
+	}
+
+	return &Service{
+		runs:           cfg.Runs,
+		objectives:     cfg.Objectives,
+		plans:          cfg.Plans,
+		streams:        cfg.Streams,
+		executions:     cfg.Executions,
+		agents:         cfg.Agents,
+		coordinator:    coordinator,
+		mergeProcessor: cfg.MergeProcessor,
+		eventBus:       cfg.EventBus,
+		logger:         logger,
+	}, nil
 }
 
 // Start creates a new run for an objective and begins execution.

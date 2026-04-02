@@ -17,15 +17,23 @@ import (
 	"github.com/syndg/tack/internal/services/agents"
 	events "github.com/syndg/tack/internal/services/events"
 	"github.com/syndg/tack/internal/services/lifecycle"
-	"github.com/syndg/tack/internal/services/merge"
 )
+
+// MergeHelper is the merge-processor surface used by step handlers.
+// Extracted as an interface so the dispatch package does not depend on
+// the merge package directly, allowing runs to own construction.
+type MergeHelper interface {
+	EnqueueStream(ctx context.Context, streamID string) error
+	MergerSandboxID(objectiveID string) string
+	ResetMergingEntries(ctx context.Context, streamID string)
+}
 
 // Handlers implements blueprint step handlers for deterministic and human steps.
 type Handlers struct {
 	scheduler       *Scheduler
 	gateRunner      *gates.Runner
 	lifecycle       *lifecycle.Manager
-	mergeProcessor  *merge.Processor
+	mergeProcessor  MergeHelper
 	plans           *db.PlanStore
 	streams         *db.StreamStore
 	objectives      *db.ObjectiveStore
@@ -42,7 +50,7 @@ func NewHandlers(
 	scheduler *Scheduler,
 	gateRunner *gates.Runner,
 	lc *lifecycle.Manager,
-	mergeProcessor *merge.Processor,
+	mergeProcessor MergeHelper,
 	plans *db.PlanStore,
 	streams *db.StreamStore,
 	objectives *db.ObjectiveStore,

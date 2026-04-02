@@ -13,6 +13,8 @@ import (
 )
 
 // Scheduler manages dependency-aware stream execution.
+// It is constructed internally by the runs service ([runs.New]) and never
+// exposed to callers outside the orchestration boundary.
 type Scheduler struct {
 	streams       *db.StreamStore
 	plans         *db.PlanStore

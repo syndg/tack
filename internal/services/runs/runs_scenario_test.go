@@ -46,7 +46,7 @@ func setupScenario(t *testing.T) *scenarioEnv {
 	eventBus := newTestEventBus(t, database)
 
 	orch := &mockOrchestrator{}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, eventBus, slog.Default())
+	svc := newTestService(t, runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, eventBus, slog.Default())
 
 	return &scenarioEnv{
 		svc:        svc,

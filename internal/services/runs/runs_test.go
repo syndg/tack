@@ -10,6 +10,7 @@ import (
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/services/dispatch"
 	"github.com/syndg/tack/internal/services/events"
 )
 
@@ -51,14 +52,44 @@ func (m *mockOrchestrator) Execute(ctx context.Context, objectiveID string) erro
 	return m.executeErr
 }
 
-// mockMergeService is a minimal test double for MergeService.
+// mockMergeService is a minimal test double for MergeOrchestrator.
 type mockMergeService struct {
 	started bool
 	stopped bool
 }
 
-func (m *mockMergeService) Start(ctx context.Context) error { m.started = true; return nil }
-func (m *mockMergeService) Stop()                           { m.stopped = true }
+func (m *mockMergeService) Start(ctx context.Context) error                      { m.started = true; return nil }
+func (m *mockMergeService) Stop()                                                { m.stopped = true }
+func (m *mockMergeService) EnqueueStream(_ context.Context, _ string) error      { return nil }
+func (m *mockMergeService) MergerSandboxID(_ string) string                      { return "" }
+func (m *mockMergeService) ResetMergingEntries(_ context.Context, _ string)      {}
+
+// newTestService is a test helper that wraps New() with a Config using
+// a pre-built orchestrator (test mock). Mirrors the old New() parameter order.
+func newTestService(t *testing.T,
+	runStore *db.RunStore, objectiveStore *db.ObjectiveStore, planStore *db.PlanStore,
+	streamStore *db.StreamStore, executionStore *db.ExecutionStore, agentStore *db.AgentStore,
+	orch dispatch.Orchestrator, merger MergeOrchestrator,
+	eventBus *events.PersistentBus, logger *slog.Logger,
+) *Service {
+	t.Helper()
+	svc, err := New(Config{
+		Orchestrator:   orch,
+		MergeProcessor: merger,
+		Runs:           runStore,
+		Objectives:     objectiveStore,
+		Plans:          planStore,
+		Streams:        streamStore,
+		Executions:     executionStore,
+		Agents:         agentStore,
+		EventBus:       eventBus,
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return svc
+}
 
 // openTestDB opens a fresh SQLite DB with migrations applied.
 func openTestDB(t *testing.T) *db.DB {
@@ -94,7 +125,7 @@ func TestSnapshotCreateAndLoad(t *testing.T) {
 	executionStore := db.NewExecutionStore(conn)
 	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Create an objective.
 	obj := &domain.Objective{Description: "test objective"}
@@ -172,7 +203,7 @@ func TestSnapshotByObjective(t *testing.T) {
 	executionStore := db.NewExecutionStore(conn)
 	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Create objective + run.
 	obj := &domain.Objective{Description: "test objective"}
@@ -206,7 +237,7 @@ func TestSnapshotTerminalOutcome(t *testing.T) {
 	executionStore := db.NewExecutionStore(conn)
 	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	obj := &domain.Objective{Description: "test objective"}
 	if err := objectiveStore.Create(ctx, obj); err != nil {
@@ -250,7 +281,7 @@ func TestSnapshotNotFound(t *testing.T) {
 	executionStore := db.NewExecutionStore(conn)
 	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	_, err := svc.Snapshot(ctx, "nonexistent")
 	if err == nil {
@@ -272,7 +303,7 @@ func TestStartCreatesRunAndDelegates(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Create an objective in "approved" state (startable).
 	obj := &domain.Objective{Description: "test start", Status: domain.ObjectiveStatusApproved}
@@ -327,7 +358,7 @@ func TestStartRejectsExecutingObjective(t *testing.T) {
 	executionStore := db.NewExecutionStore(conn)
 	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Create an objective already executing.
 	obj := &domain.Objective{Description: "already running", Status: domain.ObjectiveStatusExecuting}
@@ -358,7 +389,7 @@ func TestStartMarksRunFailedOnExecuteError(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{executeErr: errors.New("blueprint not found")}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	obj := &domain.Objective{Description: "will fail", Status: domain.ObjectiveStatusApproved}
 	if err := objectiveStore.Create(ctx, obj); err != nil {
@@ -394,7 +425,7 @@ func TestRunStartsInternalServices(t *testing.T) {
 
 	orch := &mockOrchestrator{}
 	merger := &mockMergeService{}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, merger, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, merger, newTestEventBus(t, database), logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -429,7 +460,7 @@ func TestRunStatusSyncsOnObjectiveCompleted(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 	eventBus := newTestEventBus(t, database)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
 
 	// Start the orchestration loop.
 	runCtx, cancel := context.WithCancel(ctx)
@@ -482,7 +513,7 @@ func TestRunStatusSyncsOnObjectivePartial(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 	eventBus := newTestEventBus(t, database)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -530,7 +561,7 @@ func TestRunStatusSyncsOnObjectiveFailed(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 	eventBus := newTestEventBus(t, database)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -578,7 +609,7 @@ func TestRunStatusIgnoresNonTerminalTransitions(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 	eventBus := newTestEventBus(t, database)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, eventBus, logger)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -629,7 +660,7 @@ func TestCommandApproveUnblocksRun(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Setup: objective + run (blocked) + execution (waiting_human).
 	obj := &domain.Objective{Description: "approve test", Status: domain.ObjectiveStatusExecuting}
@@ -687,7 +718,7 @@ func TestCommandApproveRejectsNonWaitingExecution(t *testing.T) {
 	executionStore := db.NewExecutionStore(conn)
 	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	obj := &domain.Objective{Description: "approve reject test", Status: domain.ObjectiveStatusExecuting}
 	if err := objectiveStore.Create(ctx, obj); err != nil {
@@ -731,7 +762,7 @@ func TestCommandRetryDelegatesToCoordinator(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Setup: objective + plan + failed stream with execution.
 	obj := &domain.Objective{Description: "retry test", Status: domain.ObjectiveStatusExecuting}
@@ -818,7 +849,7 @@ func TestCommandRetryRequiresStreamID(t *testing.T) {
 	executionStore := db.NewExecutionStore(conn)
 	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	obj := &domain.Objective{Description: "retry no stream", Status: domain.ObjectiveStatusExecuting}
 	if err := objectiveStore.Create(ctx, obj); err != nil {
@@ -852,7 +883,7 @@ func TestCommandAbortStopsAndFailsRun(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	obj := &domain.Objective{Description: "abort test", Status: domain.ObjectiveStatusExecuting}
 	if err := objectiveStore.Create(ctx, obj); err != nil {
@@ -902,7 +933,7 @@ func TestCommandAbortRejectsTerminalRun(t *testing.T) {
 	executionStore := db.NewExecutionStore(conn)
 	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	obj := &domain.Objective{Description: "abort terminal", Status: domain.ObjectiveStatusCompleted}
 	if err := objectiveStore.Create(ctx, obj); err != nil {
@@ -938,7 +969,7 @@ func TestSnapshotExposesRetryableFailureInfo(t *testing.T) {
 	executionStore := db.NewExecutionStore(conn)
 	agentStore := db.NewAgentStore(conn)
 
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// Setup: objective + plan + two streams (one completed, one failed with execution).
 	obj := &domain.Objective{Description: "retryable info test", Status: domain.ObjectiveStatusExecuting}
@@ -1089,7 +1120,7 @@ func TestRecoverRunsSyncsTerminalObjectives(t *testing.T) {
 	}
 
 	// Simulate restart: create a new service and call Run().
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if err := svc.Run(runCtx); err != nil {
@@ -1148,7 +1179,7 @@ func TestRecoverRunsMarksBlockedForWaitingHuman(t *testing.T) {
 	}
 
 	// Simulate restart.
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if err := svc.Run(runCtx); err != nil {
@@ -1207,7 +1238,7 @@ func TestRecoverRunsLeavesActiveExecutingObjective(t *testing.T) {
 	}
 
 	// Simulate restart.
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if err := svc.Run(runCtx); err != nil {
@@ -1249,7 +1280,7 @@ func TestRecoverRunsOrphanedObjective(t *testing.T) {
 	}
 
 	// Simulate restart.
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if err := svc.Run(runCtx); err != nil {
@@ -1358,7 +1389,7 @@ func TestRecoverRunsFullRestartScenario(t *testing.T) {
 	}
 
 	// --- Simulate restart ---
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), logger)
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if err := svc.Run(runCtx); err != nil {
@@ -1428,7 +1459,7 @@ func TestRetryFailedStreamEndToEnd(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
-	svc := New(runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc := newTestService(t,runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
 
 	// 1. Setup: objective with a failed stream.
 	obj := &domain.Objective{Description: "e2e retry", Status: domain.ObjectiveStatusExecuting}
