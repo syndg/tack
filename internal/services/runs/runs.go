@@ -70,6 +70,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
@@ -387,16 +388,12 @@ func (s *Service) Command(ctx context.Context, runID string, cmd domain.Command)
 // Finds the blocked execution for the run's objective and delegates to
 // coordinator.Approve, then updates run status from blocked → active.
 func (s *Service) commandApprove(ctx context.Context, run *domain.Run) (domain.Snapshot, error) {
-	// Find the execution that's waiting for human approval.
-	exec, err := s.executions.GetByObjective(ctx, run.ObjectiveID)
+	// Plan approval and other human-gate interventions can race slightly with
+	// the execution loop persisting the waiting_human state. Wait briefly for
+	// the top-level execution to reach the blocked state before approving.
+	exec, err := s.waitForExecutionWaitingHuman(ctx, run.ObjectiveID, 5*time.Second)
 	if err != nil {
-		return domain.Snapshot{}, fmt.Errorf("finding execution for objective %s: %w", run.ObjectiveID, err)
-	}
-	if exec.Status != "waiting_human" {
-		return domain.Snapshot{}, fmt.Errorf(
-			"run %s has no execution waiting for approval (status: %s): %w",
-			run.ID, exec.Status, ErrInvalidState,
-		)
+		return domain.Snapshot{}, err
 	}
 
 	if err := s.coordinator.Approve(ctx, exec.ID); err != nil {
@@ -413,6 +410,43 @@ func (s *Service) commandApprove(ctx context.Context, run *domain.Run) (domain.S
 
 	s.logger.Info("run approved", "run_id", run.ID, "execution_id", exec.ID)
 	return s.Snapshot(ctx, run.ID)
+}
+
+func (s *Service) waitForExecutionWaitingHuman(ctx context.Context, objectiveID string, timeout time.Duration) (*blueprint.Execution, error) {
+	deadline := time.Now().Add(timeout)
+	lastStatus := "missing"
+
+	for {
+		exec, err := s.executions.GetByObjective(ctx, objectiveID)
+		if err == nil {
+			lastStatus = exec.Status
+			switch exec.Status {
+			case "waiting_human":
+				return exec, nil
+			case "completed", "failed":
+				return nil, fmt.Errorf(
+					"run for objective %s has no execution waiting for approval (status: %s): %w",
+					objectiveID, exec.Status, ErrInvalidState,
+				)
+			}
+		}
+
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("waiting for execution approval state: %w", err)
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf(
+				"run for objective %s has no execution waiting for approval (status: %s): %w",
+				objectiveID, lastStatus, ErrInvalidState,
+			)
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("waiting for execution approval state: %w", ctx.Err())
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // commandRetry handles the retry intervention for a failed stream.

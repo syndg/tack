@@ -23,10 +23,10 @@ func (d *Daemon) handleGetRunSnapshot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, snap)
 }
 
-// handleRunCommand sends an intervention (approve, retry, abort) to a run.
+// handleRunCommand sends an intervention (approve, retry, abort, kill) to a run.
 // This is the run-centric entry point that replaces direct coordinator calls.
 //
-// Body: {"kind": "approve"|"retry"|"abort", "stream_id": "...", "guidance": "...", "reason": "..."}
+// Body: {"kind": "approve"|"retry"|"abort"|"kill", "stream_id": "...", "session_id": "...", "guidance": "...", "reason": "..."}
 func (d *Daemon) handleRunCommand(w http.ResponseWriter, r *http.Request) {
 	if d.runsService == nil {
 		writeError(w, http.StatusServiceUnavailable, "runs service not available")
@@ -36,10 +36,11 @@ func (d *Daemon) handleRunCommand(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 
 	var req struct {
-		Kind     domain.CommandKind `json:"kind"`
-		StreamID string             `json:"stream_id"`
-		Guidance string             `json:"guidance"`
-		Reason   string             `json:"reason"`
+		Kind      domain.CommandKind `json:"kind"`
+		StreamID  string             `json:"stream_id"`
+		SessionID string             `json:"session_id"`
+		Guidance  string             `json:"guidance"`
+		Reason    string             `json:"reason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -47,10 +48,11 @@ func (d *Daemon) handleRunCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cmd := domain.Command{
-		Kind:     req.Kind,
-		StreamID: req.StreamID,
-		Guidance: req.Guidance,
-		Reason:   req.Reason,
+		Kind:      req.Kind,
+		StreamID:  req.StreamID,
+		SessionID: req.SessionID,
+		Guidance:  req.Guidance,
+		Reason:    req.Reason,
 	}
 
 	snap, err := d.runsService.Command(r.Context(), runID, cmd)

@@ -25,7 +25,7 @@ var planCmd = &cobra.Command{
 				return err
 			}
 			fmt.Printf("Created objective %s in simple mode.\n", result.Objective.ID)
-			fmt.Printf("Plan %s auto-approved. Ready for execution.\n", result.Plan.ID)
+			fmt.Printf("Plan %s auto-approved. Execution started.\n", result.Plan.ID)
 		} else {
 			obj, err := c.CreateObjectiveWithOptions(cmd.Context(), args[0], client.CreateObjectiveOptions{
 				Blueprint: planBlueprint,

@@ -2,10 +2,12 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/services/runs"
 )
 
 // planWithStreams is the response shape for plan endpoints that include streams.
@@ -118,15 +120,21 @@ func (d *Daemon) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Auto-resume: if there's a run waiting for plan approval, resume through
-	// the run-centric boundary.
+	// the run-centric boundary and surface any failure to the caller.
 	if run, err := d.runStore.GetByObjective(r.Context(), plan.ObjectiveID); err == nil {
 		if _, err := d.runsService.Command(r.Context(), run.ID, domain.Command{Kind: domain.CommandApprove}); err != nil {
-			d.logger.Warn("auto-resume after plan approval failed",
-				"run_id", run.ID, "plan_id", id, "error", err)
-		} else {
-			d.logger.Info("auto-resumed run after plan approval",
-				"run_id", run.ID, "plan_id", id)
+			switch {
+			case errors.Is(err, runs.ErrInvalidState):
+				writeError(w, http.StatusConflict, err.Error())
+			default:
+				d.logger.Error("auto-resume after plan approval failed",
+					"run_id", run.ID, "plan_id", id, "error", err)
+				writeError(w, http.StatusInternalServerError, "plan approved but failed to resume execution")
+			}
+			return
 		}
+		d.logger.Info("auto-resumed run after plan approval",
+			"run_id", run.ID, "plan_id", id)
 	}
 
 	writeJSON(w, http.StatusOK, plan)

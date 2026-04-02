@@ -67,6 +67,19 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		obj, err = d.objectives.Get(r.Context(), obj.ID)
+		if err != nil {
+			d.logger.Error("refreshing simple objective after start", "objective_id", obj.ID, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to refresh objective after start")
+			return
+		}
+		plan, err = d.plans.Get(r.Context(), plan.ID)
+		if err != nil {
+			d.logger.Error("refreshing simple plan after start", "plan_id", plan.ID, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to refresh plan after start")
+			return
+		}
+
 		writeJSON(w, http.StatusCreated, createObjectiveSimpleResponse{
 			Objective: obj,
 			Plan:      plan,
@@ -99,7 +112,14 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, obj)
+	refreshedObj, err := d.objectives.Get(r.Context(), obj.ID)
+	if err != nil {
+		d.logger.Error("refreshing objective after start", "objective_id", obj.ID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to refresh objective after start")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, refreshedObj)
 }
 
 // handleGetObjective retrieves a single objective by ID from the path.
