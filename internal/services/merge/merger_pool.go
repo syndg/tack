@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/syndg/tack/internal/naming"
@@ -113,25 +114,55 @@ func (m *MergerPool) Acquire(ctx context.Context, objectiveID string) (sandbox.S
 	}
 	mergeBranch := naming.MergeBranch(objectiveID)
 
+	if err := m.prepareSandboxForMerge(ctx, sb); err != nil {
+		return nil, err
+	}
+
 	// Fetch all branches. Try full refspec first (needed for Daytona clones
 	// which default to HEAD-only), fall back to plain fetch for local worktrees.
 	if res, _ := sb.Exec(ctx, "git fetch origin '+refs/heads/*:refs/remotes/origin/*'", sandbox.ExecOpts{}); res.ExitCode != 0 {
 		sb.Exec(ctx, "git fetch origin", sandbox.ExecOpts{})
 	}
 
-	// Create merge branch at the base branch's commit. Try origin first, then local ref.
-	created := false
-	if res, err := sb.Exec(ctx, fmt.Sprintf("git checkout -B %s origin/%s", mergeBranch, m.baseBranch), sandbox.ExecOpts{}); err == nil && res.ExitCode == 0 {
-		created = true
+	baseRef, err := m.resolveBaseRef(ctx, sb)
+	if err != nil {
+		return nil, err
 	}
-	if !created {
-		// No remote — resolve the base branch commit by ref (avoids "branch in use" error).
-		if res, err := sb.Exec(ctx, fmt.Sprintf("git checkout -B %s %s", mergeBranch, m.baseBranch), sandbox.ExecOpts{}); err != nil || res.ExitCode != 0 {
-			return nil, fmt.Errorf("creating merge branch from %s: exit=%d stderr=%s", m.baseBranch, res.ExitCode, res.Stderr)
+	if res, err := sb.Exec(ctx, fmt.Sprintf("git checkout -B %s %s", mergeBranch, baseRef), sandbox.ExecOpts{}); err != nil || res.ExitCode != 0 {
+		status := ""
+		if st, stErr := sb.Exec(ctx, "git status --short", sandbox.ExecOpts{}); stErr == nil {
+			status = st.Stdout
 		}
+		return nil, fmt.Errorf("creating merge branch from %s (resolved %s): exit=%d stderr=%s status=%s", m.baseBranch, baseRef, res.ExitCode, strings.TrimSpace(res.Stderr), strings.TrimSpace(status))
 	}
 
 	return sb, nil
+}
+
+func (m *MergerPool) prepareSandboxForMerge(ctx context.Context, sb sandbox.Sandbox) error {
+	if res, err := sb.Exec(ctx, "git reset --hard HEAD", sandbox.ExecOpts{}); err != nil || res.ExitCode != 0 {
+		return fmt.Errorf("resetting merger sandbox: exit=%d stderr=%s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	_, _ = sb.Exec(ctx, "rm -rf .tack-ext", sandbox.ExecOpts{})
+	return nil
+}
+
+func (m *MergerPool) resolveBaseRef(ctx context.Context, sb sandbox.Sandbox) (string, error) {
+	candidates := []string{
+		"origin/" + m.baseBranch,
+		"refs/remotes/origin/" + m.baseBranch,
+		m.baseBranch,
+		"origin/HEAD",
+		"refs/remotes/origin/HEAD",
+	}
+	for _, candidate := range candidates {
+		res, err := sb.Exec(ctx, fmt.Sprintf("git rev-parse --verify %s^{commit}", candidate), sandbox.ExecOpts{})
+		if err == nil && res.ExitCode == 0 {
+			return candidate, nil
+		}
+	}
+	branchOut, _ := sb.Exec(ctx, "git branch -a", sandbox.ExecOpts{})
+	return "", fmt.Errorf("resolving merge base ref for %s failed; branches=%s", m.baseBranch, strings.TrimSpace(branchOut.Stdout))
 }
 
 // SandboxID returns the merger sandbox ID for an objective.

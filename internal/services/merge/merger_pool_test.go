@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 
@@ -192,6 +193,56 @@ func TestSandboxID_CacheThenDBFallback(t *testing.T) {
 	// Miss (neither cache nor DB).
 	if id := pool.SandboxID("obj-missing"); id != "" {
 		t.Errorf("miss: got %q, want empty", id)
+	}
+}
+
+func TestAcquire_ResetsSandboxAndFallsBackToOriginHEAD(t *testing.T) {
+	var commands []string
+	sb := &mockSandbox{
+		id: "sb-1",
+		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
+			commands = append(commands, cmd)
+			switch {
+			case cmd == "git reset --hard HEAD":
+				return sandbox.ExecResult{ExitCode: 0}, nil
+			case cmd == "rm -rf .tack-ext":
+				return sandbox.ExecResult{ExitCode: 0}, nil
+			case strings.HasPrefix(cmd, "git fetch origin"):
+				return sandbox.ExecResult{ExitCode: 0}, nil
+			case cmd == "git rev-parse --verify origin/main^{commit}":
+				return sandbox.ExecResult{ExitCode: 1}, nil
+			case cmd == "git rev-parse --verify refs/remotes/origin/main^{commit}":
+				return sandbox.ExecResult{ExitCode: 1}, nil
+			case cmd == "git rev-parse --verify main^{commit}":
+				return sandbox.ExecResult{ExitCode: 1}, nil
+			case cmd == "git rev-parse --verify origin/HEAD^{commit}":
+				return sandbox.ExecResult{ExitCode: 0, Stdout: "abc123\n"}, nil
+			case strings.HasPrefix(cmd, "git checkout -B tack/obj-1/merge origin/HEAD"):
+				return sandbox.ExecResult{ExitCode: 0}, nil
+			default:
+				return sandbox.ExecResult{ExitCode: 0}, nil
+			}
+		},
+	}
+	provider := &mockSandboxProvider{sandboxes: []sandbox.Sandbox{sb}}
+	persister := newMockPersister()
+	pool := NewMergerPool(provider, persister, "main", slog.Default())
+
+	if _, err := pool.Acquire(context.Background(), "obj-1"); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if len(commands) == 0 || commands[0] != "git reset --hard HEAD" {
+		t.Fatalf("expected first command to reset sandbox, got %v", commands)
+	}
+	foundCheckout := false
+	for _, cmd := range commands {
+		if strings.HasPrefix(cmd, "git checkout -B tack/obj-1/merge origin/HEAD") {
+			foundCheckout = true
+			break
+		}
+	}
+	if !foundCheckout {
+		t.Fatalf("expected checkout from origin/HEAD, commands=%v", commands)
 	}
 }
 
