@@ -79,6 +79,51 @@ func TestCreate_CreatesGitWorktreeWithCorrectBranchName(t *testing.T) {
 	}
 }
 
+func TestCreate_UsesBaseRefWhenProvided(t *testing.T) {
+	repoDir := initTestRepo(t)
+	p := newTestProvider(t, repoDir)
+	ctx := context.Background()
+
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = repoDir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v", err)
+	}
+	mainBranch := strings.TrimSpace(string(out))
+	mergeBranch := "tack/objective/merge"
+
+	runGitInDir(t, repoDir, "checkout", "-b", mergeBranch)
+	runGitInDir(t, repoDir, "config", "user.email", "tack-test@example.com")
+	runGitInDir(t, repoDir, "config", "user.name", "Tack Test")
+	runGitInDir(t, repoDir, "add", ".")
+	fileCmd := exec.Command("sh", "-c", "echo merged > merged.txt")
+	fileCmd.Dir = repoDir
+	if out, err := fileCmd.CombinedOutput(); err != nil {
+		t.Fatalf("write merged.txt: %v\n%s", err, out)
+	}
+	runGitInDir(t, repoDir, "add", "merged.txt")
+	runGitInDir(t, repoDir, "commit", "-m", "merge base content")
+	runGitInDir(t, repoDir, "checkout", mainBranch)
+
+	sb, err := p.Create(ctx, sandbox.CreateOpts{
+		Branch:  "tack/objective/dependent",
+		BaseRef: mergeBranch,
+		Labels:  map[string]string{"tack.objective": "obj-base", "tack.role": "builder"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, err := sb.Exec(ctx, "test -f merged.txt && cat merged.txt", sandbox.ExecOpts{})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if res.ExitCode != 0 || strings.TrimSpace(res.Stdout) != "merged" {
+		t.Fatalf("sandbox did not start from base ref: exit=%d stdout=%q stderr=%q", res.ExitCode, res.Stdout, res.Stderr)
+	}
+}
+
 func TestExec_RunsCommandInWorktreeDirectory(t *testing.T) {
 	repoDir := initTestRepo(t)
 	p := newTestProvider(t, repoDir)

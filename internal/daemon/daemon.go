@@ -165,10 +165,18 @@ func New(cfg *config.Config) (*Daemon, error) {
 	gateRun := gates.NewRunner(logger)
 
 	// Get project root for the sandbox provider.
-	projectRoot, err := os.Getwd()
+	projectRoot := cfg.ProjectRoot
+	if projectRoot == "" {
+		projectRoot, err = os.Getwd()
+		if err != nil {
+			_ = database.Close()
+			return nil, fmt.Errorf("getting working directory: %w", err)
+		}
+	}
+	projectRoot, err = filepath.Abs(projectRoot)
 	if err != nil {
 		_ = database.Close()
-		return nil, fmt.Errorf("getting working directory: %w", err)
+		return nil, fmt.Errorf("resolving project root: %w", err)
 	}
 
 	// Derive daemon URL: prefer external_url (required for remote sandboxes like Daytona).

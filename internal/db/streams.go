@@ -262,9 +262,9 @@ func (s *StreamStore) UpdateExecutionID(ctx context.Context, id string, executio
 	return nil
 }
 
-// ListReady returns streams whose dependencies are all completed.
+// ListReady returns streams whose dependencies are all merged.
 // A stream is ready if its status is "pending" and all stream IDs in its
-// dependencies list have status "completed".
+// dependencies list have status "merged".
 func (s *StreamStore) ListReady(ctx context.Context, planID string) ([]domain.Stream, error) {
 	streams, err := s.ListByPlan(ctx, planID)
 	if err != nil {
@@ -284,7 +284,7 @@ func (s *StreamStore) ListReady(ctx context.Context, planID string) ([]domain.St
 		allDone := true
 		for _, depID := range st.Dependencies {
 			depStatus := statusByID[depID]
-			if depStatus != domain.StreamStatusCompleted && depStatus != domain.StreamStatusMergeReady && depStatus != domain.StreamStatusMerged {
+			if depStatus != domain.StreamStatusMerged {
 				allDone = false
 				break
 			}

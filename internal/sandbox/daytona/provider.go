@@ -13,8 +13,8 @@ import (
 
 	daytona "github.com/daytonaio/daytona/libs/sdk-go/pkg/daytona"
 	"github.com/daytonaio/daytona/libs/sdk-go/pkg/options"
-	"github.com/syndg/tack/internal/naming"
 	"github.com/daytonaio/daytona/libs/sdk-go/pkg/types"
+	"github.com/syndg/tack/internal/naming"
 
 	"github.com/syndg/tack/internal/credentials"
 	"github.com/syndg/tack/internal/sandbox"
@@ -187,12 +187,25 @@ func (p *Provider) bootstrap(ctx context.Context, sb *daytona.Sandbox, opts sand
 		branch = sandbox.DeriveBranchPrefix(opts)
 	}
 
-	p.logger.Info("bootstrap: creating branch", "branch", branch)
-	if err := sb.Git.CreateBranch(ctx, repoPath, branch); err != nil {
-		p.logger.Warn("bootstrap: create branch failed (may exist)", "error", err)
-	}
-	if err := sb.Git.Checkout(ctx, repoPath, branch); err != nil {
-		return fmt.Errorf("checking out branch %s: %w", branch, err)
+	if opts.BaseRef != "" {
+		p.logger.Info("bootstrap: creating branch from base ref", "branch", branch, "base_ref", opts.BaseRef)
+		// Ensure we have remote refs available when the base ref is a pushed merge branch.
+		_, _ = sb.Process.ExecuteCommand(ctx, "git fetch origin '+refs/heads/*:refs/remotes/origin/*'", options.WithCwd(repoPath))
+		resp, err := sb.Process.ExecuteCommand(ctx, fmt.Sprintf("git checkout -B %s origin/%s", branch, opts.BaseRef), options.WithCwd(repoPath))
+		if err != nil || resp.ExitCode != 0 {
+			resp, err = sb.Process.ExecuteCommand(ctx, fmt.Sprintf("git checkout -B %s %s", branch, opts.BaseRef), options.WithCwd(repoPath))
+			if err != nil || resp.ExitCode != 0 {
+				return fmt.Errorf("checking out branch %s from %s: %s", branch, opts.BaseRef, resp.Result)
+			}
+		}
+	} else {
+		p.logger.Info("bootstrap: creating branch", "branch", branch)
+		if err := sb.Git.CreateBranch(ctx, repoPath, branch); err != nil {
+			p.logger.Warn("bootstrap: create branch failed (may exist)", "error", err)
+		}
+		if err := sb.Git.Checkout(ctx, repoPath, branch); err != nil {
+			return fmt.Errorf("checking out branch %s: %w", branch, err)
+		}
 	}
 
 	// Run post-create commands.
@@ -323,7 +336,6 @@ func buildEffectiveCommand(cmd string, opts sandbox.ExecOpts) string {
 	inner := strings.Join(exports, " && ") + " && " + cmd
 	return "sh -c " + naming.ShellQuote(inner)
 }
-
 
 // DaytonaSandbox wraps a Daytona SDK sandbox to implement sandbox.Sandbox.
 type DaytonaSandbox struct {

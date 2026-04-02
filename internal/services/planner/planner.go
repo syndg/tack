@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -66,6 +68,7 @@ func (s *Service) CreatePlan(ctx context.Context, objectiveID string, agentOutpu
 	}
 
 	plan, streams := ToDomain(rawPlan, objectiveID)
+	plan.QualityGates = sanitizeQualityGates(plan.QualityGates)
 
 	if err := s.plans.Create(ctx, plan); err != nil {
 		return nil, fmt.Errorf("storing plan: %w", err)
@@ -189,4 +192,27 @@ func (s *Service) UpdateStream(ctx context.Context, stream *domain.Stream) error
 		return fmt.Errorf("updating stream: %w", err)
 	}
 	return nil
+}
+
+func sanitizeQualityGates(gates []string) []string {
+	out := make([]string, 0, len(gates))
+	for _, gate := range gates {
+		gate = strings.TrimSpace(gate)
+		if gate == "" {
+			continue
+		}
+		if strings.HasPrefix(gate, "cd ") {
+			if idx := strings.Index(gate, "&&"); idx > 0 {
+				cdTarget := strings.TrimSpace(strings.TrimPrefix(gate[:idx], "cd "))
+				if filepath.IsAbs(cdTarget) {
+					gate = strings.TrimSpace(gate[idx+2:])
+				}
+			}
+		}
+		out = append(out, gate)
+	}
+	if out == nil {
+		return []string{}
+	}
+	return out
 }

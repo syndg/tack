@@ -339,7 +339,8 @@ func (h *Handlers) signalMergeReady(ctx context.Context, exec *blueprint.Executi
 	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
 }
 
-// signalStreamMergeReady marks a single stream as merge_ready and publishes EventMergeQueued.
+// signalStreamMergeReady marks a single stream as merge_ready and enqueues it
+// for immediate merge so dependent streams can start from merged upstream state.
 func (h *Handlers) signalStreamMergeReady(ctx context.Context, streamID, planID, objectiveID string) (blueprint.StepResult, error) {
 	if err := h.streams.UpdateStatus(ctx, streamID, domain.StreamStatusMergeReady); err != nil {
 		return blueprint.StepResult{
@@ -348,11 +349,20 @@ func (h *Handlers) signalStreamMergeReady(ctx context.Context, streamID, planID,
 		}, nil
 	}
 
-	h.eventBus.Emit(domain.EventMergeQueued, objectiveID, streamID, "",
-		"stream_id", streamID,
-		"plan_id", planID,
-		"objective_id", objectiveID,
-	)
+	if h.mergeProcessor != nil {
+		if err := h.mergeProcessor.EnqueueStream(ctx, streamID); err != nil {
+			return blueprint.StepResult{
+				Status: blueprint.StepStatusFailed,
+				Error:  fmt.Sprintf("enqueuing stream %s for merge: %s", streamID, err),
+			}, nil
+		}
+	} else {
+		h.eventBus.Emit(domain.EventMergeQueued, objectiveID, streamID, "",
+			"stream_id", streamID,
+			"plan_id", planID,
+			"objective_id", objectiveID,
+		)
+	}
 
 	h.logger.Info("stream signaled for merge",
 		"stream_id", streamID,
@@ -439,23 +449,10 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 	}
 	branch := strings.TrimSpace(branchResult.Stdout)
 
-	// Push the branch to origin.
-	pushResult, err := sb.Exec(ctx, fmt.Sprintf("git push -u origin %s", branch), sandbox.ExecOpts{})
-	if err != nil || pushResult.ExitCode != 0 {
-		stderr := ""
-		if pushResult.Stderr != "" {
-			stderr = pushResult.Stderr
-		}
-		return blueprint.StepResult{
-			Status: blueprint.StepStatusFailed,
-			Error:  fmt.Sprintf("pushing branch: %s", stderr),
-		}, nil
-	}
-
-	h.logger.Info("branch pushed",
-		"branch", branch,
-		"objective_id", exec.ObjectiveID,
-	)
+	// The branch should already be pushed by stream execution and by the merge
+	// processor for multi-stream objectives. Avoid pushing again here because
+	// create_pr runs immediately after merge completion and a redundant push can
+	// race with the merge processor's final branch push.
 
 	// Build stream status summary for the PR body.
 	plan, planErr := h.plans.GetByObjective(ctx, exec.ObjectiveID)
@@ -694,7 +691,6 @@ func (h *Handlers) resetMergingEntry(ctx context.Context, streamID string) {
 	}
 }
 
-
 // mergeQueue implements the "merge_queue" deterministic action.
 // Partitions streams into merge_ready, failed, and active (executing/pending).
 // Waits for active streams to resolve, then merges whatever is merge_ready.
@@ -734,19 +730,10 @@ func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (b
 		case domain.StreamStatusMergeReady:
 			toMerge = append(toMerge, s.ID)
 		case domain.StreamStatusMerging:
-			// After a daemon restart, a stream stuck in "merging" has no
-			// goroutine driving it to completion. Reset it to merge_ready
-			// so it gets re-enqueued and the merge processor retries.
-			h.logger.Info("reclaiming stuck merging stream",
-				"stream_id", s.ID, "execution_id", exec.ID)
-			if err := h.streams.UpdateStatus(ctx, s.ID, domain.StreamStatusMergeReady); err != nil {
-				h.logger.Error("failed to reset merging stream", "stream_id", s.ID, "error", err)
-				failed = append(failed, s.ID)
-				continue
-			}
-			// Also reset the merge entry back to pending so the processor picks it up.
-			h.resetMergingEntry(ctx, s.ID)
-			toMerge = append(toMerge, s.ID)
+			// Treat live merges as active work. Reclaiming them here races with the
+			// merge processor and can roll a healthy in-flight merge back to
+			// merge_ready/pending.
+			active = append(active, s.ID)
 		case domain.StreamStatusFailed:
 			failed = append(failed, s.ID)
 		case domain.StreamStatusExecuting, domain.StreamStatusPending:
@@ -795,24 +782,28 @@ func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (b
 					// Stream became merge_ready — move to toMerge.
 					delete(activeSet, event.Stream)
 					toMerge = append(toMerge, event.Stream)
-				case domain.EventAgentFailed:
+				case domain.EventAgentFailed, domain.EventMergeFailed:
 					// Stream failed — move to failed.
 					delete(activeSet, event.Stream)
 					failed = append(failed, event.Stream)
-				case domain.EventAgentCompleted:
-					// Stream completed but not yet merge_ready — re-check status.
+				case domain.EventAgentCompleted, domain.EventMergeCompleted:
+					// Re-check status to determine whether the stream still needs a top-level
+					// merge enqueue or is already fully merged.
 					stream, err := h.streams.Get(ctx, event.Stream)
 					if err != nil {
 						delete(activeSet, event.Stream)
 						failed = append(failed, event.Stream)
 						continue
 					}
-					if stream.Status == domain.StreamStatusMergeReady {
+					switch stream.Status {
+					case domain.StreamStatusMergeReady:
 						delete(activeSet, event.Stream)
 						toMerge = append(toMerge, event.Stream)
-					} else if stream.Status == domain.StreamStatusFailed {
+					case domain.StreamStatusFailed:
 						delete(activeSet, event.Stream)
 						failed = append(failed, event.Stream)
+					case domain.StreamStatusMerged, domain.StreamStatusCompleted:
+						delete(activeSet, event.Stream)
 					}
 					// Otherwise, still active — keep waiting.
 				}

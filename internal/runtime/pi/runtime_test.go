@@ -54,9 +54,9 @@ func (m *mockSandbox) ID() string                    { return "mock-sb" }
 func (m *mockSandbox) Status() sandbox.SandboxStatus { return sandbox.SandboxStatusRunning }
 func (m *mockSandbox) Exec(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
 	m.execCmds = append(m.execCmds, cmd)
-	// Simulate git rev-parse --git-dir for addGitExclude.
-	if strings.Contains(cmd, "rev-parse --git-dir") {
-		return sandbox.ExecResult{ExitCode: 0, Stdout: ".git"}, nil
+	// Simulate git rev-parse --git-path info/exclude for addGitExclude.
+	if strings.Contains(cmd, "rev-parse --git-path info/exclude") {
+		return sandbox.ExecResult{ExitCode: 0, Stdout: ".git/info/exclude"}, nil
 	}
 	// grep for exclude pattern — return exit 1 (not found) so the upload path runs.
 	if strings.Contains(cmd, "grep") {
@@ -163,12 +163,12 @@ func TestRuntime_Spawn_UploadsExtension(t *testing.T) {
 		t.Errorf("expected success, got: %+v", result)
 	}
 
-	// Should have uploaded .git/info/exclude with .tack-ext pattern
+	// Should have uploaded .git/info/exclude with the rooted .tack-ext directory pattern.
 	excludeContent, ok := sb.uploaded[".git/info/exclude"]
 	if !ok {
 		t.Error("expected .git/info/exclude to be uploaded with .tack-ext pattern")
-	} else if !strings.Contains(string(excludeContent), ".tack-ext") {
-		t.Errorf("exclude file content %q should contain .tack-ext", string(excludeContent))
+	} else if !strings.Contains(string(excludeContent), "/.tack-ext/") {
+		t.Errorf("exclude file content %q should contain /.tack-ext/", string(excludeContent))
 	}
 }
 

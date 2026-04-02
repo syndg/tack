@@ -158,6 +158,20 @@ func (p *Processor) EnqueueStream(ctx context.Context, streamID string) error {
 		return fmt.Errorf("getting plan: %w", err)
 	}
 
+	// Idempotency: if a merge entry already exists and is still live (or already
+	// merged), do not enqueue a duplicate.
+	if existing, err := p.queue.GetByStream(ctx, streamID); err == nil {
+		switch existing.Status {
+		case domain.MergeStatusPending, domain.MergeStatusMerging, domain.MergeStatusMerged:
+			p.logger.Info("stream already queued for merge",
+				"stream_id", streamID,
+				"entry_id", existing.ID,
+				"status", existing.Status,
+			)
+			return nil
+		}
+	}
+
 	// 3. Determine branch name from the stream's sandbox.
 	// Pass execution ID so we pick the correct builder sandbox on retry.
 	branch, err := p.getStreamBranch(ctx, streamID, stream.ExecutionID)
@@ -353,6 +367,8 @@ func (p *Processor) handleMergeSuccess(ctx context.Context, sb sandbox.Sandbox, 
 		p.logger.Error("updating stream to merged", "stream", entry.StreamID, "error", err)
 	}
 
+	p.pushMergeBranch(ctx, sb, entry.ObjectiveID)
+	p.publishNewlyReadyStreams(ctx, entry.PlanID)
 	p.publishMergeCompleted(entry, result)
 
 	p.logger.Info("merge completed",
@@ -555,3 +571,27 @@ func (p *Processor) publishMergeFailed(entry *domain.MergeEntry, errMsg string) 
 	)
 }
 
+func (p *Processor) publishNewlyReadyStreams(ctx context.Context, planID string) {
+	ready, err := p.streams.ListReady(ctx, planID)
+	if err != nil {
+		p.logger.Warn("listing ready streams after merge", "plan_id", planID, "error", err)
+		return
+	}
+	for _, st := range ready {
+		p.eventBus.Emit(domain.EventStreamReady, "", st.ID, "",
+			"stream_id", st.ID,
+			"plan_id", planID,
+		)
+		p.logger.Info("stream ready after dependency merge", "stream_id", st.ID, "plan_id", planID)
+	}
+}
+
+func (p *Processor) pushMergeBranch(ctx context.Context, sb sandbox.Sandbox, objectiveID string) {
+	branch := naming.MergeBranch(objectiveID)
+	res, err := sb.Exec(ctx, fmt.Sprintf("git push -u origin %s", branch), sandbox.ExecOpts{})
+	if err != nil || res.ExitCode != 0 {
+		p.logger.Warn("pushing merge branch", "branch", branch, "error", err, "stderr", res.Stderr)
+		return
+	}
+	p.logger.Info("merge branch pushed", "branch", branch, "objective_id", objectiveID)
+}

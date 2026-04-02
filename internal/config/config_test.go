@@ -55,6 +55,22 @@ func TestExpandPaths(t *testing.T) {
 	}
 }
 
+func TestLoad_SetsProjectRootFromProjectConfig(t *testing.T) {
+	dir := t.TempDir()
+	projPath := filepath.Join(dir, "project.yaml")
+	if err := os.WriteFile(projPath, []byte("agents:\n  runtime: pi\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(projPath, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ProjectRoot != dir {
+		t.Fatalf("ProjectRoot = %q, want %q", cfg.ProjectRoot, dir)
+	}
+}
+
 func TestLayeredLoad_ProjectWinsOverUser(t *testing.T) {
 	dir := t.TempDir()
 

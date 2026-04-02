@@ -27,6 +27,7 @@ type Config struct {
 	Watchdog     WatchdogConfig `yaml:"watchdog"`
 	Tools        ToolsConfig    `yaml:"tools"`
 	QualityGates []string       `yaml:"quality_gates"`
+	ProjectRoot  string         `yaml:"-" json:"-"`
 }
 
 type DaemonConfig struct {
@@ -133,6 +134,9 @@ type ToolsConfig struct {
 // Either path can be empty to skip that layer.
 func Load(projectPath, userPath string) (*Config, error) {
 	cfg := Default()
+	if projectPath != "" {
+		cfg.ProjectRoot = filepath.Dir(expandTilde(projectPath))
+	}
 
 	// Layer 1: user config (fallback)
 	if err := mergeFromFile(cfg, userPath); err != nil {

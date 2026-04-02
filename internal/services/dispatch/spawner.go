@@ -164,7 +164,7 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 
 	if sb == nil {
 		// Create new sandbox with stream-based or planner naming.
-		var sandboxName, branch string
+		var sandboxName, branch, baseRef string
 		labels := map[string]string{
 			"tack.objective": req.Objective.ID,
 		}
@@ -173,6 +173,9 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 			sandboxName = fmt.Sprintf("tack-%s-%s", objShort, slug)
 			branch = fmt.Sprintf("tack/%s/%s", objShort, slug)
 			labels["tack.stream"] = req.Stream.ID
+			if len(req.Stream.Dependencies) > 0 {
+				baseRef = naming.MergeBranch(req.Objective.ID)
+			}
 		} else {
 			// Planner or other non-stream agent.
 			sandboxName = fmt.Sprintf("tack-%s-%s", objShort, req.Role)
@@ -184,6 +187,7 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 		sb, err = s.sp.Create(ctx, sandbox.CreateOpts{
 			Name:      sandboxName,
 			Branch:    branch,
+			BaseRef:   baseRef,
 			Labels:    labels,
 			Ephemeral: !role.Persistent,
 		})

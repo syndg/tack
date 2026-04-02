@@ -330,15 +330,35 @@ func TestStreamStore_ListReady_DependencyResolution(t *testing.T) {
 		t.Error("s3 should not be ready when only s1 is completed")
 	}
 
-	// Mark s2 completed — s3 is now ready.
+	// Mark s2 completed — s3 is still not ready until dependencies are merged.
 	advanceStream(t, store, ctx, s2.ID, domain.StreamStatusCompleted)
 	ready, err = store.ListReady(ctx, plan.ID)
 	if err != nil {
-		t.Fatalf("ListReady (after s2 done): %v", err)
+		t.Fatalf("ListReady (after s2 completed): %v", err)
+	}
+	readyIDs = idsSet(ready)
+	if readyIDs[s3.ID] {
+		t.Error("s3 should not be ready when dependencies are only completed")
+	}
+
+	for _, id := range []string{s1.ID, s2.ID} {
+		if err := store.UpdateStatus(ctx, id, domain.StreamStatusMergeReady); err != nil {
+			t.Fatalf("UpdateStatus(%s, merge_ready): %v", id, err)
+		}
+		if err := store.UpdateStatus(ctx, id, domain.StreamStatusMerging); err != nil {
+			t.Fatalf("UpdateStatus(%s, merging): %v", id, err)
+		}
+		if err := store.UpdateStatus(ctx, id, domain.StreamStatusMerged); err != nil {
+			t.Fatalf("UpdateStatus(%s, merged): %v", id, err)
+		}
+	}
+	ready, err = store.ListReady(ctx, plan.ID)
+	if err != nil {
+		t.Fatalf("ListReady (after deps merged): %v", err)
 	}
 	readyIDs = idsSet(ready)
 	if !readyIDs[s3.ID] {
-		t.Error("s3 should be ready when both s1 and s2 are completed")
+		t.Error("s3 should be ready when both dependencies are merged")
 	}
 }
 

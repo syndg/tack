@@ -140,6 +140,12 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 
 	cleanSummary, generatedMessages := c.extractGeneratedMessages(step, agentResult.Summary)
 
+	// Remove runtime artifacts before any status/commit/push operations so they
+	// never leak into stream branches or merger branches.
+	if err := c.cleanupRuntimeArtifacts(ctx, result.Sandbox); err != nil {
+		c.logger.Warn("failed to clean runtime artifacts", "step", step.ID, "error", err)
+	}
+
 	// Handle commit mode after successful agent completion.
 	commitMode := step.EffectiveCommitMode()
 	switch commitMode {
@@ -597,6 +603,10 @@ func (c *Coordinator) extractGeneratedMessages(step *blueprint.Step, summary str
 // The commit message is taken from the agent when provided, otherwise it falls
 // back to the objective description plus diff stat.
 func (c *Coordinator) autoCommit(ctx context.Context, sb sandbox.Sandbox, objectiveDesc, generatedCommitMessage string) error {
+	if err := c.cleanupRuntimeArtifacts(ctx, sb); err != nil {
+		c.logger.Warn("failed to clean runtime artifacts before auto-commit", "error", err)
+	}
+
 	// Check if there are uncommitted changes.
 	statusResult, err := sb.Exec(ctx, "git status --porcelain", sandbox.ExecOpts{})
 	if err != nil {
@@ -645,5 +655,16 @@ func (c *Coordinator) autoCommit(ctx context.Context, sb sandbox.Sandbox, object
 	}
 
 	c.logger.Info("auto-committed agent changes")
+	return nil
+}
+
+func (c *Coordinator) cleanupRuntimeArtifacts(ctx context.Context, sb sandbox.Sandbox) error {
+	res, err := sb.Exec(ctx, "git rm -r --cached --ignore-unmatch .tack-ext >/dev/null 2>&1 || true; rm -rf .tack-ext", sandbox.ExecOpts{})
+	if err != nil {
+		return fmt.Errorf("cleaning runtime artifacts: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("cleaning runtime artifacts exited %d: %s", res.ExitCode, res.Stderr)
+	}
 	return nil
 }

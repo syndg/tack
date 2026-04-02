@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/syndg/tack/internal/naming"
 	"github.com/syndg/tack/internal/sandbox"
 )
 
@@ -110,7 +111,7 @@ func (m *MergerPool) Acquire(ctx context.Context, objectiveID string) (sandbox.S
 	if len(objShort) > 8 {
 		objShort = objShort[:8]
 	}
-	mergeBranch := fmt.Sprintf("tack/%s/merge", objShort)
+	mergeBranch := naming.MergeBranch(objectiveID)
 
 	// Fetch all branches. Try full refspec first (needed for Daytona clones
 	// which default to HEAD-only), fall back to plain fetch for local worktrees.

@@ -186,8 +186,12 @@ func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox
 		"path", worktreePath,
 	)
 
-	// git worktree add {path} -b {branch}
-	cmd := exec.CommandContext(ctx, "git", "worktree", "add", worktreePath, "-b", branch)
+	// git worktree add {path} -b {branch} [baseRef]
+	args := []string{"worktree", "add", worktreePath, "-b", branch}
+	if opts.BaseRef != "" {
+		args = append(args, opts.BaseRef)
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = p.repoRoot
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
