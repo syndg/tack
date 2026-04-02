@@ -1,13 +1,18 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/credentials"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
@@ -42,6 +47,8 @@ type Handlers struct {
 	sandboxProvider sandbox.SandboxProvider
 	eventBus        *events.PersistentBus
 	baseBranch      string
+	creds           *credentials.Store
+	githubAPIBase   string
 	logger          *slog.Logger
 }
 
@@ -59,6 +66,7 @@ func NewHandlers(
 	sandboxProvider sandbox.SandboxProvider,
 	eventBus *events.PersistentBus,
 	baseBranch string,
+	creds *credentials.Store,
 	logger *slog.Logger,
 ) *Handlers {
 	if baseBranch == "" {
@@ -77,6 +85,8 @@ func NewHandlers(
 		sandboxProvider: sandboxProvider,
 		eventBus:        eventBus,
 		baseBranch:      baseBranch,
+		creds:           creds,
+		githubAPIBase:   "https://api.github.com",
 		logger:          logger,
 	}
 }
@@ -418,52 +428,19 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 		}, nil
 	}
 
-	sb, err := h.findMergerSandbox(ctx, exec.ObjectiveID)
-	if err != nil {
-		return blueprint.StepResult{
-			Status: blueprint.StepStatusFailed,
-			Error:  err.Error(),
-		}, nil
-	}
-
-	// Check if origin remote exists — skip PR creation if not configured.
-	remoteCheck, err := sb.Exec(ctx, "git remote get-url origin", sandbox.ExecOpts{})
-	if err != nil || remoteCheck.ExitCode != 0 {
-		h.logger.Info("no origin remote configured, skipping PR creation",
-			"execution_id", exec.ID,
-			"objective_id", exec.ObjectiveID,
-		)
-		return blueprint.StepResult{
-			Status: blueprint.StepStatusCompleted,
-			Output: "skipped: no origin remote configured",
-		}, nil
-	}
-
-	// Get the current branch name.
-	branchResult, err := sb.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
-	if err != nil || branchResult.ExitCode != 0 {
-		return blueprint.StepResult{
-			Status: blueprint.StepStatusFailed,
-			Error:  fmt.Sprintf("getting branch name: %s", branchResult.Stderr),
-		}, nil
-	}
-	branch := strings.TrimSpace(branchResult.Stdout)
-
-	// The branch should already be pushed by stream execution and by the merge
-	// processor for multi-stream objectives. Avoid pushing again here because
-	// create_pr runs immediately after merge completion and a redundant push can
-	// race with the merge processor's final branch push.
-
-	// Build stream status summary for the PR body.
 	plan, planErr := h.plans.GetByObjective(ctx, exec.ObjectiveID)
-	var streamSummary string
+	streamSummary := ""
+	hasMergedHead := false
 	if planErr == nil {
 		streamList, listErr := h.streams.ListByPlan(ctx, plan.ID)
 		if listErr == nil && len(streamList) > 0 {
 			var succeeded, failed []string
 			for _, s := range streamList {
 				switch s.Status {
-				case domain.StreamStatusMerged, domain.StreamStatusMergeReady, domain.StreamStatusCompleted:
+				case domain.StreamStatusMerged:
+					hasMergedHead = true
+					succeeded = append(succeeded, s.Title)
+				case domain.StreamStatusMergeReady, domain.StreamStatusCompleted:
 					succeeded = append(succeeded, s.Title)
 				case domain.StreamStatusFailed:
 					failed = append(failed, s.Title)
@@ -485,8 +462,54 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 			streamSummary = sb.String()
 		}
 	}
+	if !hasMergedHead {
+		h.logger.Info("skipping PR creation because no merged head is available",
+			"execution_id", exec.ID,
+			"objective_id", exec.ObjectiveID,
+		)
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusCompleted,
+			Output: "skipped: no merged head available",
+		}, nil
+	}
 
-	// Create PR via gh CLI.
+	sb, err := h.findMergerSandbox(ctx, exec.ObjectiveID)
+	if err != nil {
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  err.Error(),
+		}, nil
+	}
+
+	// Check if origin remote exists — skip PR creation if not configured.
+	remoteCheck, err := sb.Exec(ctx, "git remote get-url origin", sandbox.ExecOpts{})
+	if err != nil || remoteCheck.ExitCode != 0 {
+		h.logger.Info("no origin remote configured, skipping PR creation",
+			"execution_id", exec.ID,
+			"objective_id", exec.ObjectiveID,
+		)
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusCompleted,
+			Output: "skipped: no origin remote configured",
+		}, nil
+	}
+	remoteURL := strings.TrimSpace(remoteCheck.Stdout)
+
+	// Get the current branch name.
+	branchResult, err := sb.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
+	if err != nil || branchResult.ExitCode != 0 {
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("getting branch name: %s", branchResult.Stderr),
+		}, nil
+	}
+	branch := strings.TrimSpace(branchResult.Stdout)
+
+	// The branch should already be pushed by stream execution and by the merge
+	// processor for multi-stream objectives. Avoid pushing again here because
+	// create_pr runs immediately after merge completion and a redundant push can
+	// race with the merge processor's final branch push.
+
 	messages := generatedMessagesFromSource(exec, step.MessageSource)
 	title := obj.Description
 	if messages.PRTitle != "" {
@@ -497,6 +520,22 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 		body = messages.PRBody
 	}
 	body += streamSummary
+
+	if prURL, apiErr := h.createPullRequestViaAPI(ctx, remoteURL, branch, title, body); apiErr == nil {
+		h.logger.Info("PR created",
+			"url", prURL,
+			"branch", branch,
+			"objective_id", exec.ObjectiveID,
+		)
+		return blueprint.StepResult{Status: blueprint.StepStatusCompleted, Output: prURL}, nil
+	} else if apiErr != errPRAPIUnsupported {
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("creating PR via api: %s", apiErr),
+		}, nil
+	}
+
+	// Fallback to gh CLI inside the sandbox for unsupported remotes.
 	escapedTitle := naming.ShellQuote(title)
 	escapedBody := naming.ShellQuote(body)
 	prCmd := fmt.Sprintf("gh pr create --title %s --body %s --head %s --base %s", escapedTitle, escapedBody, branch, h.baseBranch)
@@ -513,7 +552,7 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 		}, nil
 	}
 
-	prURL := prResult.Stdout
+	prURL := strings.TrimSpace(prResult.Stdout)
 	h.logger.Info("PR created",
 		"url", prURL,
 		"branch", branch,
@@ -592,6 +631,97 @@ func (h *Handlers) findMergerSandbox(ctx context.Context, objectiveID string) (s
 
 	// No merger sandbox found — fall back for hotfix-style single-stream blueprints.
 	return h.findSandboxForObjective(ctx, objectiveID)
+}
+
+var errPRAPIUnsupported = fmt.Errorf("pull request api unsupported")
+
+type githubPullRequestResponse struct {
+	HTMLURL string `json:"html_url"`
+	Message string `json:"message"`
+}
+
+func (h *Handlers) createPullRequestViaAPI(ctx context.Context, remoteURL, head, title, body string) (string, error) {
+	owner, repo, host, err := parseGitRemote(remoteURL)
+	if err != nil {
+		return "", errPRAPIUnsupported
+	}
+	if host != "github.com" || h.creds == nil {
+		return "", errPRAPIUnsupported
+	}
+	tok, err := h.creds.GitToken(host)
+	if err != nil {
+		return "", errPRAPIUnsupported
+	}
+
+	payload := map[string]string{
+		"title": title,
+		"body":  body,
+		"head":  head,
+		"base":  h.baseBranch,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	apiURL := strings.TrimRight(h.githubAPIBase, "/") + "/repos/" + owner + "/" + repo + "/pulls"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(raw))
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("github api request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var parsed githubPullRequestResponse
+	_ = json.Unmarshal(respBody, &parsed)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg := strings.TrimSpace(parsed.Message)
+		if msg == "" {
+			msg = strings.TrimSpace(string(respBody))
+		}
+		return "", fmt.Errorf("github api status %d: %s", resp.StatusCode, msg)
+	}
+	if strings.TrimSpace(parsed.HTMLURL) == "" {
+		return "", fmt.Errorf("github api returned empty pr url")
+	}
+	return strings.TrimSpace(parsed.HTMLURL), nil
+}
+
+func parseGitRemote(remote string) (owner, repo, host string, err error) {
+	remote = strings.TrimSpace(remote)
+	if strings.HasPrefix(remote, "git@") {
+		parts := strings.SplitN(strings.TrimPrefix(remote, "git@"), ":", 2)
+		if len(parts) != 2 {
+			return "", "", "", fmt.Errorf("unsupported git remote: %s", remote)
+		}
+		host = parts[0]
+		path := strings.TrimSuffix(strings.TrimPrefix(parts[1], "/"), ".git")
+		segments := strings.Split(path, "/")
+		if len(segments) < 2 {
+			return "", "", "", fmt.Errorf("unsupported git remote path: %s", remote)
+		}
+		return segments[0], segments[1], host, nil
+	}
+
+	u, parseErr := url.Parse(remote)
+	if parseErr != nil {
+		return "", "", "", parseErr
+	}
+	host = u.Hostname()
+	path := strings.Trim(strings.TrimSuffix(u.Path, ".git"), "/")
+	segments := strings.Split(path, "/")
+	if len(segments) < 2 {
+		return "", "", "", fmt.Errorf("unsupported git remote path: %s", remote)
+	}
+	return segments[0], segments[1], host, nil
 }
 
 func generatedMessagesFromSource(exec *blueprint.Execution, sourceStepID string) agents.GeneratedMessages {

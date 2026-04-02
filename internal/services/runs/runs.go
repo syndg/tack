@@ -277,7 +277,7 @@ func New(cfg Config) (*Service, error) {
 		handlers := dispatch.NewHandlers(
 			scheduler, cfg.GateRunner, cfg.Lifecycle, cfg.MergeProcessor,
 			cfg.Plans, cfg.Streams, cfg.Objectives, cfg.Executions, cfg.Agents,
-			cfg.SandboxProvider, cfg.EventBus, cfg.BaseBranch, logger,
+			cfg.SandboxProvider, cfg.EventBus, cfg.BaseBranch, cfg.Credentials, logger,
 		)
 		cfg.Engine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
 		cfg.Engine.RegisterHandler(blueprint.StepTypeHuman, handlers.HandleHuman)
