@@ -34,7 +34,7 @@
 //   - Snapshot: assembles observable state from persisted records
 //   - Run/Stop: manages coordinator and merge processor lifecycle
 //
-// # Migration direction
+// # Remaining migration (issue #31)
 //
 // The spawner is still constructed externally (by the daemon) and passed via
 // Config because it has many infrastructure dependencies (agent runtime,
@@ -42,9 +42,11 @@
 // should internalize spawner construction behind this boundary so that
 // callers provide only leaf infrastructure.
 //
-// All executions are created through Start, ensuring every objective has a
-// Run record. There are no legacy escape hatches — all interventions flow
-// through Command.
+// All other orchestration internals are fully owned by this boundary:
+// the coordinator no longer auto-starts execution from events, all
+// executions are created through Start (ensuring every objective has a
+// Run record), and all interventions flow through Command with no legacy
+// escape hatches.
 //
 // # Recovery (issue #26)
 //

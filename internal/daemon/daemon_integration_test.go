@@ -570,28 +570,29 @@ exit 0
 		t.Fatalf("ApprovePlan: %v", err)
 	}
 
-	// Wait for execution to reach waiting_human at the approve step, then explicitly approve.
+	// Wait for execution to reach waiting_human at the approve step, then
+	// explicitly approve via the run-centric boundary.
 	// The auto-resume in handleApprovePlan can race with the execution goroutine.
-	var execID string
+	var needsApprove bool
 	waitForCondition(t, 10*time.Second, func() bool {
-		execs := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
-		for _, e := range execs {
-			if e["objective_id"] == obj.ID && (e["parent_id"] == nil || e["parent_id"] == "") && e["status"] == "waiting_human" {
-				execID, _ = e["id"].(string)
-				return true
-			}
+		snap, err := c.ObjectiveRunSnapshot(context.Background(), obj.ID)
+		if err == nil && snap.Blocked != nil {
+			needsApprove = true
+			return true
 		}
 		// Also check if it already completed (auto-resume won the race).
 		got, err := c.GetObjective(context.Background(), obj.ID)
 		return err == nil && (got.Status == "completed" || got.Status == "failed")
 	})
 
-	if execID != "" {
-		resp, err := http.Post(baseURL+"/executions/"+execID+"/approve", "application/json", nil)
+	if needsApprove {
+		snap, err := c.ObjectiveRunSnapshot(context.Background(), obj.ID)
 		if err != nil {
-			t.Fatalf("ApproveExecution: %v", err)
+			t.Fatalf("ObjectiveRunSnapshot: %v", err)
 		}
-		resp.Body.Close()
+		if _, err := c.RunCommand(context.Background(), snap.RunID, domain.Command{Kind: domain.CommandApprove}); err != nil {
+			t.Fatalf("RunCommand(approve): %v", err)
+		}
 	}
 
 	waitForCondition(t, 10*time.Second, func() bool {
@@ -918,21 +919,28 @@ exit 0
 		return err == nil && got.Status == "partial"
 	})
 
-	// Find the failed sub-execution.
-	executions := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
-	var failedExecID string
-	for _, e := range executions {
-		if e["status"] == "failed" {
-			failedExecID, _ = e["id"].(string)
+	// Find the failed stream via the run snapshot.
+	snap, err := c.ObjectiveRunSnapshot(context.Background(), obj.ID)
+	if err != nil {
+		t.Fatalf("ObjectiveRunSnapshot: %v", err)
+	}
+	var failedStreamID string
+	for _, s := range snap.Streams {
+		if s.Status == domain.StreamStatusFailed {
+			failedStreamID = s.StreamID
 		}
 	}
-	if failedExecID == "" {
-		t.Fatal("expected one failed sub-execution")
+	if failedStreamID == "" {
+		t.Fatal("expected one failed stream in snapshot")
 	}
 
-	// Retry with guidance.
-	if err := c.RetryExecution(context.Background(), failedExecID, "fix the build"); err != nil {
-		t.Fatalf("RetryExecution: %v", err)
+	// Retry with guidance through the run-centric boundary.
+	if _, err := c.RunCommand(context.Background(), snap.RunID, domain.Command{
+		Kind:     domain.CommandRetry,
+		StreamID: failedStreamID,
+		Guidance: "fix the build",
+	}); err != nil {
+		t.Fatalf("RunCommand(retry): %v", err)
 	}
 
 	// Wait for stream to reach "merged" — proves merge actually completed,
