@@ -17,9 +17,12 @@
 //     Config.MaxConcurrent. Never exposed to callers.
 //   - Step handlers: deterministic and human blueprint step implementations.
 //     Created inside [New] and registered with the blueprint engine.
+//   - Spawner: agent process creation, sandbox reuse, credential injection.
+//     Created inside [New] from Config.AgentRuntime, Config.SandboxProvider,
+//     Config.RulesEngine, Config.ToolCurator, and Config.Credentials.
 //   - Coordinator: blueprint execution engine, agent tracker, approval dance.
-//     Created inside [New] from the internally-constructed scheduler, the
-//     provided spawner, and other Config dependencies.
+//     Created inside [New] from the internally-constructed scheduler and
+//     spawner plus other Config dependencies.
 //   - Merge processor: provided via Config.MergeProcessor; lifecycle (Start/
 //     Stop) managed by [Service.Run] and [Service.Stop].
 //
@@ -34,18 +37,13 @@
 //   - Snapshot: assembles observable state from persisted records
 //   - Run/Stop: manages coordinator and merge processor lifecycle
 //
-// # Migration direction
-//
-// The spawner is still constructed externally (by the daemon) and passed via
-// Config because it has many infrastructure dependencies (agent runtime,
-// sandbox provider, rules engine, tool curator, credentials). A future slice
-// should internalize spawner construction behind this boundary so that
-// callers provide only leaf infrastructure.
-//
-// Pre-migration escape hatches (ApproveExecution, RetryExecution, KillAgent)
-// are provided for executions that predate the run API. These delegate directly
-// to the coordinator without run-level state transitions and should be removed
-// once all executions are created through Start.
+// All orchestration internals are fully owned by this boundary: the
+// spawner, scheduler, step handlers, and coordinator are constructed
+// inside [New]. The coordinator no longer auto-starts execution from
+// events — all executions are created through Start (ensuring every
+// objective has a Run record), and all interventions flow through
+// Command with no legacy escape hatches. Callers provide only leaf
+// infrastructure via [Config].
 //
 // # Recovery (issue #26)
 //
@@ -72,12 +70,17 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/credentials"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/harness/gates"
+	"github.com/syndg/tack/internal/harness/rules"
+	"github.com/syndg/tack/internal/harness/tools"
+	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/sandbox"
 	"github.com/syndg/tack/internal/services/agents"
 	"github.com/syndg/tack/internal/services/dispatch"
@@ -133,9 +136,6 @@ type Config struct {
 	// coordinator.
 	Engine *blueprint.Engine
 
-	// Spawner creates agent processes and manages sandbox lifecycle.
-	Spawner *dispatch.Spawner
-
 	// Lifecycle manages objective state transitions.
 	Lifecycle *lifecycle.Manager
 
@@ -150,6 +150,24 @@ type Config struct {
 
 	// SandboxProvider creates and manages sandboxes.
 	SandboxProvider sandbox.SandboxProvider
+
+	// AgentRuntime runs agent processes inside sandboxes.
+	AgentRuntime runtime.AgentRuntime
+
+	// RulesEngine evaluates project rules for agent overlays.
+	RulesEngine *rules.Engine
+
+	// ToolCurator curates per-role tool lists for agents.
+	ToolCurator *tools.Curator
+
+	// Credentials provides API keys and tokens for agent injection.
+	Credentials *credentials.Store
+
+	// ModelProvider is the default model provider name (e.g., "anthropic").
+	ModelProvider string
+
+	// DaemonURL is the URL agents use to call back to the daemon.
+	DaemonURL string
 
 	// ActivityLogger logs agent activity events. Optional: nil disables.
 	ActivityLogger *agents.ActivityLogger
@@ -221,8 +239,8 @@ func New(cfg Config) (*Service, error) {
 		if cfg.Engine == nil {
 			missing = append(missing, "Engine")
 		}
-		if cfg.Spawner == nil {
-			missing = append(missing, "Spawner")
+		if cfg.AgentRuntime == nil {
+			missing = append(missing, "AgentRuntime")
 		}
 		if cfg.Lifecycle == nil {
 			missing = append(missing, "Lifecycle")
@@ -233,6 +251,14 @@ func New(cfg Config) (*Service, error) {
 		if len(missing) > 0 {
 			return nil, fmt.Errorf("runs.Config: missing required fields for coordinator construction: %s", strings.Join(missing, ", "))
 		}
+
+		// Spawner: agent process creation, sandbox reuse, credential injection.
+		// Created here as an internal implementation detail of the runs boundary.
+		spawner := dispatch.NewSpawner(
+			cfg.Agents, cfg.AgentRuntime, cfg.SandboxProvider,
+			cfg.RulesEngine, cfg.ToolCurator, cfg.EventBus,
+			cfg.Credentials, cfg.ModelProvider, logger, cfg.DaemonURL,
+		)
 
 		// Scheduler: stream dependency resolution and concurrency limiting.
 		// Created here as an internal implementation detail of the runs boundary.
@@ -257,7 +283,7 @@ func New(cfg Config) (*Service, error) {
 		coordinator, err = dispatch.NewCoordinator(dispatch.Config{
 			Engine:         cfg.Engine,
 			Scheduler:      scheduler,
-			Spawner:        cfg.Spawner,
+			Spawner:        spawner,
 			Lifecycle:      cfg.Lifecycle,
 			MergeEnqueuer:  cfg.MergeProcessor,
 			PlanCreator:    cfg.PlanCreator,
@@ -362,16 +388,12 @@ func (s *Service) Command(ctx context.Context, runID string, cmd domain.Command)
 // Finds the blocked execution for the run's objective and delegates to
 // coordinator.Approve, then updates run status from blocked → active.
 func (s *Service) commandApprove(ctx context.Context, run *domain.Run) (domain.Snapshot, error) {
-	// Find the execution that's waiting for human approval.
-	exec, err := s.executions.GetByObjective(ctx, run.ObjectiveID)
+	// Plan approval and other human-gate interventions can race slightly with
+	// the execution loop persisting the waiting_human state. Wait briefly for
+	// the top-level execution to reach the blocked state before approving.
+	exec, err := s.waitForExecutionWaitingHuman(ctx, run.ObjectiveID, 5*time.Second)
 	if err != nil {
-		return domain.Snapshot{}, fmt.Errorf("finding execution for objective %s: %w", run.ObjectiveID, err)
-	}
-	if exec.Status != "waiting_human" {
-		return domain.Snapshot{}, fmt.Errorf(
-			"run %s has no execution waiting for approval (status: %s): %w",
-			run.ID, exec.Status, ErrInvalidState,
-		)
+		return domain.Snapshot{}, err
 	}
 
 	if err := s.coordinator.Approve(ctx, exec.ID); err != nil {
@@ -388,6 +410,43 @@ func (s *Service) commandApprove(ctx context.Context, run *domain.Run) (domain.S
 
 	s.logger.Info("run approved", "run_id", run.ID, "execution_id", exec.ID)
 	return s.Snapshot(ctx, run.ID)
+}
+
+func (s *Service) waitForExecutionWaitingHuman(ctx context.Context, objectiveID string, timeout time.Duration) (*blueprint.Execution, error) {
+	deadline := time.Now().Add(timeout)
+	lastStatus := "missing"
+
+	for {
+		exec, err := s.executions.GetByObjective(ctx, objectiveID)
+		if err == nil {
+			lastStatus = exec.Status
+			switch exec.Status {
+			case "waiting_human":
+				return exec, nil
+			case "completed", "failed":
+				return nil, fmt.Errorf(
+					"run for objective %s has no execution waiting for approval (status: %s): %w",
+					objectiveID, exec.Status, ErrInvalidState,
+				)
+			}
+		}
+
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("waiting for execution approval state: %w", err)
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf(
+				"run for objective %s has no execution waiting for approval (status: %s): %w",
+				objectiveID, lastStatus, ErrInvalidState,
+			)
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("waiting for execution approval state: %w", ctx.Err())
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // commandRetry handles the retry intervention for a failed stream.
@@ -484,27 +543,6 @@ func (s *Service) commandKill(ctx context.Context, run *domain.Run, cmd domain.C
 	s.logger.Info("agent killed via run",
 		"run_id", run.ID, "session_id", cmd.SessionID)
 	return s.Snapshot(ctx, run.ID)
-}
-
-// KillAgent terminates an agent session directly through the coordinator.
-// This is a low-level escape hatch for agent sessions that predate the run API.
-// Prefer Command(kill) when a run exists for the agent's objective.
-func (s *Service) KillAgent(ctx context.Context, sessionID string) error {
-	return s.coordinator.Kill(ctx, sessionID)
-}
-
-// ApproveExecution approves a human gate directly through the coordinator.
-// This is a low-level escape hatch for executions that predate the run API.
-// Prefer Command(approve) when a run exists for the execution's objective.
-func (s *Service) ApproveExecution(ctx context.Context, executionID string) error {
-	return s.coordinator.Approve(ctx, executionID)
-}
-
-// RetryExecution retries a failed execution directly through the coordinator.
-// This is a low-level escape hatch for executions that predate the run API.
-// Prefer Command(retry) when a run exists for the execution's objective.
-func (s *Service) RetryExecution(ctx context.Context, executionID string, guidance string) error {
-	return s.coordinator.Retry(ctx, executionID, guidance)
 }
 
 // Snapshot returns the observable state of a run by assembling current

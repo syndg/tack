@@ -58,6 +58,8 @@ var gitHostEnvVars = map[string]string{
 }
 
 // Spawner creates and manages agent processes.
+// It is constructed internally by the runs service ([runs.New]) and never
+// exposed to callers outside the orchestration boundary.
 type Spawner struct {
 	agentStore  *db.AgentStore
 	rt          runtime.AgentRuntime

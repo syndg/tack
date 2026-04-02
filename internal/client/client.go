@@ -255,40 +255,61 @@ func (c *Client) GetAgent(ctx context.Context, id string) (*domain.AgentSession,
 	return &agent, nil
 }
 
+// RunSnapshot returns the snapshot for a run by ID.
+func (c *Client) RunSnapshot(ctx context.Context, runID string) (*domain.Snapshot, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/runs/"+runID+"/snapshot", nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting run snapshot: %w", err)
+	}
+	defer closeBody(resp)
+
+	var snap domain.Snapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		return nil, fmt.Errorf("decoding snapshot response: %w", err)
+	}
+	return &snap, nil
+}
+
+// ObjectiveRunSnapshot returns the snapshot for the most recent run of an objective.
+func (c *Client) ObjectiveRunSnapshot(ctx context.Context, objectiveID string) (*domain.Snapshot, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/objectives/"+objectiveID+"/run", nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting objective run snapshot: %w", err)
+	}
+	defer closeBody(resp)
+
+	var snap domain.Snapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		return nil, fmt.Errorf("decoding snapshot response: %w", err)
+	}
+	return &snap, nil
+}
+
+// RunCommand sends an intervention command to a run.
+func (c *Client) RunCommand(ctx context.Context, runID string, cmd domain.Command) (*domain.Snapshot, error) {
+	jsonBody, err := json.Marshal(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling command: %w", err)
+	}
+
+	resp, err := c.do(ctx, http.MethodPost, "/runs/"+runID+"/command", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("sending run command: %w", err)
+	}
+	defer closeBody(resp)
+
+	var snap domain.Snapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		return nil, fmt.Errorf("decoding command response: %w", err)
+	}
+	return &snap, nil
+}
+
 // KillAgent terminates an active agent.
 func (c *Client) KillAgent(ctx context.Context, id string) error {
 	resp, err := c.do(ctx, http.MethodPost, "/agents/"+id+"/kill", nil)
 	if err != nil {
 		return fmt.Errorf("killing agent: %w", err)
-	}
-	closeBody(resp)
-	return nil
-}
-
-// ApproveExecution approves a human gate in a blueprint execution.
-func (c *Client) ApproveExecution(ctx context.Context, executionID string) error {
-	resp, err := c.do(ctx, http.MethodPost, "/executions/"+executionID+"/approve", nil)
-	if err != nil {
-		return fmt.Errorf("approving execution: %w", err)
-	}
-	closeBody(resp)
-	return nil
-}
-
-// RetryExecution retries a failed stream sub-execution with optional human guidance.
-func (c *Client) RetryExecution(ctx context.Context, executionID string, guidance string) error {
-	body := struct {
-		Guidance string `json:"guidance,omitempty"`
-	}{Guidance: guidance}
-
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("marshaling retry request: %w", err)
-	}
-
-	resp, err := c.do(ctx, http.MethodPost, "/executions/"+executionID+"/retry", bytes.NewReader(jsonBody))
-	if err != nil {
-		return fmt.Errorf("retrying execution: %w", err)
 	}
 	closeBody(resp)
 	return nil

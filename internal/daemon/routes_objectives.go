@@ -58,6 +58,28 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to start simple mode")
 			return
 		}
+
+		// Start execution through the run-centric boundary so a Run record
+		// exists for all subsequent interventions (approve, retry, kill).
+		if _, err := d.runsService.Start(r.Context(), obj.ID); err != nil {
+			d.logger.Error("starting run for simple objective", "objective_id", obj.ID, "error", err)
+			writeError(w, http.StatusInternalServerError, "objective created but failed to start execution")
+			return
+		}
+
+		obj, err = d.objectives.Get(r.Context(), obj.ID)
+		if err != nil {
+			d.logger.Error("refreshing simple objective after start", "objective_id", obj.ID, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to refresh objective after start")
+			return
+		}
+		plan, err = d.plans.Get(r.Context(), plan.ID)
+		if err != nil {
+			d.logger.Error("refreshing simple plan after start", "plan_id", plan.ID, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to refresh plan after start")
+			return
+		}
+
 		writeJSON(w, http.StatusCreated, createObjectiveSimpleResponse{
 			Objective: obj,
 			Plan:      plan,
@@ -82,7 +104,22 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: time.Now(),
 	})
 
-	writeJSON(w, http.StatusCreated, obj)
+	// Start execution through the run-centric boundary. The event above
+	// is informational (SSE); execution is driven by runsService.Start().
+	if _, err := d.runsService.Start(r.Context(), obj.ID); err != nil {
+		d.logger.Error("starting run for objective", "objective_id", obj.ID, "error", err)
+		writeError(w, http.StatusInternalServerError, "objective created but failed to start execution")
+		return
+	}
+
+	refreshedObj, err := d.objectives.Get(r.Context(), obj.ID)
+	if err != nil {
+		d.logger.Error("refreshing objective after start", "objective_id", obj.ID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to refresh objective after start")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, refreshedObj)
 }
 
 // handleGetObjective retrieves a single objective by ID from the path.

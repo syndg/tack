@@ -26,7 +26,6 @@ import (
 	"github.com/syndg/tack/internal/sandbox/daytona"
 	"github.com/syndg/tack/internal/sandbox/local"
 	"github.com/syndg/tack/internal/services/agents"
-	"github.com/syndg/tack/internal/services/dispatch"
 	"github.com/syndg/tack/internal/services/events"
 	"github.com/syndg/tack/internal/services/lifecycle"
 	mail "github.com/syndg/tack/internal/services/mail"
@@ -269,9 +268,6 @@ func New(cfg *config.Config) (*Daemon, error) {
 		modelProvider = "anthropic" // default
 	}
 
-	// Create spawner.
-	spawner := dispatch.NewSpawner(agentStore, agentRuntime, sandboxProv, rulesEng, toolCur, eventBus, creds, modelProvider, logger, daemonURL)
-
 	// Create merge queue store and processor.
 	mergeQueueStore := db.NewMergeQueueStore(conn)
 	gitMerger := merge.NewGitMerger(logger)
@@ -291,18 +287,22 @@ func New(cfg *config.Config) (*Daemon, error) {
 	}
 
 	// Create runs service — the single orchestration boundary.
-	// Internally constructs the scheduler, step handlers, and coordinator.
-	// The daemon provides raw infrastructure; the runs service owns all
-	// orchestration construction and lifecycle.
+	// Internally constructs the spawner, scheduler, step handlers, and
+	// coordinator. The daemon provides only leaf infrastructure.
 	runsService, err := runs.New(runs.Config{
 		Engine:          bpEngine,
-		Spawner:         spawner,
+		AgentRuntime:    agentRuntime,
+		SandboxProvider: sandboxProv,
+		RulesEngine:     rulesEng,
+		ToolCurator:     toolCur,
+		Credentials:     creds,
+		ModelProvider:    modelProvider,
+		DaemonURL:       daemonURL,
 		Lifecycle:       lifecycleMgr,
 		MergeProcessor:  mergeProcessor,
 		PlanCreator:     planningService,
 		MailSender:      mailBroker,
 		GateRunner:      gateRun,
-		SandboxProvider: sandboxProv,
 		ActivityLogger:  activityLogger,
 		Timeouts:        cfg.Agents.Timeouts,
 		MaxConcurrent:   cfg.Agents.MaxConcurrent,
