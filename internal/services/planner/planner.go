@@ -23,6 +23,8 @@ type Service struct {
 	eventBus            *events.PersistentBus
 	logger              *slog.Logger
 	defaultQualityGates []string
+	runStore            *db.RunStore
+	runController       RunController
 }
 
 // New creates a new planning Service.

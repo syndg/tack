@@ -11,8 +11,32 @@ import (
 	"github.com/syndg/tack/internal/services/lifecycle"
 )
 
+type mockRunController struct {
+	startCalled bool
+	startID     string
+	startErr    error
+
+	commandCalled bool
+	commandRunID  string
+	command       domain.Command
+	commandErr    error
+}
+
+func (m *mockRunController) Start(ctx context.Context, objectiveID string) (domain.Snapshot, error) {
+	m.startCalled = true
+	m.startID = objectiveID
+	return domain.Snapshot{}, m.startErr
+}
+
+func (m *mockRunController) Command(ctx context.Context, runID string, cmd domain.Command) (domain.Snapshot, error) {
+	m.commandCalled = true
+	m.commandRunID = runID
+	m.command = cmd
+	return domain.Snapshot{}, m.commandErr
+}
+
 // setupService builds a complete planner.Service backed by a fresh SQLite DB.
-func setupService(t *testing.T) (*Service, *db.ObjectiveStore, *db.PlanStore, *db.StreamStore) {
+func setupService(t *testing.T) (*Service, *db.ObjectiveStore, *db.PlanStore, *db.StreamStore, *db.RunStore) {
 	t.Helper()
 	d, err := db.Open(t.TempDir())
 	if err != nil {
@@ -27,6 +51,7 @@ func setupService(t *testing.T) (*Service, *db.ObjectiveStore, *db.PlanStore, *d
 	planStore := db.NewPlanStore(d.Conn())
 	streamStore := db.NewStreamStore(d.Conn())
 	agentStore := db.NewAgentStore(d.Conn())
+	runStore := db.NewRunStore(d.Conn())
 	eventStore := db.NewEventStore(d.Conn())
 
 	bus := events.NewPersistentBus(eventStore, slog.Default())
@@ -34,7 +59,7 @@ func setupService(t *testing.T) (*Service, *db.ObjectiveStore, *db.PlanStore, *d
 
 	lcm := lifecycle.New(objStore, planStore, streamStore, agentStore, bus, logger)
 	svc := New(planStore, streamStore, objStore, agentStore, lcm, bus, logger, []string{"go test ./...", "go vet ./..."})
-	return svc, objStore, planStore, streamStore
+	return svc, objStore, planStore, streamStore, runStore
 }
 
 // validPlanYAML is raw YAML (no code fence) for testing CreatePlan.
@@ -54,7 +79,7 @@ quality_gates:
   - "go test ./..."`
 
 func TestCreatePlan_EndToEnd(t *testing.T) {
-	svc, objStore, planStore, streamStore := setupService(t)
+	svc, objStore, planStore, streamStore, _ := setupService(t)
 	ctx := context.Background()
 
 	obj := &domain.Objective{Description: "refactor auth"}
@@ -93,7 +118,7 @@ func TestCreatePlan_EndToEnd(t *testing.T) {
 }
 
 func TestCreateSimplePlan_SingleStream(t *testing.T) {
-	svc, objStore, _, streamStore := setupService(t)
+	svc, objStore, _, streamStore, _ := setupService(t)
 	ctx := context.Background()
 
 	obj := &domain.Objective{Description: "fix typo in header"}
@@ -131,7 +156,7 @@ func TestCreateSimplePlan_SingleStream(t *testing.T) {
 }
 
 func TestStartSimple_AutoApprove(t *testing.T) {
-	svc, objStore, _, _ := setupService(t)
+	svc, objStore, _, _, _ := setupService(t)
 	ctx := context.Background()
 
 	obj, plan, err := svc.StartSimple(ctx, "fix broken link", SimpleOpts{AutoApprove: true})
@@ -159,7 +184,7 @@ func TestStartSimple_AutoApprove(t *testing.T) {
 }
 
 func TestStartSimple_WithoutAutoApprove(t *testing.T) {
-	svc, _, _, _ := setupService(t)
+	svc, _, _, _, _ := setupService(t)
 	ctx := context.Background()
 
 	obj, plan, err := svc.StartSimple(ctx, "add feature", SimpleOpts{AutoApprove: false})
@@ -173,5 +198,81 @@ func TestStartSimple_WithoutAutoApprove(t *testing.T) {
 	// Plan should be pending_approval (set by CreateSimplePlan).
 	if plan.Status != domain.PlanStatusPendingApproval {
 		t.Errorf("plan status = %q, want pending_approval", plan.Status)
+	}
+}
+
+func TestStartSimpleExecution_StartsRunWhenAutoApproved(t *testing.T) {
+	svc, _, _, _, runStore := setupService(t)
+	ctx := context.Background()
+	controller := &mockRunController{}
+	svc.BindRunController(runStore, controller)
+
+	obj, plan, err := svc.StartSimpleExecution(ctx, "fix broken link", SimpleOpts{AutoApprove: true})
+	if err != nil {
+		t.Fatalf("StartSimpleExecution: %v", err)
+	}
+	if !controller.startCalled {
+		t.Fatal("expected run controller Start to be called")
+	}
+	if controller.startID != obj.ID {
+		t.Fatalf("run controller start objective = %q, want %q", controller.startID, obj.ID)
+	}
+	if plan.Status != domain.PlanStatusApproved {
+		t.Fatalf("plan status = %q, want approved", plan.Status)
+	}
+}
+
+func TestApprovePlan_ResumesBlockedRun(t *testing.T) {
+	svc, objStore, _, _, runStore := setupService(t)
+	ctx := context.Background()
+	controller := &mockRunController{}
+	svc.BindRunController(runStore, controller)
+
+	obj := &domain.Objective{Description: "feature work"}
+	if err := objStore.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	plan, err := svc.CreateSimplePlan(ctx, obj.ID)
+	if err != nil {
+		t.Fatalf("CreateSimplePlan: %v", err)
+	}
+	if err := runStore.Create(ctx, &domain.Run{ObjectiveID: obj.ID, Status: domain.RunStatusBlocked}); err != nil {
+		t.Fatalf("Create run: %v", err)
+	}
+
+	plan, err = svc.ApprovePlan(ctx, plan.ID)
+	if err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+	if plan.Status != domain.PlanStatusApproved {
+		t.Fatalf("plan status = %q, want approved", plan.Status)
+	}
+	if !controller.commandCalled {
+		t.Fatal("expected run controller Command to be called")
+	}
+	if controller.command.Kind != domain.CommandApprove {
+		t.Fatalf("command kind = %q, want approve", controller.command.Kind)
+	}
+}
+
+func TestRejectPlan_ReturnsFailedPlan(t *testing.T) {
+	svc, objStore, _, _, _ := setupService(t)
+	ctx := context.Background()
+
+	obj := &domain.Objective{Description: "feature work"}
+	if err := objStore.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	plan, err := svc.CreateSimplePlan(ctx, obj.ID)
+	if err != nil {
+		t.Fatalf("CreateSimplePlan: %v", err)
+	}
+
+	plan, err = svc.RejectPlan(ctx, plan.ID)
+	if err != nil {
+		t.Fatalf("RejectPlan: %v", err)
+	}
+	if plan.Status != domain.PlanStatusFailed {
+		t.Fatalf("plan status = %q, want failed", plan.Status)
 	}
 }

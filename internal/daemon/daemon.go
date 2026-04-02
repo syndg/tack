@@ -296,7 +296,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 		RulesEngine:     rulesEng,
 		ToolCurator:     toolCur,
 		Credentials:     creds,
-		ModelProvider:    modelProvider,
+		ModelProvider:   modelProvider,
 		DaemonURL:       daemonURL,
 		Lifecycle:       lifecycleMgr,
 		MergeProcessor:  mergeProcessor,
@@ -320,6 +320,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 		_ = database.Close()
 		return nil, fmt.Errorf("creating runs service: %w", err)
 	}
+	planningService.BindRunController(runStore, runsService)
 
 	// Create daemon lifecycle context (cancelled in Shutdown).
 	daemonCtx, daemonCancel := context.WithCancel(context.Background())

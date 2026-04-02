@@ -74,7 +74,7 @@ func (d *Daemon) handleListPlans(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleGetPlan(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	plan, err := d.plans.Get(r.Context(), id)
+	plan, streams, err := d.planningService.GetPlanWithStreams(r.Context(), id)
 	if err != nil {
 		if isPlanNotFound(err) {
 			writeError(w, http.StatusNotFound, "plan not found")
@@ -84,13 +84,6 @@ func (d *Daemon) handleGetPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to get plan")
 		return
 	}
-
-	streams, err := d.streams.ListByPlan(r.Context(), id)
-	if err != nil {
-		d.logger.Error("listing streams for plan", "plan_id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to list streams")
-		return
-	}
 	if streams == nil {
 		streams = []domain.Stream{}
 	}
@@ -98,43 +91,22 @@ func (d *Daemon) handleGetPlan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, planWithStreams{Plan: plan, Streams: streams})
 }
 
-// handleApprovePlan approves a plan for execution via the lifecycle manager.
+// handleApprovePlan approves a plan through the planning workflow boundary.
 func (d *Daemon) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	if err := d.lifecycleManager.ApprovePlan(r.Context(), id); err != nil {
-		if isPlanNotFound(err) {
-			writeError(w, http.StatusNotFound, "plan not found")
-			return
-		}
-		d.logger.Error("approving plan", "id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to approve plan")
-		return
-	}
-
-	plan, err := d.plans.Get(r.Context(), id)
+	plan, err := d.planningService.ApprovePlan(r.Context(), id)
 	if err != nil {
-		d.logger.Error("refreshing plan after approve", "id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to refresh plan")
-		return
-	}
-
-	// Auto-resume: if there's a run waiting for plan approval, resume through
-	// the run-centric boundary and surface any failure to the caller.
-	if run, err := d.runStore.GetByObjective(r.Context(), plan.ObjectiveID); err == nil {
-		if _, err := d.runsService.Command(r.Context(), run.ID, domain.Command{Kind: domain.CommandApprove}); err != nil {
-			switch {
-			case errors.Is(err, runs.ErrInvalidState):
-				writeError(w, http.StatusConflict, err.Error())
-			default:
-				d.logger.Error("auto-resume after plan approval failed",
-					"run_id", run.ID, "plan_id", id, "error", err)
-				writeError(w, http.StatusInternalServerError, "plan approved but failed to resume execution")
-			}
-			return
+		switch {
+		case isPlanNotFound(err):
+			writeError(w, http.StatusNotFound, "plan not found")
+		case errors.Is(err, runs.ErrInvalidState):
+			writeError(w, http.StatusConflict, err.Error())
+		default:
+			d.logger.Error("approving plan", "id", id, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to approve plan")
 		}
-		d.logger.Info("auto-resumed run after plan approval",
-			"run_id", run.ID, "plan_id", id)
+		return
 	}
 
 	writeJSON(w, http.StatusOK, plan)
@@ -144,20 +116,14 @@ func (d *Daemon) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleRejectPlan(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	if err := d.lifecycleManager.RejectPlan(r.Context(), id); err != nil {
+	plan, err := d.planningService.RejectPlan(r.Context(), id)
+	if err != nil {
 		if isPlanNotFound(err) {
 			writeError(w, http.StatusNotFound, "plan not found")
 			return
 		}
 		d.logger.Error("rejecting plan", "id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to reject plan")
-		return
-	}
-
-	plan, err := d.plans.Get(r.Context(), id)
-	if err != nil {
-		d.logger.Error("refreshing plan after reject", "id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to refresh plan")
 		return
 	}
 

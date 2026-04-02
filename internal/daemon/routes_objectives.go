@@ -30,8 +30,9 @@ type createObjectiveSimpleResponse struct {
 // handleCreateObjective decodes a JSON body, creates a new objective, publishes
 // an event, and responds with the created objective.
 //
-// When simple=true: calls planningService.StartSimple to create and auto-approve
-// a single-stream plan, returning {"objective": {...}, "plan": {...}}.
+// When simple=true: calls planningService.StartSimpleExecution to create,
+// auto-approve, and start a single-stream plan, returning
+// {"objective": {...}, "plan": {...}}.
 //
 // Default: creates the objective and publishes EventObjectiveCreated. The
 // coordinator picks it up and starts blueprint execution — which includes
@@ -49,34 +50,13 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Simple {
-		obj, plan, err := d.planningService.StartSimple(r.Context(), req.Description, planner.SimpleOpts{
+		obj, plan, err := d.planningService.StartSimpleExecution(r.Context(), req.Description, planner.SimpleOpts{
 			Blueprint:   req.Blueprint,
 			AutoApprove: true,
 		})
 		if err != nil {
 			d.logger.Error("starting simple mode", "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to start simple mode")
-			return
-		}
-
-		// Start execution through the run-centric boundary so a Run record
-		// exists for all subsequent interventions (approve, retry, kill).
-		if _, err := d.runsService.Start(r.Context(), obj.ID); err != nil {
-			d.logger.Error("starting run for simple objective", "objective_id", obj.ID, "error", err)
-			writeError(w, http.StatusInternalServerError, "objective created but failed to start execution")
-			return
-		}
-
-		obj, err = d.objectives.Get(r.Context(), obj.ID)
-		if err != nil {
-			d.logger.Error("refreshing simple objective after start", "objective_id", obj.ID, "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to refresh objective after start")
-			return
-		}
-		plan, err = d.plans.Get(r.Context(), plan.ID)
-		if err != nil {
-			d.logger.Error("refreshing simple plan after start", "plan_id", plan.ID, "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to refresh plan after start")
 			return
 		}
 
@@ -160,7 +140,7 @@ func (d *Daemon) handleListObjectives(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleGetObjectivePlan(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	plan, err := d.plans.GetByObjective(r.Context(), id)
+	plan, streams, err := d.planningService.GetPlanByObjective(r.Context(), id)
 	if err != nil {
 		if isPlanNotFound(err) {
 			writeError(w, http.StatusNotFound, "plan not found for objective")
@@ -168,13 +148,6 @@ func (d *Daemon) handleGetObjectivePlan(w http.ResponseWriter, r *http.Request) 
 		}
 		d.logger.Error("getting plan by objective", "objective_id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to get plan")
-		return
-	}
-
-	streams, err := d.streams.ListByPlan(r.Context(), plan.ID)
-	if err != nil {
-		d.logger.Error("listing streams for objective plan", "plan_id", plan.ID, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to list streams")
 		return
 	}
 	if streams == nil {
