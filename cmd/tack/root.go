@@ -39,7 +39,10 @@ func init() {
 
 // loadConfig resolves the two-layer config: project (walk-up or --config override) + user.
 func loadConfig() (*config.Config, error) {
-	projectCfg := config.ResolveProjectConfig(cfgPath)
+	projectCfg, err := config.ResolveProjectConfig(cfgPath)
+	if err != nil {
+		return nil, err
+	}
 	userCfg := config.UserConfigPath
 	if v := os.Getenv("TACK_USER_CONFIG_PATH"); v != "" {
 		userCfg = v

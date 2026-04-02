@@ -35,7 +35,10 @@ var configSetCmd = &cobra.Command{
 	Short: "Set a config value",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		path := targetConfigPath()
+		path, err := targetConfigPath()
+		if err != nil {
+			return err
+		}
 		if path == "" {
 			return fmt.Errorf("no config path resolved (use --user or run from a project with .tack/)")
 		}
@@ -63,7 +66,11 @@ var configGetCmd = &cobra.Command{
 		case configUser:
 			cfg, err = config.Load("", userConfigPath())
 		case configProject:
-			cfg, err = config.Load(projectConfigPath(), "")
+			var path string
+			path, err = projectConfigPath()
+			if err == nil {
+				cfg, err = config.Load(path, "")
+			}
 		default:
 			cfg, err = loadConfig()
 		}
@@ -103,7 +110,11 @@ var configListCmd = &cobra.Command{
 		case configUser:
 			cfg, err = config.Load("", userConfigPath())
 		case configProject:
-			cfg, err = config.Load(projectConfigPath(), "")
+			var path string
+			path, err = projectConfigPath()
+			if err == nil {
+				cfg, err = config.Load(path, "")
+			}
 		default:
 			cfg, err = loadConfig()
 		}
@@ -122,7 +133,10 @@ var configRemoveCmd = &cobra.Command{
 	Short: "Remove a config key",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		path := targetConfigPath()
+		path, err := targetConfigPath()
+		if err != nil {
+			return err
+		}
 		if path == "" {
 			return fmt.Errorf("no config path resolved (use --user or run from a project with .tack/)")
 		}
@@ -140,9 +154,9 @@ var configRemoveCmd = &cobra.Command{
 
 // targetConfigPath returns the path for write operations (set/remove).
 // Default is project config; --user targets user config.
-func targetConfigPath() string {
+func targetConfigPath() (string, error) {
 	if configUser {
-		return userConfigPath()
+		return userConfigPath(), nil
 	}
 	return projectConfigPath()
 }
@@ -154,7 +168,7 @@ func userConfigPath() string {
 	return config.UserConfigPath
 }
 
-func projectConfigPath() string {
+func projectConfigPath() (string, error) {
 	return config.ResolveProjectConfig(cfgPath)
 }
 

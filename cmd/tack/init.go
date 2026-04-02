@@ -277,7 +277,7 @@ func promptGitCredential(store *credentials.Store) error {
 
 	var token string
 	err = huh.NewInput().
-		Title("Personal access token for "+host).
+		Title("Personal access token for " + host).
 		EchoMode(huh.EchoModePassword).
 		Value(&token).
 		Run()
@@ -295,5 +295,9 @@ func promptGitCredential(store *credentials.Store) error {
 
 // ensureTackConfig is a no-arg helper that checks .tack/ exists in the current project root.
 func ensureTackConfig() string {
-	return config.ResolveProjectConfig("")
+	path, err := config.ResolveProjectConfig("")
+	if err != nil {
+		return ""
+	}
+	return path
 }

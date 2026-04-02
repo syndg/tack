@@ -17,7 +17,11 @@ func main() {
 	configPath := flag.String("config", "", "project config path override")
 	flag.Parse()
 
-	projectCfg := config.ResolveProjectConfig(*configPath)
+	projectCfg, err := config.ResolveProjectConfig(*configPath)
+	if err != nil {
+		slog.Error("resolving project config", "error", err)
+		os.Exit(1)
+	}
 	cfg, err := config.Load(projectCfg, config.UserConfigPath)
 	if err != nil {
 		slog.Error("loading config", "error", err)

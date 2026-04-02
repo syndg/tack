@@ -139,6 +139,10 @@ type GitConfig struct {
 // Load reads config with two-layer merge: defaults → user config → project config.
 // Either path can be empty to skip that layer.
 func Load(projectPath, userPath string) (*Config, error) {
+	if err := ValidateProjectConfigPath(projectPath); err != nil {
+		return nil, err
+	}
+
 	cfg := Default()
 	if projectPath != "" {
 		cfg.ProjectRoot = filepath.Dir(expandTilde(projectPath))
@@ -160,7 +164,14 @@ func Load(projectPath, userPath string) (*Config, error) {
 // LoadFile reads a single YAML config file and merges it over defaults.
 // This is the legacy single-file loader — prefer Load() for layered config.
 func LoadFile(path string) (*Config, error) {
-	return Load("", path)
+	if err := ValidateProjectConfigPath(path); err != nil {
+		return nil, err
+	}
+	cfg := Default()
+	if err := mergeFromFile(cfg, path); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 // mergeFromFile reads a YAML file and deep-merges it into cfg.
@@ -209,21 +220,45 @@ func FindProjectRoot(startDir string) string {
 	}
 }
 
+// IsLegacyProjectConfigPath reports whether path points at a Deck-era project config.
+func IsLegacyProjectConfigPath(path string) bool {
+	if path == "" {
+		return false
+	}
+	path = filepath.ToSlash(filepath.Clean(expandTilde(path)))
+	base := filepath.Base(path)
+	if base == "deck.yaml" || base == "deck.yml" {
+		return true
+	}
+	return strings.HasSuffix(path, "/.deck/config.yaml") || strings.HasSuffix(path, "/.deck/config.yml")
+}
+
+// ValidateProjectConfigPath rejects Deck-era project config paths.
+func ValidateProjectConfigPath(path string) error {
+	if !IsLegacyProjectConfigPath(path) {
+		return nil
+	}
+	return fmt.Errorf("legacy Deck project config path %q is no longer supported; move it to .tack/config.yaml", path)
+}
+
 // ResolveProjectConfig finds the project config path by either using the
 // explicit override or walking up from cwd to find .tack/config.yaml.
-func ResolveProjectConfig(override string) string {
+func ResolveProjectConfig(override string) (string, error) {
 	if override != "" {
-		return override
+		if err := ValidateProjectConfigPath(override); err != nil {
+			return "", err
+		}
+		return override, nil
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	root := FindProjectRoot(cwd)
 	if root == "" {
-		return ""
+		return "", nil
 	}
-	return filepath.Join(root, ProjectConfigDir, "config.yaml")
+	return filepath.Join(root, ProjectConfigDir, "config.yaml"), nil
 }
 
 // Default returns a Config with sensible defaults.

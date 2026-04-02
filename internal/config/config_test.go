@@ -215,9 +215,26 @@ func TestFindProjectRoot(t *testing.T) {
 
 func TestResolveProjectConfig(t *testing.T) {
 	// Explicit override wins
-	got := ResolveProjectConfig("/explicit/config.yaml")
+	got, err := ResolveProjectConfig("/explicit/config.yaml")
+	if err != nil {
+		t.Fatalf("ResolveProjectConfig: %v", err)
+	}
 	if got != "/explicit/config.yaml" {
 		t.Errorf("ResolveProjectConfig(override) = %q, want /explicit/config.yaml", got)
+	}
+}
+
+func TestResolveProjectConfig_RejectsDeckPaths(t *testing.T) {
+	for _, path := range []string{"deck.yaml", "/tmp/project/.deck/config.yaml"} {
+		if _, err := ResolveProjectConfig(path); err == nil {
+			t.Fatalf("ResolveProjectConfig(%q) error = nil, want rejection", path)
+		}
+	}
+}
+
+func TestLoad_RejectsDeckProjectConfig(t *testing.T) {
+	if _, err := Load("/tmp/project/deck.yaml", ""); err == nil {
+		t.Fatal("Load accepted legacy deck project config path")
 	}
 }
 
