@@ -26,6 +26,7 @@ import (
 	"github.com/syndg/tack/internal/sandbox/daytona"
 	"github.com/syndg/tack/internal/sandbox/local"
 	"github.com/syndg/tack/internal/services/agents"
+	"github.com/syndg/tack/internal/services/cleanup"
 	"github.com/syndg/tack/internal/services/events"
 	"github.com/syndg/tack/internal/services/lifecycle"
 	mail "github.com/syndg/tack/internal/services/mail"
@@ -60,6 +61,7 @@ type Daemon struct {
 	runsService *runs.Service
 
 	mergeQueueStore *db.MergeQueueStore
+	branchJanitor   *cleanup.Janitor
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -354,6 +356,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 		runsService: runsService,
 
 		mergeQueueStore: mergeQueueStore,
+		branchJanitor:   cleanup.NewJanitor(objectiveStore, projectRoot, logger),
 
 		lifecycleManager: lifecycleMgr,
 		planningService:  planningService,
@@ -386,6 +389,9 @@ func New(cfg *config.Config) (*Daemon, error) {
 // All orchestration lifecycle is managed through the runs service boundary.
 // The coordinator and merge processor are started internally by runs.Run().
 func (d *Daemon) Start() error {
+	if d.branchJanitor != nil {
+		d.branchJanitor.Start(d.ctx)
+	}
 	if d.runsService != nil {
 		if err := d.runsService.Run(d.ctx); err != nil {
 			return fmt.Errorf("starting runs orchestration: %w", err)

@@ -368,6 +368,7 @@ func (p *Processor) handleMergeSuccess(ctx context.Context, sb sandbox.Sandbox, 
 	}
 
 	p.pushMergeBranch(ctx, sb, entry.ObjectiveID)
+	p.deleteRemoteBranch(ctx, sb, entry.Branch)
 	p.publishNewlyReadyStreams(ctx, entry.PlanID)
 	p.publishMergeCompleted(entry, result)
 
@@ -594,4 +595,24 @@ func (p *Processor) pushMergeBranch(ctx context.Context, sb sandbox.Sandbox, obj
 		return
 	}
 	p.logger.Info("merge branch pushed", "branch", branch, "objective_id", objectiveID)
+}
+
+func (p *Processor) deleteRemoteBranch(ctx context.Context, sb sandbox.Sandbox, branch string) {
+	if branch == "" || strings.HasSuffix(branch, "/merge") {
+		return
+	}
+	remoteCheck, err := sb.Exec(ctx, "git remote get-url origin", sandbox.ExecOpts{})
+	if err != nil || remoteCheck.ExitCode != 0 {
+		return
+	}
+	res, err := sb.Exec(ctx, fmt.Sprintf("git push origin --delete %s", branch), sandbox.ExecOpts{})
+	if err != nil || res.ExitCode != 0 {
+		stderr := strings.TrimSpace(res.Stderr)
+		if strings.Contains(stderr, "remote ref does not exist") || strings.Contains(stderr, "unable to delete") {
+			return
+		}
+		p.logger.Warn("deleting remote stream branch", "branch", branch, "error", err, "stderr", res.Stderr)
+		return
+	}
+	p.logger.Info("remote stream branch deleted", "branch", branch)
 }
