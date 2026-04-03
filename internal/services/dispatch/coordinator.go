@@ -19,8 +19,8 @@ import (
 
 // Sentinel errors for Orchestrator methods.
 var (
-	ErrNotFound     = errors.New("not found")
-	ErrInvalidState = errors.New("invalid state")
+	ErrNotFound      = errors.New("not found")
+	ErrInvalidState  = errors.New("invalid state")
 	ErrAlreadyActive = errors.New("already active")
 )
 
@@ -55,21 +55,21 @@ type MailSender interface {
 
 // Config holds all dependencies for constructing a Coordinator.
 type Config struct {
-	Engine         *blueprint.Engine       // blueprint execution engine
-	Scheduler      *Scheduler              // stream scheduling
-	Spawner        *Spawner                // agent process spawning
-	Lifecycle      *lifecycle.Manager      // objective state transitions
-	MergeEnqueuer  MergeEnqueuer           // merge queue integration
-	PlanCreator    PlanCreator             // plan creation from planner output
-	MailSender     MailSender              // optional: nil disables mail escalation
-	Executions     *db.ExecutionStore      // execution persistence
-	Objectives     *db.ObjectiveStore      // objective persistence
-	Plans          *db.PlanStore           // plan persistence
-	Streams        *db.StreamStore         // stream persistence
-	EventBus       *events.PersistentBus   // event pub/sub
-	ActivityLogger *agents.ActivityLogger  // optional: nil disables activity logging
-	Timeouts       config.TimeoutConfig    // per-role timeout configuration
-	Logger         *slog.Logger            // structured logger
+	Engine         *blueprint.Engine      // blueprint execution engine
+	Scheduler      *Scheduler             // stream scheduling
+	Spawner        *Spawner               // agent process spawning
+	Lifecycle      *lifecycle.Manager     // objective state transitions
+	MergeEnqueuer  MergeEnqueuer          // merge queue integration
+	PlanCreator    PlanCreator            // plan creation from planner output
+	MailSender     MailSender             // optional: nil disables mail escalation
+	Executions     *db.ExecutionStore     // execution persistence
+	Objectives     *db.ObjectiveStore     // objective persistence
+	Plans          *db.PlanStore          // plan persistence
+	Streams        *db.StreamStore        // stream persistence
+	EventBus       *events.PersistentBus  // event pub/sub
+	ActivityLogger *agents.ActivityLogger // optional: nil disables activity logging
+	Timeouts       config.TimeoutConfig   // per-role timeout configuration
+	Logger         *slog.Logger           // structured logger
 }
 
 // Validate checks that all required Config fields are set.
@@ -342,12 +342,16 @@ func (c *Coordinator) Execute(ctx context.Context, objectiveID string) error {
 		return fmt.Errorf("objective %s cannot start execution (status: %s): %w", objectiveID, obj.Status, ErrInvalidState)
 	}
 
-	blueprintName := obj.Blueprint
-	if blueprintName == "" {
-		blueprintName = "Feature Implementation"
+	blueprintID := obj.Blueprint
+	if blueprintID == "" {
+		bp, err := c.engine.ResolveDefaultBlueprint()
+		if err != nil {
+			return fmt.Errorf("resolving default blueprint for objective %s: %w", objectiveID, err)
+		}
+		blueprintID = bp.ID
 	}
 
-	exec, err := c.engine.Start(ctx, blueprintName, objectiveID)
+	exec, err := c.engine.Start(ctx, blueprintID, objectiveID)
 	if err != nil {
 		return fmt.Errorf("starting blueprint execution for objective %s: %w", objectiveID, err)
 	}
@@ -365,7 +369,7 @@ func (c *Coordinator) Execute(ctx context.Context, objectiveID string) error {
 
 	c.eventBus.Emit(domain.EventExecutionStarted, objectiveID, "", "",
 		"execution_id", exec.ID,
-		"blueprint_name", blueprintName,
+		"blueprint_id", blueprintID,
 	)
 
 	baseCtx := c.ctx
@@ -382,7 +386,7 @@ func (c *Coordinator) Execute(ctx context.Context, objectiveID string) error {
 	c.logger.Info("execution started",
 		"execution_id", exec.ID,
 		"objective_id", objectiveID,
-		"blueprint", blueprintName,
+		"blueprint_id", blueprintID,
 	)
 	return nil
 }

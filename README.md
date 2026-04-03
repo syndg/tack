@@ -168,23 +168,20 @@ Stream 2 (frontend components): bunx tsc --noEmit → fails on frontend error �
 
 ### Blueprints
 
-Workflows are defined as YAML state machines. Steps can be `agent`, `deterministic`, `human`, or `blueprint_ref` (nested).
+Blueprints are defined as YAML state machines. Steps can be `agent`, `deterministic`, `human`, or `blueprint_ref` (nested).
 
-Tack ships two defaults. Override by placing your own in `.tack/blueprints/`.
+Blueprint filenames are arbitrary. The public identity is the blueprint `id`, not the filename. Tack ships neutral defaults, and you can override them or add your own in `.tack/blueprints/`.
 
 ```yaml
-# .tack/blueprints/stream.yaml — per-stream execution
-steps:
-  - id: scout
-    type: agent
-    role: scout
-    optional: true
-    next: build
+# .tack/blueprints/build-review.yaml
+id: build-review
+name: Build and review
 
+description: "Execute one work item: build, validate, review, and mark ready for merge"
+steps:
   - id: build
     type: agent
     role: builder
-    commit: auto
     next: lint
 
   - id: lint
@@ -315,7 +312,7 @@ tools:
 |---------|-------------|
 | `tack daemon` | Start the orchestrator daemon |
 | `tack plan <description>` | Create an objective and generate a plan |
-| `tack plan <desc> --simple` | Single-agent mode (no decomposition) |
+| `tack plan <desc> --blueprint <id>` | Create an objective with a specific blueprint |
 | `tack plans` | List all plans |
 | `tack show <plan-id>` | Show plan details with streams |
 | `tack approve <plan-id>` | Approve a plan for execution |
@@ -336,8 +333,9 @@ tools:
 ```
 .tack/
   config.yaml          # Runtime config: model, gates, concurrency, timeouts
-  blueprints/          # Workflow definitions (ships with sensible defaults)
-    stream.yaml        #   Per-stream: scout → build → lint → review → merge_ready
+  blueprints/          # Blueprint definitions (filenames are arbitrary)
+    standard.yaml      #   Default top-level blueprint
+    build-review.yaml  #   Reusable nested blueprint
   rules/               # Project-specific agent guidance, scoped by file patterns
     project.yaml
   data/                # Managed by Tack: SQLite, activity logs

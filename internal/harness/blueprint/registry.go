@@ -14,19 +14,15 @@ import (
 //go:embed defaults/*.yaml
 var defaultBlueprints embed.FS
 
-// Registry holds loaded blueprints and provides lookup.
+// Registry holds loaded blueprints and provides lookup by blueprint ID.
 type Registry struct {
 	blueprints map[string]*Blueprint
-	aliases    map[string]string
 	mu         sync.RWMutex
 }
 
 // NewRegistry creates an empty blueprint registry.
 func NewRegistry() *Registry {
-	return &Registry{
-		blueprints: make(map[string]*Blueprint),
-		aliases:    make(map[string]string),
-	}
+	return &Registry{blueprints: make(map[string]*Blueprint)}
 }
 
 // LoadDefaults loads the shipped default blueprints from the embedded defaults/ directory.
@@ -37,7 +33,6 @@ func (r *Registry) LoadDefaults() error {
 	}
 
 	var errs []string
-
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -58,26 +53,29 @@ func (r *Registry) LoadDefaults() error {
 			errs = append(errs, fmt.Sprintf("parsing %s: %v", entry.Name(), err))
 			continue
 		}
-
 		if err := Validate(&bp); err != nil {
 			errs = append(errs, fmt.Sprintf("validating %s: %v", entry.Name(), err))
 			continue
 		}
 
 		r.mu.Lock()
-		r.registerLocked(&bp, []string{bp.Name, strings.TrimSuffix(entry.Name(), ext)})
+		r.blueprints[bp.ID] = &bp
+		if err := r.validateDefaultSelectionLocked(); err != nil {
+			r.mu.Unlock()
+			errs = append(errs, fmt.Sprintf("registering %s: %v", entry.Name(), err))
+			continue
+		}
 		r.mu.Unlock()
 	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("errors loading defaults: %s", strings.Join(errs, "; "))
 	}
-
 	return nil
 }
 
 // LoadFromDir loads blueprints from a directory (e.g., .tack/blueprints/ or ~/.config/tack/blueprints/).
-// Blueprints loaded later override earlier ones with the same name.
+// Blueprints loaded later override earlier ones with the same blueprint ID.
 func (r *Registry) LoadFromDir(dir string) error {
 	entries, err := LoadDir(dir)
 	if err != nil {
@@ -85,91 +83,75 @@ func (r *Registry) LoadFromDir(dir string) error {
 	}
 
 	r.mu.Lock()
-	for name, bp := range entries {
-		r.registerLocked(bp, []string{name})
+	defer r.mu.Unlock()
+	for id, bp := range entries {
+		r.blueprints[id] = bp
 	}
-	r.mu.Unlock()
-
+	if err := r.validateDefaultSelectionLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
-// Get returns a blueprint by name or normalized alias. Returns nil, false if not found.
-func (r *Registry) Get(name string) (*Blueprint, bool) {
+// Get returns a blueprint by ID.
+func (r *Registry) Get(id string) (*Blueprint, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
-	if bp, ok := r.blueprints[name]; ok {
-		return bp, true
-	}
-
-	if canonical, ok := r.aliases[normalizeBlueprintKey(name)]; ok {
-		bp, ok := r.blueprints[canonical]
-		return bp, ok
-	}
-
-	return nil, false
+	bp, ok := r.blueprints[id]
+	return bp, ok
 }
 
-// GetDefault returns the blueprint with trigger "default". Returns nil, false if none.
-func (r *Registry) GetDefault() (*Blueprint, bool) {
+// ResolveDefault returns the configured default blueprint, or the only loaded blueprint.
+func (r *Registry) ResolveDefault() (*Blueprint, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for _, bp := range r.blueprints {
-		if bp.Trigger == "default" {
-			return bp, true
+
+	switch len(r.blueprints) {
+	case 0:
+		return nil, fmt.Errorf("no blueprints loaded")
+	case 1:
+		for _, bp := range r.blueprints {
+			return bp, nil
 		}
 	}
-	return nil, false
+
+	var defaults []*Blueprint
+	for _, bp := range r.blueprints {
+		if bp.Default {
+			defaults = append(defaults, bp)
+		}
+	}
+	switch len(defaults) {
+	case 1:
+		return defaults[0], nil
+	case 0:
+		return nil, fmt.Errorf("multiple blueprints are loaded but none is marked default; select one with --blueprint or set default: true")
+	default:
+		return nil, fmt.Errorf("multiple blueprints are marked default")
+	}
 }
 
-// List returns all registered blueprint names, sorted alphabetically.
+// List returns all registered blueprint IDs, sorted alphabetically.
 func (r *Registry) List() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	names := make([]string, 0, len(r.blueprints))
-	for name := range r.blueprints {
-		names = append(names, name)
+	ids := make([]string, 0, len(r.blueprints))
+	for id := range r.blueprints {
+		ids = append(ids, id)
 	}
-	sort.Strings(names)
-	return names
+	sort.Strings(ids)
+	return ids
 }
 
-func (r *Registry) registerLocked(bp *Blueprint, aliases []string) {
-	r.blueprints[bp.Name] = bp
-
-	registerAlias := func(alias string) {
-		key := normalizeBlueprintKey(alias)
-		if key != "" {
-			r.aliases[key] = bp.Name
+func (r *Registry) validateDefaultSelectionLocked() error {
+	defaultCount := 0
+	for _, bp := range r.blueprints {
+		if bp.Default {
+			defaultCount++
 		}
 	}
-
-	registerAlias(bp.Name)
-	for _, alias := range aliases {
-		registerAlias(alias)
+	if defaultCount > 1 {
+		return fmt.Errorf("multiple blueprints are marked default")
 	}
-}
-
-func normalizeBlueprintKey(s string) string {
-	s = strings.TrimSpace(strings.ToLower(s))
-	if s == "" {
-		return ""
-	}
-
-	var b strings.Builder
-	lastDash := false
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-			lastDash = false
-		default:
-			if !lastDash {
-				b.WriteByte('-')
-				lastDash = true
-			}
-		}
-	}
-
-	return strings.Trim(b.String(), "-")
+	return nil
 }

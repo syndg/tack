@@ -11,16 +11,16 @@ import (
 
 // Execution represents a running blueprint instance tied to an objective.
 type Execution struct {
-	ID            string                `json:"id"`
-	BlueprintName string                `json:"blueprint_name"`
-	ObjectiveID   string                `json:"objective_id"`
-	CurrentStep   string                `json:"current_step"`
-	StepStates    map[string]*StepState `json:"step_states"`
-	Status        string                `json:"status"` // "running", "completed", "failed", "waiting_human", "awaiting_human"
-	ParentID      string                `json:"parent_id,omitempty"`  // parent execution ID (empty for top-level)
-	StreamID      string                `json:"stream_id,omitempty"` // stream this sub-execution drives (empty for top-level)
-	CreatedAt     time.Time             `json:"created_at"`
-	UpdatedAt     time.Time             `json:"updated_at"`
+	ID          string                `json:"id"`
+	BlueprintID string                `json:"blueprint_id"`
+	ObjectiveID string                `json:"objective_id"`
+	CurrentStep string                `json:"current_step"`
+	StepStates  map[string]*StepState `json:"step_states"`
+	Status      string                `json:"status"`              // "running", "completed", "failed", "waiting_human", "awaiting_human"
+	ParentID    string                `json:"parent_id,omitempty"` // parent execution ID (empty for top-level)
+	StreamID    string                `json:"stream_id,omitempty"` // stream this sub-execution drives (empty for top-level)
+	CreatedAt   time.Time             `json:"created_at"`
+	UpdatedAt   time.Time             `json:"updated_at"`
 }
 
 // StepHandler is called by the engine when a step needs to execute.
@@ -57,46 +57,48 @@ func (e *Engine) RegisterHandler(stepType StepType, handler StepHandler) {
 	e.handlers[stepType] = handler
 }
 
-// GetBlueprint returns the loaded blueprint by name or alias.
-func (e *Engine) GetBlueprint(name string) (*Blueprint, bool) {
-	return e.registry.Get(name)
+// GetBlueprint returns the loaded blueprint by ID.
+func (e *Engine) GetBlueprint(id string) (*Blueprint, bool) {
+	return e.registry.Get(id)
+}
+
+// ResolveDefaultBlueprint returns the default blueprint, or the only loaded blueprint.
+func (e *Engine) ResolveDefaultBlueprint() (*Blueprint, error) {
+	return e.registry.ResolveDefault()
 }
 
 // Start creates a new Execution for the given blueprint and objective,
 // initializes all step states to "pending", sets the first step as current,
 // and returns the execution. Does NOT advance — call Advance() to begin.
-func (e *Engine) Start(ctx context.Context, blueprintName string, objectiveID string) (*Execution, error) {
-	bp, ok := e.registry.Get(blueprintName)
+func (e *Engine) Start(ctx context.Context, blueprintID string, objectiveID string) (*Execution, error) {
+	bp, ok := e.registry.Get(blueprintID)
 	if !ok {
-		return nil, fmt.Errorf("blueprint %q not found", blueprintName)
+		return nil, fmt.Errorf("blueprint %q not found", blueprintID)
 	}
 
 	if len(bp.Steps) == 0 {
-		return nil, fmt.Errorf("blueprint %q has no steps", blueprintName)
+		return nil, fmt.Errorf("blueprint %q has no steps", blueprintID)
 	}
 
 	now := time.Now()
 	exec := &Execution{
-		ID:            uuid.New().String(),
-		BlueprintName: blueprintName,
-		ObjectiveID:   objectiveID,
-		CurrentStep:   bp.Steps[0].ID,
-		StepStates:    make(map[string]*StepState, len(bp.Steps)),
-		Status:        "running",
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:          uuid.New().String(),
+		BlueprintID: blueprintID,
+		ObjectiveID: objectiveID,
+		CurrentStep: bp.Steps[0].ID,
+		StepStates:  make(map[string]*StepState, len(bp.Steps)),
+		Status:      "running",
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	for _, step := range bp.Steps {
-		exec.StepStates[step.ID] = &StepState{
-			StepID: step.ID,
-			Status: StepStatusPending,
-		}
+		exec.StepStates[step.ID] = &StepState{StepID: step.ID, Status: StepStatusPending}
 	}
 
 	e.logger.Info("execution started",
 		"execution_id", exec.ID,
-		"blueprint", blueprintName,
+		"blueprint_id", blueprintID,
 		"objective_id", objectiveID,
 	)
 
@@ -112,14 +114,13 @@ func (e *Engine) Advance(ctx context.Context, exec *Execution) (*Execution, erro
 	if exec.Status == "completed" || exec.Status == "failed" {
 		return exec, fmt.Errorf("execution %s is already %s", exec.ID, exec.Status)
 	}
-
 	if exec.Status == "waiting_human" {
 		return exec, fmt.Errorf("execution %s is waiting for human approval", exec.ID)
 	}
 
-	bp, ok := e.registry.Get(exec.BlueprintName)
+	bp, ok := e.registry.Get(exec.BlueprintID)
 	if !ok {
-		return exec, fmt.Errorf("blueprint %q not found", exec.BlueprintName)
+		return exec, fmt.Errorf("blueprint %q not found", exec.BlueprintID)
 	}
 
 	step, err := e.GetStepByID(bp, exec.CurrentStep)
@@ -127,16 +128,12 @@ func (e *Engine) Advance(ctx context.Context, exec *Execution) (*Execution, erro
 		return exec, fmt.Errorf("advancing execution: %w", err)
 	}
 
-	// Human steps pause the execution for approval.
 	if step.Type == StepTypeHuman {
 		state := exec.StepStates[step.ID]
 		state.Status = StepStatusBlocked
 		exec.Status = "waiting_human"
 		exec.UpdatedAt = time.Now()
-		e.logger.Info("execution waiting for human approval",
-			"execution_id", exec.ID,
-			"step", step.ID,
-		)
+		e.logger.Info("execution waiting for human approval", "execution_id", exec.ID, "step", step.ID)
 		return exec, nil
 	}
 
@@ -148,19 +145,9 @@ func (e *Engine) Advance(ctx context.Context, exec *Execution) (*Execution, erro
 	state := exec.StepStates[step.ID]
 	state.Status = StepStatusRunning
 	exec.UpdatedAt = time.Now()
-
-	e.logger.Info("executing step",
-		"execution_id", exec.ID,
-		"step", step.ID,
-		"type", step.Type,
-	)
-
 	result, err := handler(ctx, exec, step)
 	if err != nil {
-		result = StepResult{
-			Status: StepStatusFailed,
-			Error:  err.Error(),
-		}
+		result = StepResult{Status: StepStatusFailed, Error: err.Error()}
 	}
 
 	switch result.Status {
@@ -175,22 +162,13 @@ func (e *Engine) Advance(ctx context.Context, exec *Execution) (*Execution, erro
 		state.Error = result.Error
 		state.Output = result.Output
 		state.Metadata = cloneMetadata(result.Metadata)
-
-		// Retry: re-run the same step (handles flaky failures).
 		if state.RetryCount < step.Retry {
 			state.RetryCount++
 			state.Status = StepStatusPending
 			exec.UpdatedAt = time.Now()
-			e.logger.Info("retrying step",
-				"execution_id", exec.ID,
-				"step", step.ID,
-				"retry", state.RetryCount,
-				"max_retries", step.Retry,
-			)
 			return exec, nil
 		}
 
-		// OnFail: route back to an agent step for a fix attempt.
 		if step.OnFail != "" {
 			maxIter := step.MaxFixIterations
 			if maxIter <= 0 {
@@ -199,62 +177,30 @@ func (e *Engine) Advance(ctx context.Context, exec *Execution) (*Execution, erro
 			if state.FixIterations < maxIter {
 				targetState := exec.StepStates[step.OnFail]
 				if targetState == nil {
-					e.logger.Error("on_fail target has no state entry",
-						"execution_id", exec.ID,
-						"step", step.ID,
-						"on_fail", step.OnFail,
-					)
 					state.Status = StepStatusFailed
 					exec.Status = "failed"
 					exec.UpdatedAt = time.Now()
 					return exec, nil
 				}
-
 				state.FixIterations++
 				state.RetryCount = 0
 				state.Status = StepStatusPending
-
-				// Reset the target agent step so it re-runs.
 				targetState.Status = StepStatusPending
 				targetState.Error = ""
-				targetState.Metadata = map[string]string{
-					"fix_context": result.Error,
-				}
-
+				targetState.Metadata = map[string]string{"fix_context": result.Error}
 				exec.CurrentStep = step.OnFail
 				exec.UpdatedAt = time.Now()
-				e.logger.Info("routing to on_fail step",
-					"execution_id", exec.ID,
-					"from_step", step.ID,
-					"to_step", step.OnFail,
-					"fix_iteration", state.FixIterations,
-					"max_iterations", maxIter,
-				)
 				return exec, nil
 			}
-			e.logger.Warn("fix iterations exhausted",
-				"execution_id", exec.ID,
-				"step", step.ID,
-				"iterations", state.FixIterations,
-			)
 		}
 
 		state.Status = StepStatusFailed
 		if step.Optional {
-			e.logger.Info("optional step failed, skipping",
-				"execution_id", exec.ID,
-				"step", step.ID,
-			)
 			state.Status = StepStatusSkipped
 			return e.advanceToNext(exec, step)
 		}
 		exec.Status = "failed"
 		exec.UpdatedAt = time.Now()
-		e.logger.Error("execution failed",
-			"execution_id", exec.ID,
-			"step", step.ID,
-			"error", result.Error,
-		)
 		return exec, nil
 
 	default:
@@ -272,18 +218,13 @@ func (e *Engine) advanceToNext(exec *Execution, step *Step) (*Execution, error) 
 		exec.Status = "completed"
 		exec.CurrentStep = ""
 		exec.UpdatedAt = time.Now()
-		e.logger.Info("execution completed",
-			"execution_id", exec.ID,
-		)
+		e.logger.Info("execution completed", "execution_id", exec.ID)
 		return exec, nil
 	}
 
 	exec.CurrentStep = step.Next
 	exec.UpdatedAt = time.Now()
-	e.logger.Info("advanced to step",
-		"execution_id", exec.ID,
-		"step", step.Next,
-	)
+	e.logger.Info("advanced to step", "execution_id", exec.ID, "step", step.Next)
 	return exec, nil
 }
 
@@ -304,9 +245,9 @@ func (e *Engine) ApproveHuman(ctx context.Context, exec *Execution) (*Execution,
 		return exec, fmt.Errorf("execution %s is not waiting for human approval (status: %s)", exec.ID, exec.Status)
 	}
 
-	bp, ok := e.registry.Get(exec.BlueprintName)
+	bp, ok := e.registry.Get(exec.BlueprintID)
 	if !ok {
-		return exec, fmt.Errorf("blueprint %q not found", exec.BlueprintName)
+		return exec, fmt.Errorf("blueprint %q not found", exec.BlueprintID)
 	}
 
 	step, err := e.GetStepByID(bp, exec.CurrentStep)
@@ -318,12 +259,6 @@ func (e *Engine) ApproveHuman(ctx context.Context, exec *Execution) (*Execution,
 	state.Status = StepStatusCompleted
 	exec.Status = "running"
 	exec.UpdatedAt = time.Now()
-
-	e.logger.Info("human step approved",
-		"execution_id", exec.ID,
-		"step", step.ID,
-	)
-
 	return e.advanceToNext(exec, step)
 }
 
@@ -334,5 +269,5 @@ func (e *Engine) GetStepByID(bp *Blueprint, stepID string) (*Step, error) {
 			return &bp.Steps[i], nil
 		}
 	}
-	return nil, fmt.Errorf("step %q not found in blueprint %q", stepID, bp.Name)
+	return nil, fmt.Errorf("step %q not found in blueprint %q", stepID, bp.ID)
 }

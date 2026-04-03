@@ -9,9 +9,9 @@ import (
 
 func TestLoadFile_Valid(t *testing.T) {
 	dir := t.TempDir()
-	yaml := `name: Test Blueprint
-description: A test blueprint
-trigger: manual
+	yaml := `id: test-workflow
+name: Test Blueprint
+description: A test workflow
 steps:
   - id: step1
     type: agent
@@ -39,13 +39,14 @@ steps:
 	if bp.Steps[0].Type != StepTypeAgent {
 		t.Errorf("step[0].Type = %q, want %q", bp.Steps[0].Type, StepTypeAgent)
 	}
-	if bp.Trigger != "manual" {
-		t.Errorf("trigger = %q, want %q", bp.Trigger, "manual")
+	if bp.ID != "test-workflow" {
+		t.Errorf("id = %q, want %q", bp.ID, "test-workflow")
 	}
 }
 
 func TestValidate_DuplicateStepIDs(t *testing.T) {
 	bp := &Blueprint{
+		ID:   "dup",
 		Name: "dup",
 		Steps: []Step{
 			{ID: "s1", Type: StepTypeAgent, Role: "a"},
@@ -63,6 +64,7 @@ func TestValidate_DuplicateStepIDs(t *testing.T) {
 
 func TestValidate_DanglingNextRef(t *testing.T) {
 	bp := &Blueprint{
+		ID:   "dangle",
 		Name: "dangle",
 		Steps: []Step{
 			{ID: "s1", Type: StepTypeAgent, Role: "a", Next: "nonexistent"},
@@ -79,6 +81,7 @@ func TestValidate_DanglingNextRef(t *testing.T) {
 
 func TestValidate_AgentWithoutRole(t *testing.T) {
 	bp := &Blueprint{
+		ID:   "no-role",
 		Name: "no-role",
 		Steps: []Step{
 			{ID: "s1", Type: StepTypeAgent},
@@ -95,6 +98,7 @@ func TestValidate_AgentWithoutRole(t *testing.T) {
 
 func TestValidate_DeterministicWithoutAction(t *testing.T) {
 	bp := &Blueprint{
+		ID:   "no-action",
 		Name: "no-action",
 		Steps: []Step{
 			{ID: "s1", Type: StepTypeDeterministic},
@@ -111,6 +115,7 @@ func TestValidate_DeterministicWithoutAction(t *testing.T) {
 
 func TestValidate_RejectsEmptyMessagesConfig(t *testing.T) {
 	bp := &Blueprint{
+		ID:   "empty-messages",
 		Name: "empty-messages",
 		Steps: []Step{
 			{ID: "s1", Type: StepTypeAgent, Role: "builder", Messages: &MessageRequests{}},
@@ -128,6 +133,7 @@ func TestValidate_RejectsEmptyMessagesConfig(t *testing.T) {
 
 func TestValidate_RejectsUnknownMessageSource(t *testing.T) {
 	bp := &Blueprint{
+		ID:   "unknown-message-source",
 		Name: "unknown-message-source",
 		Steps: []Step{
 			{ID: "fix", Type: StepTypeAgent, Role: "builder"},
@@ -146,6 +152,7 @@ func TestValidate_RejectsUnknownMessageSource(t *testing.T) {
 
 func TestValidate_UnreachableStepChain(t *testing.T) {
 	bp := &Blueprint{
+		ID:   "unreachable",
 		Name: "unreachable",
 		Steps: []Step{
 			{ID: "entry", Type: StepTypeAgent, Role: "planner", Next: "done"},
@@ -170,13 +177,15 @@ func TestValidate_UnreachableStepChain(t *testing.T) {
 func TestLoadDir_MultipleFiles(t *testing.T) {
 	dir := t.TempDir()
 
-	bp1 := `name: Alpha
+	bp1 := `id: alpha
+name: Alpha
 steps:
   - id: a1
     type: agent
     role: dev
 `
-	bp2 := `name: Beta
+	bp2 := `id: beta
+name: Beta
 steps:
   - id: b1
     type: deterministic
@@ -194,10 +203,10 @@ steps:
 	if len(bps) != 2 {
 		t.Fatalf("got %d blueprints, want 2", len(bps))
 	}
-	if _, ok := bps["Alpha"]; !ok {
-		t.Error("missing blueprint 'Alpha'")
+	if _, ok := bps["alpha"]; !ok {
+		t.Error("missing workflow 'alpha'")
 	}
-	if _, ok := bps["Beta"]; !ok {
-		t.Error("missing blueprint 'Beta'")
+	if _, ok := bps["beta"]; !ok {
+		t.Error("missing workflow 'beta'")
 	}
 }

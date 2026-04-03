@@ -1,11 +1,12 @@
-name: "Stream Execution"
-description: "Execute a single work stream: build, lint, review, merge_ready"
+id: build-review
+name: Build and review
+description: "Execute one work item: build, validate, review, and mark ready for merge"
 
 steps:
   - id: build
     type: agent
     role: builder
-    description: "Implement the stream's task"
+    description: Implement the work item
     commit: auto
     messages:
       commit: true
@@ -22,7 +23,7 @@ steps:
   - id: review
     type: agent
     role: reviewer
-    description: "Review the implementation"
+    description: Review the implementation
     commit: none
     next: merge_ready
 

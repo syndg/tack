@@ -23,9 +23,10 @@ const (
 
 // Blueprint defines a workflow as a sequence of steps.
 type Blueprint struct {
-	Name        string `yaml:"name" json:"name"`
-	Description string `yaml:"description" json:"description"`
-	Trigger     string `yaml:"trigger" json:"trigger"`
+	ID          string `yaml:"id" json:"id"`
+	Name        string `yaml:"name,omitempty" json:"name,omitempty"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	Default     bool   `yaml:"default,omitempty" json:"default,omitempty"`
 	Steps       []Step `yaml:"steps" json:"steps"`
 }
 
@@ -42,10 +43,10 @@ func (m *MessageRequests) Any() bool {
 
 // EscalationConfig controls how failed streams are escalated to humans.
 type EscalationConfig struct {
-	Context             string `yaml:"context,omitempty" json:"context,omitempty"`               // "full" | "minimal" | "error_only" (default: "full")
+	Context             string `yaml:"context,omitempty" json:"context,omitempty"` // "full" | "minimal" | "error_only" (default: "full")
 	IncludeAgentHistory bool   `yaml:"include_agent_history,omitempty" json:"include_agent_history,omitempty"`
-	Channel             string `yaml:"channel,omitempty" json:"channel,omitempty"`               // "default" | future: "discord", "slack"
-	Prompt              string `yaml:"prompt,omitempty" json:"prompt,omitempty"`                 // custom question for human
+	Channel             string `yaml:"channel,omitempty" json:"channel,omitempty"` // "default" | future: "discord", "slack"
+	Prompt              string `yaml:"prompt,omitempty" json:"prompt,omitempty"`   // custom question for human
 }
 
 // EffectiveContext returns the context level, defaulting to "full".
@@ -66,23 +67,24 @@ func (e *EscalationConfig) EffectivePrompt() string {
 
 // Step is a single node in a blueprint workflow.
 type Step struct {
-	ID               string            `yaml:"id" json:"id"`
-	Type             StepType          `yaml:"type" json:"type"`
-	Role             string            `yaml:"role,omitempty" json:"role,omitempty"`
-	Action           string            `yaml:"action,omitempty" json:"action,omitempty"`
-	Ref              string            `yaml:"ref,omitempty" json:"ref,omitempty"`
-	Description      string            `yaml:"description,omitempty" json:"description,omitempty"`
-	Next             string            `yaml:"next,omitempty" json:"next,omitempty"`
-	Retry            int               `yaml:"retry,omitempty" json:"retry,omitempty"`
-	Optional         bool              `yaml:"optional,omitempty" json:"optional,omitempty"`
-	Tools            *tools.ToolScope  `yaml:"tools,omitempty" json:"tools,omitempty"`
-	Commit           CommitMode        `yaml:"commit,omitempty" json:"commit,omitempty"`
-	Messages         *MessageRequests  `yaml:"messages,omitempty" json:"messages,omitempty"`
-	MessageSource    string            `yaml:"message_source,omitempty" json:"message_source,omitempty"`
-	OnFail           string            `yaml:"on_fail,omitempty" json:"on_fail,omitempty"`
-	MaxFixIterations int               `yaml:"max_fix_iterations,omitempty" json:"max_fix_iterations,omitempty"`
-	OnStreamFailure  string            `yaml:"on_stream_failure,omitempty" json:"on_stream_failure,omitempty"` // "escalate" | "fail" (blueprint_ref only)
-	Escalation       *EscalationConfig `yaml:"escalation,omitempty" json:"escalation,omitempty"`              // blueprint_ref only
+	ID                string            `yaml:"id" json:"id"`
+	Type              StepType          `yaml:"type" json:"type"`
+	Role              string            `yaml:"role,omitempty" json:"role,omitempty"`
+	Action            string            `yaml:"action,omitempty" json:"action,omitempty"`
+	Ref               string            `yaml:"ref,omitempty" json:"ref,omitempty"`
+	Foreach           string            `yaml:"foreach,omitempty" json:"foreach,omitempty"`
+	Description       string            `yaml:"description,omitempty" json:"description,omitempty"`
+	Next              string            `yaml:"next,omitempty" json:"next,omitempty"`
+	Retry             int               `yaml:"retry,omitempty" json:"retry,omitempty"`
+	Optional          bool              `yaml:"optional,omitempty" json:"optional,omitempty"`
+	Tools             *tools.ToolScope  `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Commit            CommitMode        `yaml:"commit,omitempty" json:"commit,omitempty"`
+	Messages          *MessageRequests  `yaml:"messages,omitempty" json:"messages,omitempty"`
+	MessageSource     string            `yaml:"message_source,omitempty" json:"message_source,omitempty"`
+	OnFail            string            `yaml:"on_fail,omitempty" json:"on_fail,omitempty"`
+	MaxFixIterations  int               `yaml:"max_fix_iterations,omitempty" json:"max_fix_iterations,omitempty"`
+	OnWorkItemFailure string            `yaml:"on_work_item_failure,omitempty" json:"on_work_item_failure,omitempty"` // "escalate" | "fail" (blueprint_ref only)
+	Escalation        *EscalationConfig `yaml:"escalation,omitempty" json:"escalation,omitempty"`                     // blueprint_ref only
 }
 
 // EffectiveCommitMode returns the commit mode for this step, defaulting to
@@ -111,11 +113,11 @@ const (
 
 // StepState tracks runtime state for a step within an execution.
 type StepState struct {
-	StepID         string            `json:"step_id"`
-	Status         StepStatus        `json:"status"`
-	RetryCount     int               `json:"retry_count"`
-	FixIterations  int               `json:"fix_iterations,omitempty"`
-	Error          string            `json:"error,omitempty"`
-	Output         string            `json:"output,omitempty"`
-	Metadata       map[string]string `json:"metadata,omitempty"`
+	StepID        string            `json:"step_id"`
+	Status        StepStatus        `json:"status"`
+	RetryCount    int               `json:"retry_count"`
+	FixIterations int               `json:"fix_iterations,omitempty"`
+	Error         string            `json:"error,omitempty"`
+	Output        string            `json:"output,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
 }

@@ -7,9 +7,9 @@ import (
 	"github.com/syndg/tack/internal/domain"
 )
 
-// SimpleOpts configures simple mode execution.
+// SimpleOpts configures the legacy single-plan helper.
 type SimpleOpts struct {
-	Blueprint    string   // blueprint name override (default: "hotfix")
+	Blueprint    string   // optional blueprint override; empty uses the coordinator default blueprint later
 	AutoApprove  bool     // skip approval step
 	QualityGates []string // override quality gates (empty = use config defaults)
 }
@@ -24,14 +24,9 @@ type SimpleOpts struct {
 //  3. If AutoApprove, approve the plan immediately
 //  4. Publish events
 func (s *Service) StartSimple(ctx context.Context, description string, opts SimpleOpts) (*domain.Objective, *domain.Plan, error) {
-	blueprint := opts.Blueprint
-	if blueprint == "" {
-		blueprint = "hotfix"
-	}
-
 	obj := &domain.Objective{
 		Description: description,
-		Blueprint:   blueprint,
+		Blueprint:   opts.Blueprint,
 		Status:      domain.ObjectiveStatusPlanning,
 	}
 

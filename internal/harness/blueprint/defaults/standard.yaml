@@ -1,30 +1,32 @@
-name: "Feature Implementation"
-description: "Plan, build, review, and merge a new feature"
-trigger: "default"
+id: standard
+name: Standard workflow
+default: true
+description: Plan, build, review, merge, and open a PR
 
 steps:
   - id: plan
     type: agent
     role: planner
-    description: "Explore codebase and decompose into streams"
+    description: Explore codebase and decompose into work items
     commit: none
     next: approve
 
   - id: approve
     type: human
-    description: "Review and approve the plan"
+    description: Review and approve the plan
     next: dispatch
 
   - id: dispatch
     type: deterministic
     action: dispatch_streams
-    description: "Spawn sandboxes and agents per stream"
-    next: per_stream
+    description: Spawn sandboxes and agents per work item
+    next: execute
 
-  - id: per_stream
+  - id: execute
     type: blueprint_ref
-    ref: ".tack/blueprints/stream.yaml"
-    on_stream_failure: escalate
+    ref: build-review
+    foreach: work_item
+    on_work_item_failure: escalate
     escalation:
       context: full
       include_agent_history: true
@@ -33,13 +35,13 @@ steps:
   - id: merge
     type: deterministic
     action: merge_queue
-    description: "Merge all stream branches, run quality gates"
+    description: Merge all work item branches and run quality gates
     next: create_pr
 
   - id: create_pr
     type: deterministic
     action: create_pr
-    description: "Push merger branch and create GitHub PR"
+    description: Push merger branch and create GitHub PR
     next: complete
 
   - id: complete

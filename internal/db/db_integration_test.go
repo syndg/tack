@@ -152,13 +152,13 @@ func TestExecutionStoreIntegration(t *testing.T) {
 	store := NewExecutionStore(database.Conn())
 	now := time.Now()
 	exec := &blueprint.Execution{
-		ID:            "exec-1",
-		BlueprintName: "Hotfix",
-		ObjectiveID:   "obj-1",
-		CurrentStep:   "fix",
-		Status:        "running",
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:          "exec-1",
+		BlueprintID: "standard",
+		ObjectiveID: "obj-1",
+		CurrentStep: "fix",
+		Status:      "running",
+		CreatedAt:   now,
+		UpdatedAt:   now,
 		StepStates: map[string]*blueprint.StepState{
 			"fix": {
 				StepID: "fix",
@@ -175,8 +175,8 @@ func TestExecutionStoreIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get execution: %v", err)
 	}
-	if got.BlueprintName != exec.BlueprintName {
-		t.Fatalf("blueprint name = %q, want %q", got.BlueprintName, exec.BlueprintName)
+	if got.BlueprintID != exec.BlueprintID {
+		t.Fatalf("blueprint id = %q, want %q", got.BlueprintID, exec.BlueprintID)
 	}
 	if got.StepStates["fix"].Status != blueprint.StepStatusRunning {
 		t.Fatalf("step status = %q, want %q", got.StepStates["fix"].Status, blueprint.StepStatusRunning)

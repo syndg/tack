@@ -18,9 +18,9 @@ import (
 
 // mockTracker implements AgentTracker for coordinator boundary tests.
 type mockTracker struct {
-	mu          sync.Mutex
-	tracked     map[string]bool
-	killCalls   []string
+	mu            sync.Mutex
+	tracked       map[string]bool
+	killCalls     []string
 	stopAllCalled bool
 	finishReturn  bool // wasKilled return value for Finish
 }
@@ -65,7 +65,7 @@ func (m *mockTracker) Count() int {
 type stubMergeEnqueuer struct{}
 
 func (s *stubMergeEnqueuer) EnqueueStream(_ context.Context, _ string) error { return nil }
-func (s *stubMergeEnqueuer) MergerSandboxID(_ string) string                { return "" }
+func (s *stubMergeEnqueuer) MergerSandboxID(_ string) string                 { return "" }
 
 // stubPlanCreator satisfies PlanCreator with no-ops.
 type stubPlanCreator struct{}
@@ -168,7 +168,7 @@ func (e *testEnv) createObjective(t *testing.T, id string) {
 		ID:          id,
 		Description: "test objective",
 		Status:      domain.ObjectiveStatusApproved,
-		Blueprint:   "Hotfix",
+		Blueprint:    "build-review",
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -189,12 +189,12 @@ func TestApprove_AbsorbsFullDance(t *testing.T) {
 	ctx := context.Background()
 	env.coord.ctx = ctx
 
-	// Create objective that uses the Feature Implementation blueprint (has human approve step).
+	// Create objective that uses the standard blueprint (has human approve step).
 	obj := &domain.Objective{
 		ID:          "obj-approve",
 		Description: "test approve",
 		Status:      domain.ObjectiveStatusApproved,
-		Blueprint:   "Feature Implementation",
+		Blueprint:    "standard",
 	}
 	if err := env.objectives.Create(ctx, obj); err != nil {
 		t.Fatalf("creating objective: %v", err)
@@ -254,13 +254,13 @@ func TestApprove_RejectsNonWaitingExecution(t *testing.T) {
 
 	// Create a running execution directly.
 	exec := &blueprint.Execution{
-		ID:            "exec-running",
-		BlueprintName: "Hotfix",
-		ObjectiveID:   "obj-x",
-		Status:        "running",
-		StepStates:    make(map[string]*blueprint.StepState),
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		ID:          "exec-running",
+		BlueprintID:  "build-review",
+		ObjectiveID: "obj-x",
+		Status:      "running",
+		StepStates:  make(map[string]*blueprint.StepState),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 	if err := env.executions.Create(ctx, exec); err != nil {
 		t.Fatalf("creating execution: %v", err)
@@ -308,15 +308,15 @@ func TestRetry_TrackedInActiveExecs(t *testing.T) {
 	}
 
 	failedExec := &blueprint.Execution{
-		ID:            "exec-failed",
-		BlueprintName: "Hotfix",
-		ObjectiveID:   "obj-retry",
-		StreamID:      "stream-retry",
-		ParentID:      "exec-parent",
-		Status:        "failed",
-		StepStates:    map[string]*blueprint.StepState{"fix": {StepID: "fix", Status: blueprint.StepStatusFailed, Error: "test error"}},
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		ID:          "exec-failed",
+		BlueprintID:  "build-review",
+		ObjectiveID: "obj-retry",
+		StreamID:    "stream-retry",
+		ParentID:    "exec-parent",
+		Status:      "failed",
+		StepStates:  map[string]*blueprint.StepState{"build": {StepID: "build", Status: blueprint.StepStatusFailed, Error: "test error"}},
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 	if err := env.executions.Create(ctx, failedExec); err != nil {
 		t.Fatalf("creating failed execution: %v", err)
@@ -342,13 +342,13 @@ func TestRetry_RejectsNonFailedExecution(t *testing.T) {
 	ctx := context.Background()
 
 	exec := &blueprint.Execution{
-		ID:            "exec-running-2",
-		BlueprintName: "Hotfix",
-		ObjectiveID:   "obj-y",
-		Status:        "running",
-		StepStates:    make(map[string]*blueprint.StepState),
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		ID:          "exec-running-2",
+		BlueprintID:  "build-review",
+		ObjectiveID: "obj-y",
+		Status:      "running",
+		StepStates:  make(map[string]*blueprint.StepState),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 	if err := env.executions.Create(ctx, exec); err != nil {
 		t.Fatalf("creating execution: %v", err)
@@ -403,15 +403,15 @@ func TestStop_CancelsRetryGoroutines(t *testing.T) {
 	})
 
 	failedExec := &blueprint.Execution{
-		ID:            "exec-stop-fail",
-		BlueprintName: "Hotfix",
-		ObjectiveID:   "obj-stop",
-		StreamID:      "stream-stop",
-		ParentID:      "exec-parent",
-		Status:        "failed",
-		StepStates:    map[string]*blueprint.StepState{"fix": {StepID: "fix", Status: blueprint.StepStatusFailed, Error: "fail"}},
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		ID:          "exec-stop-fail",
+		BlueprintID:  "build-review",
+		ObjectiveID: "obj-stop",
+		StreamID:    "stream-stop",
+		ParentID:    "exec-parent",
+		Status:      "failed",
+		StepStates:  map[string]*blueprint.StepState{"build": {StepID: "build", Status: blueprint.StepStatusFailed, Error: "fail"}},
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 	_ = env.executions.Create(ctx, failedExec)
 

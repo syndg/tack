@@ -47,7 +47,7 @@ func (c *Client) CreateObjective(ctx context.Context, description string) (*doma
 	return c.CreateObjectiveWithOptions(ctx, description, CreateObjectiveOptions{})
 }
 
-// CreateObjectiveWithOptions creates an objective with optional blueprint setting.
+// CreateObjectiveWithOptions creates an objective with optional blueprint selection.
 func (c *Client) CreateObjectiveWithOptions(ctx context.Context, description string, opts CreateObjectiveOptions) (*domain.Objective, error) {
 	body := struct {
 		Description string `json:"description"`
@@ -103,45 +103,6 @@ func (c *Client) ListObjectives(ctx context.Context) ([]domain.Objective, error)
 		return nil, fmt.Errorf("decoding objectives response: %w", err)
 	}
 	return objectives, nil
-}
-
-// CreateObjectiveSimpleResponse holds the response when creating an objective in simple mode.
-// The server auto-creates and approves a single-stream plan alongside the objective.
-type CreateObjectiveSimpleResponse struct {
-	Objective domain.Objective `json:"objective"`
-	Plan      domain.Plan      `json:"plan"`
-}
-
-// CreateObjectiveSimple creates an objective in simple mode (single-agent, no decomposition).
-// It POSTs /objectives with simple=true and an optional blueprint override.
-// The server responds with both the objective and the auto-approved plan.
-func (c *Client) CreateObjectiveSimple(ctx context.Context, description, blueprint string) (*CreateObjectiveSimpleResponse, error) {
-	body := struct {
-		Description string `json:"description"`
-		Blueprint   string `json:"blueprint,omitempty"`
-		Simple      bool   `json:"simple"`
-	}{
-		Description: description,
-		Blueprint:   blueprint,
-		Simple:      true,
-	}
-
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling request body: %w", err)
-	}
-
-	resp, err := c.do(ctx, http.MethodPost, "/objectives", bytes.NewReader(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("creating simple objective: %w", err)
-	}
-	defer closeBody(resp)
-
-	var result CreateObjectiveSimpleResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding simple objective response: %w", err)
-	}
-	return &result, nil
 }
 
 // PlanResponse represents a plan with its streams.
@@ -465,9 +426,9 @@ func (c *Client) ListBlueprints(ctx context.Context) ([]blueprint.Blueprint, err
 	return blueprints, nil
 }
 
-// GetBlueprint returns a single blueprint by name.
-func (c *Client) GetBlueprint(ctx context.Context, name string) (*blueprint.Blueprint, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/blueprints/"+name, nil)
+// GetBlueprint returns a single blueprint by ID.
+func (c *Client) GetBlueprint(ctx context.Context, id string) (*blueprint.Blueprint, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/blueprints/"+id, nil)
 	if err != nil {
 		return nil, fmt.Errorf("getting blueprint: %w", err)
 	}

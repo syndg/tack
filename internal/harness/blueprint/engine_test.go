@@ -10,13 +10,14 @@ import (
 func newTestRegistry(t *testing.T, bp *Blueprint) *Registry {
 	t.Helper()
 	r := NewRegistry()
-	r.blueprints[bp.Name] = bp
+	r.blueprints[bp.ID] = bp
 	return r
 }
 
 func testBlueprint() *Blueprint {
 	return &Blueprint{
-		Name: "test-bp",
+		ID:   "test-bp",
+		Name: "Test workflow",
 		Steps: []Step{
 			{ID: "s1", Type: StepTypeAgent, Role: "planner", Next: "s2"},
 			{ID: "s2", Type: StepTypeDeterministic, Action: "lint", Next: "s3"},
@@ -41,8 +42,8 @@ func TestStart_InitializesStepStates(t *testing.T) {
 	if exec.CurrentStep != "s1" {
 		t.Errorf("current_step = %q, want %q", exec.CurrentStep, "s1")
 	}
-	if exec.BlueprintName != "test-bp" {
-		t.Errorf("blueprint_name = %q, want %q", exec.BlueprintName, "test-bp")
+	if exec.BlueprintID != "test-bp" {
+		t.Errorf("blueprint_id = %q, want %q", exec.BlueprintID, "test-bp")
 	}
 	if exec.ObjectiveID != "obj-1" {
 		t.Errorf("objective_id = %q, want %q", exec.ObjectiveID, "obj-1")
@@ -107,7 +108,8 @@ func TestAdvance_CallsHandlerAndMoves(t *testing.T) {
 
 func TestAdvance_RetryOnFailure(t *testing.T) {
 	bp := &Blueprint{
-		Name: "retry-bp",
+		ID:   "retry-bp",
+		Name: "Retry workflow",
 		Steps: []Step{
 			{ID: "s1", Type: StepTypeAgent, Role: "dev", Retry: 2},
 		},
@@ -153,6 +155,7 @@ func TestAdvance_RetryOnFailure(t *testing.T) {
 
 func TestApproveHuman_UnblocksExecution(t *testing.T) {
 	bp := &Blueprint{
+		ID:   "human-bp",
 		Name: "human-bp",
 		Steps: []Step{
 			{ID: "s1", Type: StepTypeAgent, Role: "dev", Next: "s2"},
@@ -198,6 +201,7 @@ func TestApproveHuman_UnblocksExecution(t *testing.T) {
 
 func TestAdvance_PersistsOutputAndMetadata(t *testing.T) {
 	bp := &Blueprint{
+		ID:    "metadata-bp",
 		Name:  "metadata-bp",
 		Steps: []Step{{ID: "s1", Type: StepTypeAgent, Role: "builder"}},
 	}
@@ -230,6 +234,7 @@ func TestAdvance_PersistsOutputAndMetadata(t *testing.T) {
 
 func TestAdvance_OnFailRoutesBackToAgentWithFixContext(t *testing.T) {
 	bp := &Blueprint{
+		ID:   "fix-loop-bp",
 		Name: "fix-loop-bp",
 		Steps: []Step{
 			{ID: "fix", Type: StepTypeAgent, Role: "builder", Next: "lint"},
@@ -296,6 +301,7 @@ func TestAdvance_OnFailRoutesBackToAgentWithFixContext(t *testing.T) {
 
 func TestAdvance_OnFailStopsAfterMaxFixIterations(t *testing.T) {
 	bp := &Blueprint{
+		ID:   "fix-loop-limit-bp",
 		Name: "fix-loop-limit-bp",
 		Steps: []Step{
 			{ID: "fix", Type: StepTypeAgent, Role: "builder", Next: "lint"},

@@ -29,7 +29,7 @@ func LoadFile(path string) (*Blueprint, error) {
 }
 
 // LoadDir loads all blueprints from a directory (non-recursive).
-// Returns a map keyed by blueprint name.
+// Returns a map keyed by workflow ID.
 func LoadDir(dir string) (map[string]*Blueprint, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -55,7 +55,7 @@ func LoadDir(dir string) (map[string]*Blueprint, error) {
 			continue
 		}
 
-		blueprints[bp.Name] = bp
+		blueprints[bp.ID] = bp
 	}
 
 	if len(errs) > 0 {
@@ -75,8 +75,8 @@ func LoadDir(dir string) (map[string]*Blueprint, error) {
 func Validate(bp *Blueprint) error {
 	var errs []string
 
-	if bp.Name == "" {
-		errs = append(errs, "blueprint name is required")
+	if bp.ID == "" {
+		errs = append(errs, "workflow id is required")
 	}
 
 	if len(bp.Steps) == 0 {
@@ -132,14 +132,17 @@ func Validate(bp *Blueprint) error {
 			if step.Ref == "" {
 				errs = append(errs, fmt.Sprintf("blueprint_ref step %q must have a ref", step.ID))
 			}
+			if step.Foreach != "" && step.Foreach != "work_item" {
+				errs = append(errs, fmt.Sprintf("blueprint_ref step %q has invalid foreach %q (must be work_item)", step.ID, step.Foreach))
+			}
 			if step.Messages != nil {
 				errs = append(errs, fmt.Sprintf("blueprint_ref step %q cannot declare agent messages", step.ID))
 			}
 			if step.OnFail != "" {
 				errs = append(errs, fmt.Sprintf("blueprint_ref step %q cannot use on_fail (only deterministic steps can)", step.ID))
 			}
-			if step.OnStreamFailure != "" && step.OnStreamFailure != "escalate" && step.OnStreamFailure != "fail" {
-				errs = append(errs, fmt.Sprintf("blueprint_ref step %q has invalid on_stream_failure %q (must be escalate or fail)", step.ID, step.OnStreamFailure))
+			if step.OnWorkItemFailure != "" && step.OnWorkItemFailure != "escalate" && step.OnWorkItemFailure != "fail" {
+				errs = append(errs, fmt.Sprintf("blueprint_ref step %q has invalid on_work_item_failure %q (must be escalate or fail)", step.ID, step.OnWorkItemFailure))
 			}
 			if step.Escalation != nil {
 				ctx := step.Escalation.Context

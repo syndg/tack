@@ -30,7 +30,7 @@ func (s *ExecutionStore) Create(ctx context.Context, exec *blueprint.Execution) 
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO executions (id, blueprint_name, objective_id, current_step, step_states, status, parent_id, stream_id, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		exec.ID, exec.BlueprintName, exec.ObjectiveID, exec.CurrentStep,
+		exec.ID, exec.BlueprintID, exec.ObjectiveID, exec.CurrentStep,
 		string(stepStatesJSON), exec.Status, exec.ParentID, exec.StreamID,
 		exec.CreatedAt.Unix(), exec.UpdatedAt.Unix(),
 	)
@@ -76,7 +76,7 @@ func (s *ExecutionStore) ListByParent(ctx context.Context, parentID string) ([]b
 		var createdAt, updatedAt int64
 
 		if err := rows.Scan(
-			&exec.ID, &exec.BlueprintName, &exec.ObjectiveID, &exec.CurrentStep,
+			&exec.ID, &exec.BlueprintID, &exec.ObjectiveID, &exec.CurrentStep,
 			&stepStatesJSON, &exec.Status, &exec.ParentID, &exec.StreamID, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning sub-execution: %w", err)
@@ -104,7 +104,7 @@ func (s *ExecutionStore) scanExecution(row *sql.Row, ref string) (*blueprint.Exe
 	var createdAt, updatedAt int64
 
 	err := row.Scan(
-		&exec.ID, &exec.BlueprintName, &exec.ObjectiveID, &exec.CurrentStep,
+		&exec.ID, &exec.BlueprintID, &exec.ObjectiveID, &exec.CurrentStep,
 		&stepStatesJSON, &exec.Status, &exec.ParentID, &exec.StreamID, &createdAt, &updatedAt,
 	)
 	if err != nil {
@@ -167,7 +167,7 @@ func (s *ExecutionStore) List(ctx context.Context) ([]blueprint.Execution, error
 		var createdAt, updatedAt int64
 
 		if err := rows.Scan(
-			&exec.ID, &exec.BlueprintName, &exec.ObjectiveID, &exec.CurrentStep,
+			&exec.ID, &exec.BlueprintID, &exec.ObjectiveID, &exec.CurrentStep,
 			&stepStatesJSON, &exec.Status, &exec.ParentID, &exec.StreamID, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning execution: %w", err)

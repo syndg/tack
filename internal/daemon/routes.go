@@ -61,7 +61,7 @@ func (d *Daemon) registerRoutes() {
 
 	// Blueprints & System
 	d.mux.HandleFunc("GET /blueprints", d.handleListBlueprints)
-	d.mux.HandleFunc("GET /blueprints/{name}", d.handleGetBlueprint)
+	d.mux.HandleFunc("GET /blueprints/{id}", d.handleGetBlueprint)
 	d.mux.HandleFunc("GET /events", d.handleSSE)
 	d.mux.HandleFunc("GET /health", d.handleHealth)
 	d.mux.HandleFunc("GET /status", d.handleStatus)
@@ -104,10 +104,10 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleListBlueprints returns all available blueprints as a JSON array.
 func (d *Daemon) handleListBlueprints(w http.ResponseWriter, r *http.Request) {
-	names := d.blueprintRegistry.List()
-	blueprints := make([]blueprint.Blueprint, 0, len(names))
-	for _, name := range names {
-		bp, ok := d.blueprintRegistry.Get(name)
+	ids := d.blueprintRegistry.List()
+	blueprints := make([]blueprint.Blueprint, 0, len(ids))
+	for _, id := range ids {
+		bp, ok := d.blueprintRegistry.Get(id)
 		if ok {
 			blueprints = append(blueprints, *bp)
 		}
@@ -115,11 +115,11 @@ func (d *Daemon) handleListBlueprints(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, blueprints)
 }
 
-// handleGetBlueprint returns a specific blueprint by name.
+// handleGetBlueprint returns a specific blueprint by ID.
 func (d *Daemon) handleGetBlueprint(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+	id := r.PathValue("id")
 
-	bp, ok := d.blueprintRegistry.Get(name)
+	bp, ok := d.blueprintRegistry.Get(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "blueprint not found")
 		return

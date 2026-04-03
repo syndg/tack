@@ -113,10 +113,10 @@ func (c *Coordinator) Retry(ctx context.Context, failedExecID string, guidance s
 		return fmt.Errorf("stream %s is not failed (status: %s)", stream.ID, stream.Status)
 	}
 
-	// 3. Resolve the blueprint used by the failed sub-execution.
-	refBP, ok := c.engine.GetBlueprint(failedExec.BlueprintName)
+	// 3. Resolve the workflow used by the failed sub-execution.
+	refBP, ok := c.engine.GetBlueprint(failedExec.BlueprintID)
 	if !ok {
-		return fmt.Errorf("blueprint %q not found", failedExec.BlueprintName)
+		return fmt.Errorf("workflow %q not found", failedExec.BlueprintID)
 	}
 
 	// 4. Collect the last error from the failed execution for fix context.
@@ -146,7 +146,7 @@ func (c *Coordinator) Retry(ctx context.Context, failedExecID string, guidance s
 	}
 
 	// 7. Create a new sub-execution.
-	subExec, err := c.engine.Start(ctx, refBP.Name, failedExec.ObjectiveID)
+	subExec, err := c.engine.Start(ctx, refBP.ID, failedExec.ObjectiveID)
 	if err != nil {
 		_ = c.scheduler.MarkFailed(ctx, stream.ID)
 		return fmt.Errorf("starting retry sub-execution: %w", err)
@@ -308,7 +308,7 @@ func (c *Coordinator) checkPartialToCompleted(ctx context.Context, objectiveID s
 func (c *Coordinator) rePushMergerBranch(ctx context.Context, objectiveID string) bool {
 	mergerID := c.mergeEnqueuer.MergerSandboxID(objectiveID)
 	if mergerID == "" {
-		// No merger sandbox — likely a simple/hotfix objective with no merge step.
+		// No merger sandbox — likely a single-blueprint objective with no merge step.
 		return true
 	}
 	sb, err := c.spawner.GetSandbox(ctx, mergerID)

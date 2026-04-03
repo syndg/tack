@@ -6,136 +6,125 @@ import (
 	"testing"
 )
 
-func TestLoadDefaults_LoadsThreeBlueprints(t *testing.T) {
+func TestLoadDefaults_LoadsShippedWorkflows(t *testing.T) {
 	reg := NewRegistry()
 	if err := reg.LoadDefaults(); err != nil {
 		t.Fatalf("LoadDefaults: %v", err)
 	}
 
-	names := reg.List()
-	if len(names) != 3 {
-		t.Fatalf("got %d blueprints, want 3: %v", len(names), names)
+	ids := reg.List()
+	if len(ids) != 2 {
+		t.Fatalf("got %d workflows, want 2: %v", len(ids), ids)
 	}
 }
 
-func TestGetDefault_ReturnsFeature(t *testing.T) {
+func TestResolveDefault_ReturnsStandardWorkflow(t *testing.T) {
 	reg := NewRegistry()
 	if err := reg.LoadDefaults(); err != nil {
 		t.Fatalf("LoadDefaults: %v", err)
 	}
 
-	bp, ok := reg.GetDefault()
+	bp, err := reg.ResolveDefault()
+	if err != nil {
+		t.Fatalf("ResolveDefault: %v", err)
+	}
+	if bp.ID != "standard" {
+		t.Fatalf("default blueprint id = %q, want %q", bp.ID, "standard")
+	}
+	if !bp.Default {
+		t.Fatal("default blueprint should have Default=true")
+	}
+}
+
+func TestGet_ReturnsSpecificWorkflow(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.LoadDefaults(); err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+
+	bp, ok := reg.Get("build-review")
 	if !ok {
-		t.Fatal("GetDefault returned false")
+		t.Fatal("Get('build-review') returned false")
 	}
-	if bp.Name != "Feature Implementation" {
-		t.Errorf("default blueprint name = %q, want %q", bp.Name, "Feature Implementation")
+	if bp.Name != "Build and review" {
+		t.Fatalf("name = %q, want %q", bp.Name, "Build and review")
 	}
-	if bp.Trigger != "default" {
-		t.Errorf("trigger = %q, want %q", bp.Trigger, "default")
+
+	if _, ok := reg.Get("nonexistent"); ok {
+		t.Fatal("Get('nonexistent') should return false")
 	}
 }
 
-func TestGet_ReturnsSpecificBlueprint(t *testing.T) {
+func TestBuildReviewDefaultSteps(t *testing.T) {
 	reg := NewRegistry()
 	if err := reg.LoadDefaults(); err != nil {
 		t.Fatalf("LoadDefaults: %v", err)
 	}
 
-	bp, ok := reg.Get("Hotfix")
+	bp, ok := reg.Get("build-review")
 	if !ok {
-		t.Fatal("Get('Hotfix') returned false")
-	}
-	if bp.Name != "Hotfix" {
-		t.Errorf("name = %q, want %q", bp.Name, "Hotfix")
-	}
-
-	_, ok = reg.Get("Nonexistent")
-	if ok {
-		t.Error("Get('Nonexistent') should return false")
-	}
-}
-
-func TestGet_ResolvesNormalizedAliases(t *testing.T) {
-	reg := NewRegistry()
-	if err := reg.LoadDefaults(); err != nil {
-		t.Fatalf("LoadDefaults: %v", err)
-	}
-
-	cases := map[string]string{
-		"hotfix":                 "Hotfix",
-		"feature":                "Feature Implementation",
-		"feature implementation": "Feature Implementation",
-	}
-	for input, want := range cases {
-		bp, ok := reg.Get(input)
-		if !ok {
-			t.Fatalf("Get(%q) returned false", input)
-		}
-		if bp.Name != want {
-			t.Fatalf("Get(%q) = %q, want %q", input, bp.Name, want)
-		}
-	}
-}
-
-func TestStreamExecutionDefaultSteps(t *testing.T) {
-	reg := NewRegistry()
-	if err := reg.LoadDefaults(); err != nil {
-		t.Fatalf("LoadDefaults: %v", err)
-	}
-
-	bp, ok := reg.Get("Stream Execution")
-	if !ok {
-		t.Fatal("Get('Stream Execution') returned false")
+		t.Fatal("Get('build-review') returned false")
 	}
 	if len(bp.Steps) != 4 {
 		t.Fatalf("steps = %d, want 4", len(bp.Steps))
 	}
-
-	first := bp.Steps[0]
-	if first.ID != "build" {
-		t.Fatalf("first step id = %q, want %q", first.ID, "build")
-	}
-	if first.Type != StepTypeAgent {
-		t.Fatalf("first step type = %q, want %q", first.Type, StepTypeAgent)
-	}
-	if first.Role != "builder" {
-		t.Fatalf("first step role = %q, want %q", first.Role, "builder")
-	}
-	if first.Next != "lint" {
-		t.Fatalf("first step next = %q, want %q", first.Next, "lint")
+	if bp.Steps[0].ID != "build" {
+		t.Fatalf("first step id = %q, want build", bp.Steps[0].ID)
 	}
 }
 
-func TestLoadFromDir_OverridesExisting(t *testing.T) {
+func TestLoadFromDir_OverridesExistingByID(t *testing.T) {
 	reg := NewRegistry()
 	if err := reg.LoadDefaults(); err != nil {
 		t.Fatalf("LoadDefaults: %v", err)
 	}
 
-	// Create a custom blueprint that overrides "Hotfix".
 	dir := t.TempDir()
-	custom := `name: Hotfix
+	custom := `id: build-review
+name: Team build review
 description: Custom override
-trigger: manual
 steps:
   - id: custom1
     type: agent
     role: fixer
 `
-	if err := os.WriteFile(filepath.Join(dir, "hotfix.yaml"), []byte(custom), 0644); err != nil {
-		t.Fatalf("writing custom: %v", err)
+	if err := os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(custom), 0o644); err != nil {
+		t.Fatalf("writing custom workflow: %v", err)
 	}
 
 	if err := reg.LoadFromDir(dir); err != nil {
 		t.Fatalf("LoadFromDir: %v", err)
 	}
 
-	bp, ok := reg.Get("Hotfix")
+	bp, ok := reg.Get("build-review")
 	if !ok {
-		t.Fatal("Hotfix not found after override")
+		t.Fatal("build-review not found after override")
 	}
 	if bp.Description != "Custom override" {
-		t.Errorf("description = %q, want %q", bp.Description, "Custom override")
+		t.Fatalf("description = %q, want %q", bp.Description, "Custom override")
+	}
+}
+
+func TestLoadFromDir_RejectsMultipleDefaults(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.LoadDefaults(); err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+
+	dir := t.TempDir()
+	custom := `id: research
+name: Research
+default: true
+steps:
+  - id: ask
+    type: agent
+    role: planner
+`
+	if err := os.WriteFile(filepath.Join(dir, "research.yaml"), []byte(custom), 0o644); err != nil {
+		t.Fatalf("writing custom workflow: %v", err)
+	}
+
+	if err := reg.LoadFromDir(dir); err == nil {
+		t.Fatal("expected multiple-defaults error")
 	}
 }

@@ -10,7 +10,6 @@ import (
 
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/services/dispatch"
-	"github.com/syndg/tack/internal/services/planner"
 	"github.com/syndg/tack/internal/services/runs"
 )
 
@@ -18,25 +17,12 @@ import (
 type CreateObjectiveRequest struct {
 	Description string `json:"description"`
 	Blueprint   string `json:"blueprint,omitempty"`
-	Simple      bool   `json:"simple,omitempty"` // single-agent mode: creates and auto-approves a plan
-}
-
-// createObjectiveSimpleResponse is the response for POST /objectives when simple=true.
-type createObjectiveSimpleResponse struct {
-	Objective *domain.Objective `json:"objective"`
-	Plan      *domain.Plan      `json:"plan"`
 }
 
 // handleCreateObjective decodes a JSON body, creates a new objective, publishes
-// an event, and responds with the created objective.
-//
-// When simple=true: calls planningService.StartSimpleExecution to create,
-// auto-approve, and start a single-stream plan, returning
-// {"objective": {...}, "plan": {...}}.
-//
-// Default: creates the objective and publishes EventObjectiveCreated. The
-// coordinator picks it up and starts blueprint execution — which includes
-// the planner agent and human approval steps as defined in the blueprint.
+// an event, and responds with the created objective. The selected blueprint is
+// either provided explicitly on the objective or resolved by the coordinator
+// from the loaded blueprint registry.
 func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 	var req CreateObjectiveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -46,24 +32,6 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 	req.Description = strings.TrimSpace(req.Description)
 	if req.Description == "" {
 		writeError(w, http.StatusBadRequest, "description is required")
-		return
-	}
-
-	if req.Simple {
-		obj, plan, err := d.planningService.StartSimpleExecution(r.Context(), req.Description, planner.SimpleOpts{
-			Blueprint:   req.Blueprint,
-			AutoApprove: true,
-		})
-		if err != nil {
-			d.logger.Error("starting simple mode", "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to start simple mode")
-			return
-		}
-
-		writeJSON(w, http.StatusCreated, createObjectiveSimpleResponse{
-			Objective: obj,
-			Plan:      plan,
-		})
 		return
 	}
 

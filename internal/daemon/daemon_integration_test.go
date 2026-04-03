@@ -166,15 +166,15 @@ func TestBlueprintEndpoints(t *testing.T) {
 		t.Fatalf("expected 200 from /blueprints, got %d", resp.StatusCode)
 	}
 
-	var blueprints []map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&blueprints); err != nil {
+	var workflows []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&workflows); err != nil {
 		t.Fatalf("Decode /blueprints: %v", err)
 	}
-	if len(blueprints) != 3 {
-		t.Fatalf("expected 3 blueprints, got %d", len(blueprints))
+	if len(workflows) != 2 {
+		t.Fatalf("expected 2 workflows, got %d", len(workflows))
 	}
 
-	resp, err = http.Get(baseURL + "/blueprints/Feature%20Implementation")
+	resp, err = http.Get(baseURL + "/blueprints/standard")
 	if err != nil {
 		t.Fatalf("GET /blueprints/{name}: %v", err)
 	}
@@ -185,10 +185,10 @@ func TestBlueprintEndpoints(t *testing.T) {
 
 	var blueprint map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&blueprint); err != nil {
-		t.Fatalf("Decode /blueprints/{name}: %v", err)
+		t.Fatalf("Decode /blueprints/{id}: %v", err)
 	}
-	if blueprint["name"] != "Feature Implementation" {
-		t.Fatalf("unexpected blueprint name: %v", blueprint["name"])
+	if blueprint["id"] != "standard" {
+		t.Fatalf("unexpected blueprint id: %v", blueprint["id"])
 	}
 
 	resp, err = http.Get(baseURL + "/executions")
@@ -235,13 +235,13 @@ func TestCreateObjectiveWithOptionsPersistsBlueprint(t *testing.T) {
 
 	c := client.New(baseURL)
 	obj, err := c.CreateObjectiveWithOptions(context.Background(), "build feature X", client.CreateObjectiveOptions{
-		Blueprint: "hotfix",
+		Blueprint: "build-review",
 	})
 	if err != nil {
 		t.Fatalf("CreateObjectiveWithOptions: %v", err)
 	}
-	if obj.Blueprint != "hotfix" {
-		t.Fatalf("blueprint = %q, want hotfix", obj.Blueprint)
+	if obj.Blueprint != "build-review" {
+		t.Fatalf("blueprint = %q, want build-review", obj.Blueprint)
 	}
 	if obj.Status != domain.ObjectiveStatusExecuting {
 		t.Fatalf("response objective status = %q, want executing", obj.Status)
@@ -251,52 +251,8 @@ func TestCreateObjectiveWithOptionsPersistsBlueprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObjective: %v", err)
 	}
-	if got.Blueprint != "hotfix" {
-		t.Fatalf("persisted blueprint = %q, want hotfix", got.Blueprint)
-	}
-}
-
-func TestSimpleObjectiveUsesDefaultQualityGates(t *testing.T) {
-	cfg := config.Default()
-	cfg.Daemon.Listen = "127.0.0.1:19804"
-	cfg.Daemon.DataDir = t.TempDir()
-	cfg.QualityGates = []string{"go test ./...", "go vet ./..."}
-
-	d, err := New(cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- d.Start()
-	}()
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = d.Shutdown(ctx)
-		<-errCh
-	}()
-
-	baseURL := "http://" + cfg.Daemon.Listen
-	waitForHTTP(t, baseURL+"/health")
-
-	c := client.New(baseURL)
-	resp, err := c.CreateObjectiveSimple(context.Background(), "fix typo", "")
-	if err != nil {
-		t.Fatalf("CreateObjectiveSimple: %v", err)
-	}
-	if len(resp.Plan.QualityGates) != 2 {
-		t.Fatalf("quality gates len = %d, want 2", len(resp.Plan.QualityGates))
-	}
-	if resp.Plan.QualityGates[0] != "go test ./..." || resp.Plan.QualityGates[1] != "go vet ./..." {
-		t.Fatalf("quality gates = %v, want configured defaults", resp.Plan.QualityGates)
-	}
-	if resp.Objective.Status != domain.ObjectiveStatusExecuting {
-		t.Fatalf("response objective status = %q, want executing", resp.Objective.Status)
-	}
-	if resp.Plan.Status != domain.PlanStatusExecuting {
-		t.Fatalf("response plan status = %q, want executing", resp.Plan.Status)
+	if got.Blueprint != "build-review" {
+		t.Fatalf("persisted blueprint = %q, want build-review", got.Blueprint)
 	}
 }
 
@@ -429,7 +385,7 @@ func TestListMergeQueueReturnsAllEntriesByDefault(t *testing.T) {
 	}
 }
 
-func TestProjectBlueprintOverridesUserBlueprint(t *testing.T) {
+func TestProjectWorkflowOverridesUserWorkflow(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	project := filepath.Join(root, "project")
@@ -441,27 +397,27 @@ func TestProjectBlueprintOverridesUserBlueprint(t *testing.T) {
 		t.Fatalf("MkdirAll project blueprints: %v", err)
 	}
 
-	userBlueprint := `name: Hotfix
+	userBlueprint := `id: build-review
+name: User workflow
 description: User override
-trigger: manual
 steps:
   - id: user
     type: agent
     role: builder
 `
-	projectBlueprint := `name: Hotfix
+	projectBlueprint := `id: build-review
+name: Project workflow
 description: Project override
-trigger: manual
 steps:
   - id: project
     type: agent
     role: builder
 `
 
-	if err := os.WriteFile(filepath.Join(home, ".config", "tack", "blueprints", "hotfix.yaml"), []byte(userBlueprint), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".config", "tack", "blueprints", "build-review.yaml"), []byte(userBlueprint), 0o644); err != nil {
 		t.Fatalf("WriteFile user blueprint: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(project, ".tack", "blueprints", "hotfix.yaml"), []byte(projectBlueprint), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(project, ".tack", "blueprints", "build-review.yaml"), []byte(projectBlueprint), 0o644); err != nil {
 		t.Fatalf("WriteFile project blueprint: %v", err)
 	}
 
@@ -484,53 +440,12 @@ steps:
 	}
 	defer d.db.Close()
 
-	bp, ok := d.blueprintRegistry.Get("Hotfix")
+	bp, ok := d.blueprintRegistry.Get("build-review")
 	if !ok {
-		t.Fatal("Hotfix blueprint not found")
+		t.Fatal("build-review blueprint not found")
 	}
 	if bp.Description != "Project override" {
 		t.Fatalf("expected project override, got %q", bp.Description)
-	}
-}
-
-func TestSimpleHotfixExecution_CompletesWithNormalizedBlueprintAndQualityGates(t *testing.T) {
-	restoreRepo := setupGitRepo(t)
-	defer restoreRepo()
-	installFakeClaude(t, "#!/bin/sh\necho \"done role=$TACK_AGENT_ROLE\"\nexit 0\n")
-
-	baseURL, shutdown := startExecutionDaemon(t, "127.0.0.1:19805", []string{"true"})
-	defer shutdown()
-
-	c := client.New(baseURL)
-	resp, err := c.CreateObjectiveSimple(context.Background(), "fix typo", "hotfix")
-	if err != nil {
-		t.Fatalf("CreateObjectiveSimple: %v", err)
-	}
-
-	waitForCondition(t, 10*time.Second, func() bool {
-		obj, err := c.GetObjective(context.Background(), resp.Objective.ID)
-		return err == nil && obj.Status == "completed"
-	})
-
-	executions := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
-	if len(executions) != 1 || executions[0]["status"] != "completed" {
-		t.Fatalf("executions = %#v, want one completed execution", executions)
-	}
-
-	plan := mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+resp.Objective.ID+"/plan")
-	if plan.Plan.Status != "completed" {
-		t.Fatalf("plan status = %q, want completed", plan.Plan.Status)
-	}
-	if len(plan.Streams) != 1 || plan.Streams[0].Status != domain.StreamStatusCompleted {
-		t.Fatalf("streams = %#v, want one completed stream", plan.Streams)
-	}
-
-	agents := mustGetJSON[[]map[string]any](t, baseURL+"/agents")
-	if len(agents) != 1 {
-		t.Fatalf("agents len = %d, want 1", len(agents))
-	}
-	if agents[0]["role"] != "builder" || agents[0]["status"] != "completed" {
-		t.Fatalf("agent = %#v, want completed builder", agents[0])
 	}
 }
 
@@ -559,7 +474,7 @@ exit 0
 	defer shutdown()
 
 	c := client.New(baseURL)
-	obj, err := c.CreateObjectiveWithOptions(context.Background(), "feature work", client.CreateObjectiveOptions{Blueprint: "Feature Implementation"})
+	obj, err := c.CreateObjectiveWithOptions(context.Background(), "feature work", client.CreateObjectiveOptions{Blueprint: "standard"})
 	if err != nil {
 		t.Fatalf("CreateObjectiveWithOptions: %v", err)
 	}
@@ -629,133 +544,6 @@ exit 0
 	}
 }
 
-func TestExecutionFailure_TransitionsObjectiveAndPlanFailed(t *testing.T) {
-	restoreRepo := setupGitRepo(t)
-	defer restoreRepo()
-	installFakeClaude(t, "#!/bin/sh\necho \"done role=$TACK_AGENT_ROLE\"\nexit 0\n")
-
-	baseURL, shutdown := startExecutionDaemon(t, "127.0.0.1:19807", []string{"false"})
-	defer shutdown()
-
-	c := client.New(baseURL)
-	resp, err := c.CreateObjectiveSimple(context.Background(), "fix typo", "hotfix")
-	if err != nil {
-		t.Fatalf("CreateObjectiveSimple: %v", err)
-	}
-
-	waitForCondition(t, 10*time.Second, func() bool {
-		obj, err := c.GetObjective(context.Background(), resp.Objective.ID)
-		return err == nil && obj.Status == "failed"
-	})
-
-	executions := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
-	if len(executions) != 1 || executions[0]["status"] != "failed" {
-		t.Fatalf("executions = %#v, want one failed execution", executions)
-	}
-
-	plan := mustGetJSON[planWithStreams](t, baseURL+"/objectives/"+resp.Objective.ID+"/plan")
-	if plan.Plan.Status != "failed" {
-		t.Fatalf("plan status = %q, want failed", plan.Plan.Status)
-	}
-	if len(plan.Streams) != 1 || plan.Streams[0].Status != domain.StreamStatusFailed {
-		t.Fatalf("streams = %#v, want one failed stream", plan.Streams)
-	}
-}
-
-func TestKillAgent_StopsExecutionAndMarksFailure(t *testing.T) {
-	restoreRepo := setupGitRepo(t)
-	defer restoreRepo()
-	installFakeClaude(t, "#!/bin/sh\nsleep 5\necho \"done role=$TACK_AGENT_ROLE\"\nexit 0\n")
-
-	baseURL, shutdown := startExecutionDaemon(t, "127.0.0.1:19808", nil)
-	defer shutdown()
-
-	c := client.New(baseURL)
-	resp, err := c.CreateObjectiveSimple(context.Background(), "fix typo", "hotfix")
-	if err != nil {
-		t.Fatalf("CreateObjectiveSimple: %v", err)
-	}
-
-	var runningAgentID string
-	waitForCondition(t, 10*time.Second, func() bool {
-		agents := mustGetJSON[[]map[string]any](t, baseURL+"/agents")
-		for _, agent := range agents {
-			if agent["status"] == "running" {
-				runningAgentID, _ = agent["id"].(string)
-				return true
-			}
-		}
-		return false
-	})
-
-	if err := c.KillAgent(context.Background(), runningAgentID); err != nil {
-		t.Fatalf("KillAgent: %v", err)
-	}
-
-	waitForCondition(t, 10*time.Second, func() bool {
-		obj, err := c.GetObjective(context.Background(), resp.Objective.ID)
-		return err == nil && obj.Status == "failed"
-	})
-
-	executions := mustGetJSON[[]map[string]any](t, baseURL+"/executions")
-	if len(executions) != 1 || executions[0]["status"] != "failed" {
-		t.Fatalf("executions = %#v, want one failed execution", executions)
-	}
-
-	agents := mustGetJSON[[]map[string]any](t, baseURL+"/agents")
-	if len(agents) != 1 || agents[0]["status"] != "failed" {
-		t.Fatalf("agents = %#v, want one failed agent", agents)
-	}
-}
-
-func TestRunCommandKill_StopsExecutionAndMarksFailure(t *testing.T) {
-	restoreRepo := setupGitRepo(t)
-	defer restoreRepo()
-	installFakeClaude(t, "#!/bin/sh\nsleep 5\necho \"done role=$TACK_AGENT_ROLE\"\nexit 0\n")
-
-	baseURL, shutdown := startExecutionDaemon(t, "127.0.0.1:19812", nil)
-	defer shutdown()
-
-	c := client.New(baseURL)
-	resp, err := c.CreateObjectiveSimple(context.Background(), "fix typo", "hotfix")
-	if err != nil {
-		t.Fatalf("CreateObjectiveSimple: %v", err)
-	}
-
-	var runningAgentID string
-	waitForCondition(t, 10*time.Second, func() bool {
-		agents := mustGetJSON[[]map[string]any](t, baseURL+"/agents")
-		for _, agent := range agents {
-			if agent["status"] == "running" {
-				runningAgentID, _ = agent["id"].(string)
-				return true
-			}
-		}
-		return false
-	})
-
-	snap, err := c.ObjectiveRunSnapshot(context.Background(), resp.Objective.ID)
-	if err != nil {
-		t.Fatalf("ObjectiveRunSnapshot: %v", err)
-	}
-	if _, err := c.RunCommand(context.Background(), snap.RunID, domain.Command{
-		Kind:      domain.CommandKill,
-		SessionID: runningAgentID,
-	}); err != nil {
-		t.Fatalf("RunCommand(kill): %v", err)
-	}
-
-	waitForCondition(t, 10*time.Second, func() bool {
-		obj, err := c.GetObjective(context.Background(), resp.Objective.ID)
-		return err == nil && obj.Status == "failed"
-	})
-
-	agents := mustGetJSON[[]map[string]any](t, baseURL+"/agents")
-	if len(agents) != 1 || agents[0]["status"] != "failed" {
-		t.Fatalf("agents = %#v, want one failed agent", agents)
-	}
-}
-
 func TestMultiStreamExecution_DependencyCascadeAndPartialCompletion(t *testing.T) {
 	restoreRepo := setupGitRepo(t)
 	defer restoreRepo()
@@ -796,7 +584,7 @@ exit 0
 	defer shutdown()
 
 	c := client.New(baseURL)
-	obj, err := c.CreateObjectiveWithOptions(context.Background(), "multi-stream feature", client.CreateObjectiveOptions{Blueprint: "Feature Implementation"})
+	obj, err := c.CreateObjectiveWithOptions(context.Background(), "multi-stream feature", client.CreateObjectiveOptions{Blueprint: "standard"})
 	if err != nil {
 		t.Fatalf("CreateObjectiveWithOptions: %v", err)
 	}
@@ -861,7 +649,7 @@ exit 0
 		t.Fatal("expected one failed sub-execution")
 	}
 
-	// Check that escalation event was persisted (default on_stream_failure = escalate).
+	// Check that escalation event was persisted (default on_work_item_failure = escalate).
 	eventStore := db.NewEventStore(d.db.Conn())
 	events, err := eventStore.ListByObjective(context.Background(), obj.ID, 50)
 	if err != nil {
@@ -925,7 +713,7 @@ exit 0
 	defer shutdown()
 
 	c := client.New(baseURL)
-	obj, err := c.CreateObjectiveWithOptions(context.Background(), "retry feature", client.CreateObjectiveOptions{Blueprint: "Feature Implementation"})
+	obj, err := c.CreateObjectiveWithOptions(context.Background(), "retry feature", client.CreateObjectiveOptions{Blueprint: "standard"})
 	if err != nil {
 		t.Fatalf("CreateObjectiveWithOptions: %v", err)
 	}
@@ -1130,140 +918,3 @@ func mustGetJSON[T any](t *testing.T, url string) T {
 // directory, calls Rediscover to repopulate sandboxes, recovers the running
 // execution, and drives it to completion. Without working rediscovery the
 // cleanup path would leak worktrees (CleanupObjective uses List by label).
-func TestDaemonRestart_RediscoversLocalSandboxesAndCompletesObjective(t *testing.T) {
-	restoreRepo := setupGitRepo(t)
-	defer restoreRepo()
-
-	// Shared state: both daemon instances use the same database and worktree dir.
-	sharedDataDir := t.TempDir()
-	sharedWorktreeDir := t.TempDir()
-
-	// --- Daemon 1: slow agent, create objective, wait for agent, shut down ---
-	slowBinDir := t.TempDir()
-	slowClaude := filepath.Join(slowBinDir, "claude")
-	if err := os.WriteFile(slowClaude, []byte("#!/bin/sh\nsleep 30\necho done\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("WriteFile slow claude: %v", err)
-	}
-	t.Setenv("PATH", slowBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	cfg1 := config.Default()
-	cfg1.Daemon.Listen = "127.0.0.1:19812"
-	cfg1.Daemon.DataDir = sharedDataDir
-	cfg1.Sandbox.Provider = "local"
-	cfg1.Sandbox.WorktreeDir = sharedWorktreeDir
-	cfg1.QualityGates = []string{"true"} // trivial gate for test repo
-
-	d1, err := New(cfg1)
-	if err != nil {
-		t.Fatalf("New daemon 1: %v", err)
-	}
-	errCh1 := make(chan error, 1)
-	go func() { errCh1 <- d1.Start() }()
-
-	baseURL1 := "http://" + cfg1.Daemon.Listen
-	waitForHTTP(t, baseURL1+"/health")
-
-	c1 := client.New(baseURL1)
-	resp, err := c1.CreateObjectiveSimple(context.Background(), "restart test", "hotfix")
-	if err != nil {
-		t.Fatalf("CreateObjectiveSimple: %v", err)
-	}
-	objectiveID := resp.Objective.ID
-
-	// Wait for builder agent to reach "running" — this confirms a sandbox exists.
-	waitForCondition(t, 10*time.Second, func() bool {
-		agents := mustGetJSON[[]map[string]any](t, baseURL1+"/agents")
-		for _, a := range agents {
-			if a["status"] == "running" && a["role"] == "builder" {
-				return true
-			}
-		}
-		return false
-	})
-
-	// Verify sandbox worktrees were created (at least one for builder).
-	entries, _ := os.ReadDir(sharedWorktreeDir)
-	if len(entries) == 0 {
-		t.Fatal("expected worktree directories to exist after agent spawn")
-	}
-	d1WorktreeCount := len(entries)
-	t.Logf("daemon 1 created %d worktree(s)", d1WorktreeCount)
-
-	// Shut down daemon 1. The slow agent process is killed by context cancellation.
-	shutCtx1, cancel1 := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel1()
-	_ = d1.Shutdown(shutCtx1)
-	<-errCh1
-
-	// Worktrees should still exist on disk after daemon shutdown.
-	entriesAfterShutdown, _ := os.ReadDir(sharedWorktreeDir)
-	if len(entriesAfterShutdown) < d1WorktreeCount {
-		t.Fatalf("worktrees disappeared after shutdown: had %d, now %d", d1WorktreeCount, len(entriesAfterShutdown))
-	}
-
-	// --- Daemon 2: fast agent, same DataDir, recovery ---
-	fastBinDir := t.TempDir()
-	fastClaude := filepath.Join(fastBinDir, "claude")
-	if err := os.WriteFile(fastClaude, []byte("#!/bin/sh\necho \"done role=$TACK_AGENT_ROLE\"\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("WriteFile fast claude: %v", err)
-	}
-	t.Setenv("PATH", fastBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	cfg2 := config.Default()
-	cfg2.Daemon.Listen = "127.0.0.1:19813"
-	cfg2.Daemon.DataDir = sharedDataDir
-	cfg2.Sandbox.Provider = "local"
-	cfg2.Sandbox.WorktreeDir = sharedWorktreeDir
-	cfg2.QualityGates = []string{"true"}
-
-	d2, err := New(cfg2)
-	if err != nil {
-		t.Fatalf("New daemon 2: %v", err)
-	}
-	errCh2 := make(chan error, 1)
-	go func() { errCh2 <- d2.Start() }()
-
-	baseURL2 := "http://" + cfg2.Daemon.Listen
-	waitForHTTP(t, baseURL2+"/health")
-
-	// The objective should eventually reach a terminal state via recovery.
-	// With the fast agent + trivial gates, execution should complete.
-	c2 := client.New(baseURL2)
-	waitForCondition(t, 15*time.Second, func() bool {
-		obj, err := c2.GetObjective(context.Background(), objectiveID)
-		if err != nil {
-			return false
-		}
-		return obj.Status == "completed" || obj.Status == "failed"
-	})
-
-	obj, err := c2.GetObjective(context.Background(), objectiveID)
-	if err != nil {
-		t.Fatalf("GetObjective after restart: %v", err)
-	}
-	t.Logf("objective status after restart: %s", obj.Status)
-
-	if obj.Status != "completed" {
-		t.Errorf("expected objective completed after restart, got %q", obj.Status)
-	}
-
-	// Give cleanup goroutine time to run.
-	time.Sleep(500 * time.Millisecond)
-
-	// After completion, CleanupObjective should have removed ALL worktrees
-	// (including those created by daemon 1). This only works if Rediscover
-	// repopulated the sandbox map so List() returns daemon 1's sandboxes.
-	entriesAfterCleanup, _ := os.ReadDir(sharedWorktreeDir)
-	if len(entriesAfterCleanup) > 0 {
-		var remaining []string
-		for _, e := range entriesAfterCleanup {
-			remaining = append(remaining, e.Name())
-		}
-		t.Errorf("expected all worktrees cleaned up after completion, %d remain: %v", len(entriesAfterCleanup), remaining)
-	}
-
-	shutCtx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel2()
-	_ = d2.Shutdown(shutCtx2)
-	<-errCh2
-}

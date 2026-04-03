@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/syndg/tack/internal/domain"
@@ -36,7 +35,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 	}
 
 	// In a sub-execution, the stream is identified by exec.StreamID.
-	// For top-level single-stream executions (e.g. hotfix), fall back to
+	// For top-level single-blueprint executions, fall back to
 	// singleStreamForObjective.
 	var stream *domain.Stream
 	if exec.StreamID != "" {
@@ -224,6 +223,13 @@ type streamResult struct {
 // them concurrently. Handles dependency cascade, failure escalation, and partial
 // completion.
 func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error) {
+	if step.Foreach != "work_item" {
+		return blueprint.StepResult{
+			Status: blueprint.StepStatusFailed,
+			Error:  fmt.Sprintf("blueprint_ref step %q must declare foreach: work_item", step.ID),
+		}, nil
+	}
+
 	// 1. Resolve the referenced blueprint.
 	refBP := c.resolveBlueprint(step.Ref)
 	if refBP == nil {
@@ -289,9 +295,9 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 	}
 
 	// Determine failure policy.
-	onStreamFailure := step.OnStreamFailure
-	if onStreamFailure == "" {
-		onStreamFailure = "escalate"
+	onWorkItemFailure := step.OnWorkItemFailure
+	if onWorkItemFailure == "" {
+		onWorkItemFailure = "escalate"
 	}
 
 	// 3. Subscribe to stream-ready events for cascade.
@@ -334,7 +340,7 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 			if res.Error != "" {
 				failures = append(failures, fmt.Sprintf("stream %s: %s", res.StreamID, res.Error))
 
-				if onStreamFailure == "escalate" {
+				if onWorkItemFailure == "escalate" {
 					c.escalateStreamFailure(ctx, exec, step, res.StreamID, res.Error)
 				}
 
@@ -393,15 +399,9 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
 }
 
-// resolveBlueprint resolves a blueprint ref (e.g., ".tack/blueprints/stream.yaml")
-// to a loaded blueprint by trying the ref as-is and by base filename alias.
+// resolveBlueprint resolves a blueprint ref by blueprint ID.
 func (c *Coordinator) resolveBlueprint(ref string) *blueprint.Blueprint {
 	if bp, ok := c.engine.GetBlueprint(ref); ok {
-		return bp
-	}
-	// Try base filename without extension: ".tack/blueprints/stream.yaml" → "stream"
-	base := strings.TrimSuffix(filepath.Base(ref), filepath.Ext(ref))
-	if bp, ok := c.engine.GetBlueprint(base); ok {
 		return bp
 	}
 	return nil
@@ -422,7 +422,7 @@ func (c *Coordinator) startStreamSubExecution(
 	}
 
 	// Create sub-execution.
-	subExec, err := c.engine.Start(ctx, refBP.Name, parentExec.ObjectiveID)
+	subExec, err := c.engine.Start(ctx, refBP.ID, parentExec.ObjectiveID)
 	if err != nil {
 		_ = c.scheduler.MarkFailed(ctx, stream.ID)
 		return fmt.Errorf("starting sub-execution: %w", err)
@@ -447,7 +447,7 @@ func (c *Coordinator) startStreamSubExecution(
 	c.logger.Info("started stream sub-execution",
 		"stream_id", stream.ID,
 		"sub_execution_id", subExec.ID,
-		"blueprint", refBP.Name,
+		"blueprint_id", refBP.ID,
 		"parent_execution_id", parentExec.ID,
 	)
 

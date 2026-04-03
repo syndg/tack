@@ -19,7 +19,7 @@ type Objective struct {
 	ID           string          `json:"id"`
 	Description  string          `json:"description"`
 	Status       ObjectiveStatus `json:"status"`
-	Blueprint    string          `json:"blueprint"`
+	Blueprint    string          `json:"blueprint,omitempty"`
 	PlanningMode string          `json:"planning_mode,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 	UpdatedAt    time.Time       `json:"updated_at"`
@@ -48,15 +48,15 @@ type Plan struct {
 }
 
 type Stream struct {
-	ID           string    `json:"id"`
-	PlanID       string    `json:"plan_id"`
-	Title        string    `json:"title"`
-	Description  string    `json:"description"`
-	FileScope    []string  `json:"file_scope"`
-	Dependencies []string  `json:"dependencies"`
+	ID           string       `json:"id"`
+	PlanID       string       `json:"plan_id"`
+	Title        string       `json:"title"`
+	Description  string       `json:"description"`
+	FileScope    []string     `json:"file_scope"`
+	Dependencies []string     `json:"dependencies"`
 	Status       StreamStatus `json:"status"`
-	ExecutionID  string    `json:"execution_id,omitempty"` // sub-execution driving this stream
-	CreatedAt    time.Time `json:"created_at"`
+	ExecutionID  string       `json:"execution_id,omitempty"` // sub-execution driving this stream
+	CreatedAt    time.Time    `json:"created_at"`
 }
 
 // Agent sessions
@@ -122,7 +122,6 @@ type MailMessage struct {
 	Read      bool      `json:"read"`
 	CreatedAt time.Time `json:"created_at"`
 }
-
 
 // Stream statuses
 

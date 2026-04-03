@@ -118,7 +118,7 @@ func (e *dispatchTestEnv) createObjective(t *testing.T, id string, status domain
 		ID:          id,
 		Description: "test objective " + id,
 		Status:      status,
-		Blueprint:   "Hotfix",
+		Blueprint:    "build-review",
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}

@@ -10,10 +10,10 @@ func TestDefaultsLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadDir: %v", err)
 	}
-	if len(bps) != 3 {
-		t.Fatalf("expected 3 blueprints, got %d", len(bps))
+	if len(bps) != 2 {
+		t.Fatalf("expected 2 workflows, got %d", len(bps))
 	}
-	for name, bp := range bps {
-		t.Logf("%s: %d steps, trigger=%q", name, len(bp.Steps), bp.Trigger)
+	for id, bp := range bps {
+		t.Logf("%s: %d steps, default=%v", id, len(bp.Steps), bp.Default)
 	}
 }

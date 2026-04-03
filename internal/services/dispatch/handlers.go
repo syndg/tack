@@ -566,7 +566,7 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 }
 
 // findSandboxForObjective locates an active agent sandbox for the given objective.
-// Prefers a lead agent sandbox; falls back to any agent sandbox (e.g. builder in hotfix).
+// Prefers a lead agent sandbox; falls back to any agent sandbox (e.g. a single-blueprint builder-only flow).
 func (h *Handlers) findSandboxForObjective(ctx context.Context, objectiveID string) (sandbox.Sandbox, error) {
 	sessions, err := h.agents.ListByObjective(ctx, objectiveID)
 	if err != nil {
@@ -629,7 +629,7 @@ func (h *Handlers) findMergerSandbox(ctx context.Context, objectiveID string) (s
 		return found, nil
 	}
 
-	// No merger sandbox found — fall back for hotfix-style single-stream blueprints.
+	// No merger sandbox found — fall back for single-blueprint single-stream executions.
 	return h.findSandboxForObjective(ctx, objectiveID)
 }
 
