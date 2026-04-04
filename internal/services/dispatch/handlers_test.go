@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
@@ -310,7 +311,7 @@ func TestCreatePR_UsesRuntimeGeneratedMessages(t *testing.T) {
 		sandboxProvider: &handlersTestSandboxProvider{sb: sb},
 		baseBranch:      "main",
 		creds:           creds,
-		modelProvider:   "anthropic",
+		runtimeAuth:     config.RuntimeAuthConfig{Mode: "tack", Runtime: "claude-code", Provider: "anthropic", CredentialRef: "anthropic"},
 		defaultModel:    "deterministic-model",
 		githubAPIBase:   server.URL,
 		logger:          env.logger,

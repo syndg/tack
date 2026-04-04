@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/runtime/claudecode"
 	"github.com/syndg/tack/internal/runtime/pi"
+	"github.com/syndg/tack/internal/runtimeauth"
 	"github.com/syndg/tack/internal/sandbox"
 	"github.com/syndg/tack/internal/sandbox/daytona"
 	"github.com/syndg/tack/internal/sandbox/local"
@@ -223,6 +225,21 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 		}
 	}
 	cfg.ExpandPaths()
+	binding := cfg.EffectiveRuntimeAuth()
+	adapter, err := runtimeauth.New(binding.Runtime)
+	if err != nil {
+		return nil, err
+	}
+	probe, err := adapter.Probe(context.Background())
+	if err != nil {
+		m.logger.Warn("runtime auth probe failed", "runtime", binding.Runtime, "project_id", project.ID, "error", err)
+	}
+	if err := runtimeauth.ValidateBinding(adapter, binding, cfg.Sandbox.Provider); err != nil {
+		return nil, err
+	}
+	if binding.Mode == runtimeauth.ModeNative && err == nil && !slices.Contains(probe.NativeProviders, binding.Provider) {
+		return nil, fmt.Errorf("native auth for provider %s was not detected for runtime %s", binding.Provider, binding.Runtime)
+	}
 
 	bpRegistry := blueprint.NewRegistry()
 	if err := bpRegistry.LoadDefaults(); err != nil {
@@ -288,7 +305,7 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 		RulesEngine:        rulesEng,
 		ToolCurator:        toolCurator,
 		Credentials:        m.creds,
-		ModelProvider:      effectiveModelProvider(&cfg),
+		RuntimeAuth:        binding,
 		AgentModel:         cfg.EffectiveAgentModel(),
 		PlannerModel:       cfg.EffectivePlannerModel(),
 		DeterministicModel: cfg.EffectiveSmallTaskModel(),
@@ -375,21 +392,15 @@ func newLocalProvider(projectRoot string, cfg *config.Config, logger *slog.Logge
 func newAgentRuntime(cfg *config.Config, logger *slog.Logger) runtime.AgentRuntime {
 	switch cfg.Agents.Runtime {
 	case "pi":
+		binding := cfg.EffectiveRuntimeAuth()
 		return pi.New(pi.RuntimeConfig{
 			Model:         cfg.EffectiveAgentModel(),
-			Provider:      cfg.Agents.Pi.Provider,
+			Provider:      binding.Provider,
 			ThinkingLevel: cfg.Agents.Pi.ThinkingLevel,
 		}, logger)
 	default:
 		return claudecode.New(cfg.EffectiveAgentModel(), logger)
 	}
-}
-
-func effectiveModelProvider(cfg *config.Config) string {
-	if cfg.Agents.Pi.Provider != "" {
-		return cfg.Agents.Pi.Provider
-	}
-	return "anthropic"
 }
 
 func userBlueprintsDir() string {

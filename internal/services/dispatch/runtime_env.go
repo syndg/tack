@@ -3,27 +3,15 @@ package dispatch
 import (
 	"log/slog"
 
+	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
+	"github.com/syndg/tack/internal/runtimeauth"
 )
 
-func injectRuntimeCredentials(creds *credentials.Store, provider string, logger *slog.Logger, envVars map[string]string) {
-	if creds == nil {
-		return
+func injectRuntimeCredentials(creds *credentials.Store, binding config.RuntimeAuthConfig, logger *slog.Logger, envVars map[string]string) {
+	if err := runtimeauth.InjectEnv(binding, creds, logger, envVars); err != nil {
+		logger.Warn("credential injection failed", "runtime", binding.Runtime, "provider", binding.Provider, "mode", binding.Mode, "error", err)
 	}
-	if provider == "" {
-		return
-	}
-	resolved, err := creds.ModelProvider(provider)
-	if err != nil {
-		logger.Warn("credential injection: model provider not found", "provider", provider, "error", err)
-		return
-	}
-	envName, ok := providerEnvVars[provider]
-	if !ok {
-		logger.Warn("credential injection: no env var mapping for provider", "provider", provider)
-		return
-	}
-	envVars[envName] = resolved.Value
 }
 
 func injectRuntimeGitIdentity(name, email string, envVars map[string]string) {

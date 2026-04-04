@@ -165,8 +165,7 @@ type Config struct {
 	// Credentials provides API keys and tokens for agent injection.
 	Credentials *credentials.Store
 
-	// ModelProvider is the default model provider name (e.g., "anthropic").
-	ModelProvider      string
+	RuntimeAuth        config.RuntimeAuthConfig
 	AgentModel         string
 	PlannerModel       string
 	DeterministicModel string
@@ -267,7 +266,7 @@ func New(cfg Config) (*Service, error) {
 		spawner := dispatch.NewSpawner(
 			cfg.Agents, cfg.AgentRuntime, cfg.SandboxProvider,
 			cfg.RulesEngine, cfg.ToolCurator, cfg.EventBus,
-			cfg.Credentials, cfg.ModelProvider, logger, cfg.DaemonURL,
+			cfg.Credentials, cfg.RuntimeAuth, logger, cfg.DaemonURL,
 			cfg.GitAuthorName, cfg.GitAuthorEmail,
 		)
 
@@ -284,7 +283,7 @@ func New(cfg Config) (*Service, error) {
 			scheduler, cfg.GateRunner, cfg.Lifecycle, cfg.MergeProcessor,
 			cfg.AgentRuntime,
 			cfg.Plans, cfg.Streams, cfg.Objectives, cfg.Executions, cfg.Agents,
-			cfg.SandboxProvider, cfg.EventBus, cfg.BaseBranch, cfg.Credentials, cfg.ModelProvider, cfg.DeterministicModel, logger,
+			cfg.SandboxProvider, cfg.EventBus, cfg.BaseBranch, cfg.Credentials, cfg.RuntimeAuth, cfg.DeterministicModel, logger,
 		)
 		cfg.Engine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
 		cfg.Engine.RegisterHandler(blueprint.StepTypeHuman, handlers.HandleHuman)

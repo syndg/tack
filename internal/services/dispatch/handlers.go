@@ -50,7 +50,7 @@ type Handlers struct {
 	eventBus        *events.PersistentBus
 	baseBranch      string
 	creds           *credentials.Store
-	modelProvider   string
+	runtimeAuth     config.RuntimeAuthConfig
 	defaultModel    string
 	githubAPIBase   string
 	logger          *slog.Logger
@@ -72,7 +72,7 @@ func NewHandlers(
 	eventBus *events.PersistentBus,
 	baseBranch string,
 	creds *credentials.Store,
-	modelProvider string,
+	runtimeAuth config.RuntimeAuthConfig,
 	defaultModel string,
 	logger *slog.Logger,
 ) *Handlers {
@@ -94,7 +94,7 @@ func NewHandlers(
 		eventBus:        eventBus,
 		baseBranch:      baseBranch,
 		creds:           creds,
-		modelProvider:   modelProvider,
+		runtimeAuth:     runtimeAuth,
 		defaultModel:    defaultModel,
 		githubAPIBase:   "https://api.github.com",
 		logger:          logger,
@@ -749,7 +749,7 @@ func (h *Handlers) generatePRMessages(ctx context.Context, sb sandbox.Sandbox, s
 		return agents.GeneratedMessages{}, nil
 	}
 	envVars := map[string]string{}
-	injectRuntimeCredentials(h.creds, h.modelProvider, h.logger, envVars)
+	injectRuntimeCredentials(h.creds, h.runtimeAuth, h.logger, envVars)
 	proc, err := h.agentRuntime.Spawn(ctx, sb, runtime.AgentOpts{
 		Role:    "pr-writer",
 		Model:   h.modelForDeterministicStep(step),

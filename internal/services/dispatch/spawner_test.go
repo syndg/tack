@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/rules"
@@ -114,7 +115,7 @@ func setupSpawnerTest(t *testing.T) (*Spawner, *mockRuntime, *mockSandboxProvide
 	rulesEng := rules.NewEngine(slog.Default())
 	toolCurator := tools.NewCurator(slog.Default())
 
-	spawner := NewSpawner(agentStore, rt, sp, rulesEng, toolCurator, bus, nil, "", slog.Default(), "http://localhost:8080", "Tack", "tack@local")
+	spawner := NewSpawner(agentStore, rt, sp, rulesEng, toolCurator, bus, nil, config.RuntimeAuthConfig{}, slog.Default(), "http://localhost:8080", "Tack", "tack@local")
 	return spawner, rt, sp, agentStore, bus
 }
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
@@ -42,16 +43,6 @@ type SpawnResult struct {
 	Sandbox sandbox.Sandbox
 }
 
-// providerEnvVars maps model provider names to the env var used to inject the key.
-var providerEnvVars = map[string]string{
-	"anthropic": "ANTHROPIC_API_KEY",
-	"openai":    "OPENAI_API_KEY",
-	"gemini":    "GEMINI_API_KEY",
-	"groq":      "GROQ_API_KEY",
-	"mistral":   "MISTRAL_API_KEY",
-	"xai":       "XAI_API_KEY",
-}
-
 // gitHostEnvVars maps git host names to the env var used to inject the token.
 var gitHostEnvVars = map[string]string{
 	"github.com": "GITHUB_TOKEN",
@@ -69,7 +60,7 @@ type Spawner struct {
 	toolCurator    *tools.Curator
 	eventBus       *events.PersistentBus
 	creds          *credentials.Store
-	provider       string // model provider name (e.g., "anthropic")
+	runtimeAuth    config.RuntimeAuthConfig
 	logger         *slog.Logger
 	daemonURL      string
 	gitAuthorName  string
@@ -85,7 +76,7 @@ func NewSpawner(
 	toolCurator *tools.Curator,
 	eventBus *events.PersistentBus,
 	creds *credentials.Store,
-	provider string,
+	runtimeAuth config.RuntimeAuthConfig,
 	logger *slog.Logger,
 	daemonURL string,
 	gitAuthorName string,
@@ -99,7 +90,7 @@ func NewSpawner(
 		toolCurator:    toolCurator,
 		eventBus:       eventBus,
 		creds:          creds,
-		provider:       provider,
+		runtimeAuth:    runtimeAuth,
 		logger:         logger,
 		daemonURL:      daemonURL,
 		gitAuthorName:  gitAuthorName,
@@ -155,7 +146,7 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	var err error
 
 	sandboxEnvVars := map[string]string{}
-	injectRuntimeCredentials(s.creds, s.provider, s.logger, sandboxEnvVars)
+	injectRuntimeCredentials(s.creds, s.runtimeAuth, s.logger, sandboxEnvVars)
 	injectRuntimeGitIdentity(s.gitAuthorName, s.gitAuthorEmail, sandboxEnvVars)
 
 	if req.Stream != nil {
@@ -434,7 +425,7 @@ func (s *Spawner) CleanupObjective(ctx context.Context, objectiveID string) {
 
 // injectCredentials adds model provider and git credentials to the env map.
 func (s *Spawner) injectCredentials(envVars map[string]string) {
-	injectRuntimeCredentials(s.creds, s.provider, s.logger, envVars)
+	injectRuntimeCredentials(s.creds, s.runtimeAuth, s.logger, envVars)
 	// Git token: always inject if configured.
 	if s.creds == nil {
 		return

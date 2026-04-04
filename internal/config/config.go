@@ -26,16 +26,17 @@ const ProjectIDFileName = "project-id"
 const DefaultBaseBranch = "main"
 
 type Config struct {
-	Daemon       DaemonConfig   `yaml:"daemon"`
-	Sandbox      SandboxConfig  `yaml:"sandbox"`
-	Agents       AgentsConfig   `yaml:"agents"`
-	Models       ModelsConfig   `yaml:"models"`
-	Planning     PlanningConfig `yaml:"planning"`
-	Watchdog     WatchdogConfig `yaml:"watchdog"`
-	Tools        ToolsConfig    `yaml:"tools"`
-	Git          GitConfig      `yaml:"git"`
-	QualityGates []string       `yaml:"quality_gates"`
-	ProjectRoot  string         `yaml:"-" json:"-"`
+	Daemon       DaemonConfig      `yaml:"daemon"`
+	Sandbox      SandboxConfig     `yaml:"sandbox"`
+	Agents       AgentsConfig      `yaml:"agents"`
+	RuntimeAuth  RuntimeAuthConfig `yaml:"runtime_auth"`
+	Models       ModelsConfig      `yaml:"models"`
+	Planning     PlanningConfig    `yaml:"planning"`
+	Watchdog     WatchdogConfig    `yaml:"watchdog"`
+	Tools        ToolsConfig       `yaml:"tools"`
+	Git          GitConfig         `yaml:"git"`
+	QualityGates []string          `yaml:"quality_gates"`
+	ProjectRoot  string            `yaml:"-" json:"-"`
 }
 
 type DaemonConfig struct {
@@ -75,6 +76,13 @@ type AgentsConfig struct {
 	IdleTimeoutMinutes int           `yaml:"idle_timeout_minutes"`
 	Timeouts           TimeoutConfig `yaml:"timeouts"`
 	Pi                 PiConfig      `yaml:"pi"`
+}
+
+type RuntimeAuthConfig struct {
+	Mode          string `yaml:"mode"`
+	Runtime       string `yaml:"runtime"`
+	Provider      string `yaml:"provider"`
+	CredentialRef string `yaml:"credential_ref,omitempty"`
 }
 
 type ModelsConfig struct {
@@ -136,6 +144,27 @@ type PlanningConfig struct {
 
 func (c *Config) EffectiveAgentModel() string {
 	return firstNonEmpty(c.Models.Agent, c.Models.Default, c.Agents.Pi.Model, c.Planning.Model)
+}
+
+func (c *Config) EffectiveRuntimeAuth() RuntimeAuthConfig {
+	binding := c.RuntimeAuth
+	if binding.Runtime == "" {
+		binding.Runtime = c.Agents.Runtime
+	}
+	if binding.Provider == "" {
+		if binding.Runtime == "pi" && c.Agents.Pi.Provider != "" {
+			binding.Provider = c.Agents.Pi.Provider
+		} else {
+			binding.Provider = "anthropic"
+		}
+	}
+	if binding.Mode == "" {
+		binding.Mode = "tack"
+	}
+	if binding.CredentialRef == "" && binding.Mode == "tack" {
+		binding.CredentialRef = binding.Provider
+	}
+	return binding
 }
 
 func (c *Config) EffectivePlannerModel() string {

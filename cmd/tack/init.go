@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
 	"github.com/syndg/tack/internal/client"
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
+	"github.com/syndg/tack/internal/runtimeauth"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,7 +27,6 @@ var initCmd = &cobra.Command{
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
-	// Check if already initialized
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getting working directory: %w", err)
@@ -47,54 +49,15 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Load existing credentials store
 	store, err := loadCredentialsStore()
 	if err != nil {
 		return err
 	}
-
-	// --- Runtime ---
-	var runtime string
-	err = huh.NewSelect[string]().
-		Title("Which runtime?").
-		Options(
-			huh.NewOption("Pi (Anthropic's agentic runtime)", "pi"),
-			huh.NewOption("Claude Code", "claude-code"),
-		).
-		Value(&runtime).
-		Run()
+	wizard, err := runInitWizard(cmd.Context(), store)
 	if err != nil {
 		return err
 	}
 
-	// --- Model Provider ---
-	var provider string
-	err = huh.NewSelect[string]().
-		Title("Which model provider?").
-		Options(
-			huh.NewOption("Anthropic", "anthropic"),
-			huh.NewOption("OpenAI", "openai"),
-			huh.NewOption("Gemini", "gemini"),
-			huh.NewOption("Groq", "groq"),
-			huh.NewOption("Mistral", "mistral"),
-			huh.NewOption("xAI", "xai"),
-		).
-		Value(&provider).
-		Run()
-	if err != nil {
-		return err
-	}
-
-	// --- Model Provider Credential (skip if already stored) ---
-	if !store.HasProvider(provider) {
-		if err := promptModelCredential(store, provider); err != nil {
-			return err
-		}
-	} else {
-		fmt.Printf("Using existing %s credential from credentials store.\n", provider)
-	}
-
-	// --- Git Token ---
 	if !store.HasGit() {
 		var addGit bool
 		err = huh.NewConfirm().
@@ -113,22 +76,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Using existing git credential from credentials store.\n")
 	}
 
-	// --- Sandbox Provider ---
-	var sandboxProvider string
-	err = huh.NewSelect[string]().
-		Title("Sandbox provider?").
-		Options(
-			huh.NewOption("Local (git worktrees)", "local"),
-			huh.NewOption("Daytona (cloud sandboxes)", "daytona"),
-		).
-		Value(&sandboxProvider).
-		Run()
-	if err != nil {
-		return err
-	}
-
-	// --- Daytona API Key ---
-	if sandboxProvider == "daytona" && !store.HasSandbox("daytona") {
+	if wizard.SandboxProvider == "daytona" && !store.HasSandbox("daytona") {
 		var daytonaKey string
 		err = huh.NewInput().
 			Title("Daytona API key").
@@ -144,61 +92,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	// --- Post-Create Commands ---
-	var postCreate string
-	err = huh.NewInput().
-		Title("Optional project post-create commands? (e.g., bun install; Tack runtime bootstrap is automatic)").
-		Value(&postCreate).
-		Run()
-	if err != nil {
-		return err
-	}
-
-	// --- Build config ---
-	var defaultModel string
-	err = huh.NewInput().
-		Title("Default project model? (leave empty to use runtime defaults)").
-		Value(&defaultModel).
-		Run()
-	if err != nil {
-		return err
-	}
-
-	var smallTaskModel string
-	err = huh.NewInput().
-		Title("Small-task model? (used for PR drafting and similar utility work; leave empty to reuse other model config)").
-		Value(&smallTaskModel).
-		Run()
-	if err != nil {
-		return err
-	}
-
-	projectCfg := map[string]interface{}{
-		"sandbox": map[string]interface{}{
-			"provider": sandboxProvider,
-		},
-		"agents": map[string]interface{}{
-			"runtime": runtime,
-			"pi": map[string]interface{}{
-				"provider": provider,
-			},
-		},
-	}
-	modelsMap := map[string]interface{}{}
-	if defaultModel != "" {
-		modelsMap["default"] = defaultModel
-	}
-	if smallTaskModel != "" {
-		modelsMap["small_tasks"] = smallTaskModel
-	}
-	if len(modelsMap) > 0 {
-		projectCfg["models"] = modelsMap
-	}
-
-	if postCreate != "" {
-		sandboxMap := projectCfg["sandbox"].(map[string]interface{})
-		sandboxMap["post_create"] = []string{postCreate}
-	}
+	projectCfg := buildProjectConfig(wizard)
 
 	// --- Write .tack/config.yaml ---
 	if err := os.MkdirAll(tackDir, 0o755); err != nil {
@@ -237,12 +131,242 @@ func runInit(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func promptModelCredential(store *credentials.Store, provider string) error {
+type initWizardResult struct {
+	Profile         string
+	Runtime         string
+	SandboxProvider string
+	Provider        string
+	RuntimeAuthMode string
+	CredentialRef   string
+	AgentModel      string
+	PlannerModel    string
+	SmallTaskModel  string
+	PostCreate      string
+}
+
+func runInitWizard(ctx context.Context, store *credentials.Store) (initWizardResult, error) {
+	var result initWizardResult
+	if err := huh.NewSelect[string]().
+		Title("Setup mode").
+		Options(
+			huh.NewOption("Quick", "quick"),
+			huh.NewOption("Advanced", "advanced"),
+		).
+		Value(&result.Profile).
+		Run(); err != nil {
+		return result, err
+	}
+	if err := huh.NewSelect[string]().
+		Title("Runtime").
+		Options(
+			huh.NewOption("Pi", "pi"),
+			huh.NewOption("Claude Code", "claude-code"),
+		).
+		Value(&result.Runtime).
+		Run(); err != nil {
+		return result, err
+	}
+	if err := huh.NewSelect[string]().
+		Title("Sandbox provider").
+		Options(
+			huh.NewOption("Local (git worktrees)", "local"),
+			huh.NewOption("Daytona (cloud sandboxes)", "daytona"),
+		).
+		Value(&result.SandboxProvider).
+		Run(); err != nil {
+		return result, err
+	}
+
+	adapter, err := runtimeauth.New(result.Runtime)
+	if err != nil {
+		return result, err
+	}
+	probe, err := adapter.Probe(ctx)
+	if err != nil {
+		return result, err
+	}
+	if result.SandboxProvider == "local" && !probe.RuntimeAvailable {
+		return result, fmt.Errorf("%s is not installed locally; use Daytona or install the runtime first", result.Runtime)
+	}
+
+	provider, err := selectInitProvider(adapter, probe, result.Runtime)
+	if err != nil {
+		return result, err
+	}
+	result.Provider = provider
+	result.CredentialRef = runtimeauth.CredentialRefForProvider(provider)
+
+	if probe.NativeAvailable {
+		fmt.Printf("\nAuth detection: %s\n", probe.NativeDescription)
+	} else {
+		fmt.Printf("\nAuth detection: no native %s auth found\n", result.Runtime)
+	}
+
+	nativeEligible := result.SandboxProvider == "local" && slices.Contains(probe.NativeProviders, result.Provider)
+	if nativeEligible {
+		if err := huh.NewSelect[string]().
+			Title("Authentication source").
+			Options(
+				huh.NewOption("Reference detected native auth", runtimeauth.ModeNative),
+				huh.NewOption("Use Tack-managed credential", runtimeauth.ModeTack),
+			).
+			Value(&result.RuntimeAuthMode).
+			Run(); err != nil {
+			return result, err
+		}
+	} else {
+		result.RuntimeAuthMode = runtimeauth.ModeTack
+		if result.SandboxProvider != "local" && slices.Contains(probe.NativeProviders, result.Provider) {
+			fmt.Printf("Native %s auth cannot be projected to %s sandboxes yet; Tack will use a managed credential instead.\n", result.Runtime, result.SandboxProvider)
+		}
+	}
+
+	if result.RuntimeAuthMode == runtimeauth.ModeTack {
+		if err := ensureWizardProviderCredential(store, result.CredentialRef, result.Provider); err != nil {
+			return result, err
+		}
+	}
+
+	models := adapter.Models(result.Provider)
+	if len(models) == 0 {
+		return result, fmt.Errorf("no models available for provider %s on runtime %s", result.Provider, result.Runtime)
+	}
+	if err := promptModelSelections(&result, models); err != nil {
+		return result, err
+	}
+	if err := huh.NewInput().
+		Title("Optional project post-create commands? (e.g., bun install; Tack runtime bootstrap is automatic)").
+		Value(&result.PostCreate).
+		Run(); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func selectInitProvider(adapter runtimeauth.Adapter, probe runtimeauth.ProbeResult, runtimeName string) (string, error) {
+	if runtimeName == "claude-code" {
+		return "anthropic", nil
+	}
+	options := make([]huh.Option[string], 0, len(probe.SupportedProviders))
+	for _, provider := range probe.SupportedProviders {
+		label := provider.Label
+		if slices.Contains(probe.NativeProviders, provider.ID) {
+			label += " (native auth detected)"
+		}
+		options = append(options, huh.NewOption(label, provider.ID))
+	}
+	if len(options) == 0 {
+		return "", fmt.Errorf("no providers available for runtime %s", adapter.Runtime())
+	}
+	var provider string
+	if err := huh.NewSelect[string]().
+		Title("Provider").
+		Options(options...).
+		Value(&provider).
+		Run(); err != nil {
+		return "", err
+	}
+	return provider, nil
+}
+
+func promptModelSelections(result *initWizardResult, models []runtimeauth.ModelOption) error {
+	options := make([]huh.Option[string], 0, len(models))
+	for _, model := range models {
+		options = append(options, huh.NewOption(model.Label, model.ID))
+	}
+	if err := huh.NewSelect[string]().
+		Title("Agent model").
+		Options(options...).
+		Value(&result.AgentModel).
+		Run(); err != nil {
+		return err
+	}
+	if result.Profile == "advanced" {
+		plannerOptions := append([]huh.Option[string]{huh.NewOption("Same as agent", result.AgentModel)}, options...)
+		if err := huh.NewSelect[string]().
+			Title("Planner model").
+			Options(plannerOptions...).
+			Value(&result.PlannerModel).
+			Run(); err != nil {
+			return err
+		}
+		if result.PlannerModel == "" {
+			result.PlannerModel = result.AgentModel
+		}
+	} else {
+		result.PlannerModel = result.AgentModel
+	}
+	smallTaskOptions := append([]huh.Option[string]{huh.NewOption("Same as agent", result.AgentModel)}, options...)
+	if err := huh.NewSelect[string]().
+		Title("Small-task model").
+		Options(smallTaskOptions...).
+		Value(&result.SmallTaskModel).
+		Run(); err != nil {
+		return err
+	}
+	if result.SmallTaskModel == "" {
+		result.SmallTaskModel = result.AgentModel
+	}
+	return nil
+}
+
+func ensureWizardProviderCredential(store *credentials.Store, credentialRef, displayProvider string) error {
+	if store.HasProvider(credentialRef) {
+		var useExisting bool
+		if err := huh.NewConfirm().
+			Title(fmt.Sprintf("Use existing Tack credential for %s?", displayProvider)).
+			Value(&useExisting).
+			Run(); err != nil {
+			return err
+		}
+		if useExisting {
+			return nil
+		}
+	}
+	return promptModelCredential(store, credentialRef, displayProvider)
+}
+
+func buildProjectConfig(result initWizardResult) map[string]interface{} {
+	projectCfg := map[string]interface{}{
+		"sandbox": map[string]interface{}{
+			"provider": result.SandboxProvider,
+		},
+		"agents": map[string]interface{}{
+			"runtime": result.Runtime,
+		},
+		"runtime_auth": map[string]interface{}{
+			"mode":     result.RuntimeAuthMode,
+			"runtime":  result.Runtime,
+			"provider": result.Provider,
+		},
+		"models": map[string]interface{}{
+			"default":     result.AgentModel,
+			"agent":       result.AgentModel,
+			"planner":     result.PlannerModel,
+			"small_tasks": result.SmallTaskModel,
+		},
+	}
+	if result.Runtime == "pi" {
+		agentsMap := projectCfg["agents"].(map[string]interface{})
+		agentsMap["pi"] = map[string]interface{}{"provider": result.Provider}
+	}
+	if result.RuntimeAuthMode == runtimeauth.ModeTack {
+		authMap := projectCfg["runtime_auth"].(map[string]interface{})
+		authMap["credential_ref"] = result.CredentialRef
+	}
+	if result.PostCreate != "" {
+		sandboxMap := projectCfg["sandbox"].(map[string]interface{})
+		sandboxMap["post_create"] = []string{result.PostCreate}
+	}
+	return projectCfg
+}
+
+func promptModelCredential(store *credentials.Store, credentialRef, displayProvider string) error {
 	var credType string
 
-	if provider == "anthropic" {
+	if credentialRef == "anthropic" {
 		err := huh.NewSelect[string]().
-			Title("Auth method for "+provider).
+			Title("Auth method for "+displayProvider).
 			Options(
 				huh.NewOption("API Key (usage-based)", credentials.TypeAPIKey),
 				huh.NewOption("Setup Token (subscription — run `claude setup-token`)", credentials.TypeSetupToken),
@@ -260,14 +384,14 @@ func promptModelCredential(store *credentials.Store, provider string) error {
 	switch credType {
 	case credentials.TypeAPIKey:
 		err := huh.NewInput().
-			Title(fmt.Sprintf("API key for %s", provider)).
+			Title(fmt.Sprintf("API key for %s", displayProvider)).
 			EchoMode(huh.EchoModePassword).
 			Value(&value).
 			Run()
 		if err != nil {
 			return err
 		}
-		store.SetModelProvider(provider, credentials.ProviderCredential{
+		store.SetModelProvider(credentialRef, credentials.ProviderCredential{
 			Type:   credentials.TypeAPIKey,
 			APIKey: value,
 		})
@@ -284,7 +408,7 @@ func promptModelCredential(store *credentials.Store, provider string) error {
 		if err := credentials.ValidateSetupToken(value); err != nil {
 			return fmt.Errorf("invalid setup token: %w", err)
 		}
-		store.SetModelProvider(provider, credentials.ProviderCredential{
+		store.SetModelProvider(credentialRef, credentials.ProviderCredential{
 			Type:  credentials.TypeSetupToken,
 			Token: value,
 		})

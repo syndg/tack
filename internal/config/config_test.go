@@ -149,6 +149,33 @@ func TestEffectiveModelsFallBackToLegacyConfig(t *testing.T) {
 	}
 }
 
+func TestEffectiveRuntimeAuthDefaults(t *testing.T) {
+	cfg := Default()
+	binding := cfg.EffectiveRuntimeAuth()
+	if binding.Mode != "tack" {
+		t.Fatalf("Mode = %q, want tack", binding.Mode)
+	}
+	if binding.Provider != "anthropic" {
+		t.Fatalf("Provider = %q, want anthropic", binding.Provider)
+	}
+	if binding.CredentialRef != "anthropic" {
+		t.Fatalf("CredentialRef = %q, want anthropic", binding.CredentialRef)
+	}
+	if binding.Runtime != cfg.Agents.Runtime {
+		t.Fatalf("Runtime = %q, want %q", binding.Runtime, cfg.Agents.Runtime)
+	}
+}
+
+func TestEffectiveRuntimeAuthUsesExplicitBinding(t *testing.T) {
+	cfg := Default()
+	cfg.Agents.Runtime = "pi"
+	cfg.RuntimeAuth = RuntimeAuthConfig{Mode: "native", Runtime: "pi", Provider: "openai-codex"}
+	binding := cfg.EffectiveRuntimeAuth()
+	if binding.Mode != "native" || binding.Provider != "openai-codex" {
+		t.Fatalf("binding = %#v", binding)
+	}
+}
+
 func TestLoad_DefaultGitIdentity(t *testing.T) {
 	cfg, err := Load("", "")
 	if err != nil {
