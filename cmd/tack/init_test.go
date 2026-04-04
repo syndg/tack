@@ -19,7 +19,8 @@ func TestBuildProjectConfigWritesRuntimeAuthAndModels(t *testing.T) {
 		AgentModel:      "gpt-5.4",
 		PlannerModel:    "gpt-5.4",
 		SmallTaskModel:  "gpt-5.4-mini",
-		PostCreate:      "bun install",
+		SetupCommands:   "bun install;;bun run typecheck",
+		SetupVerify:     "test -d node_modules",
 	})
 	runtimeAuth := configMap["runtime_auth"].(map[string]interface{})
 	if runtimeAuth["provider"] != "openai-codex" {
@@ -40,10 +41,14 @@ func TestBuildProjectConfigWritesRuntimeAuthAndModels(t *testing.T) {
 	if piConfig["provider"] != "openai-codex" {
 		t.Fatalf("agents.pi.provider = %v, want openai-codex", piConfig["provider"])
 	}
-	sandbox := configMap["sandbox"].(map[string]interface{})
-	postCreate := sandbox["post_create"].([]string)
-	if len(postCreate) != 1 || postCreate[0] != "bun install" {
-		t.Fatalf("post_create = %#v", postCreate)
+	setup := configMap["project_setup"].(map[string]interface{})
+	commands := setup["commands"].([]string)
+	verify := setup["verify"].([]string)
+	if len(commands) != 2 || commands[0] != "bun install" || commands[1] != "bun run typecheck" {
+		t.Fatalf("commands = %#v", commands)
+	}
+	if len(verify) != 1 || verify[0] != "test -d node_modules" {
+		t.Fatalf("verify = %#v", verify)
 	}
 }
 

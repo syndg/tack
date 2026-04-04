@@ -26,17 +26,18 @@ const ProjectIDFileName = "project-id"
 const DefaultBaseBranch = "main"
 
 type Config struct {
-	Daemon       DaemonConfig      `yaml:"daemon"`
-	Sandbox      SandboxConfig     `yaml:"sandbox"`
-	Agents       AgentsConfig      `yaml:"agents"`
-	RuntimeAuth  RuntimeAuthConfig `yaml:"runtime_auth"`
-	Models       ModelsConfig      `yaml:"models"`
-	Planning     PlanningConfig    `yaml:"planning"`
-	Watchdog     WatchdogConfig    `yaml:"watchdog"`
-	Tools        ToolsConfig       `yaml:"tools"`
-	Git          GitConfig         `yaml:"git"`
-	QualityGates []string          `yaml:"quality_gates"`
-	ProjectRoot  string            `yaml:"-" json:"-"`
+	Daemon       DaemonConfig       `yaml:"daemon"`
+	Sandbox      SandboxConfig      `yaml:"sandbox"`
+	ProjectSetup ProjectSetupConfig `yaml:"project_setup"`
+	Agents       AgentsConfig       `yaml:"agents"`
+	RuntimeAuth  RuntimeAuthConfig  `yaml:"runtime_auth"`
+	Models       ModelsConfig       `yaml:"models"`
+	Planning     PlanningConfig     `yaml:"planning"`
+	Watchdog     WatchdogConfig     `yaml:"watchdog"`
+	Tools        ToolsConfig        `yaml:"tools"`
+	Git          GitConfig          `yaml:"git"`
+	QualityGates []string           `yaml:"quality_gates"`
+	ProjectRoot  string             `yaml:"-" json:"-"`
 }
 
 type DaemonConfig struct {
@@ -52,8 +53,13 @@ type SandboxConfig struct {
 	DefaultResources  ResourceConfig `yaml:"default_resources"`
 	AutoStopMinutes   int            `yaml:"auto_stop_interval"`
 	AutoDeleteMinutes int            `yaml:"auto_delete_interval"`
-	PostCreate        []string       `yaml:"post_create"` // optional project bootstrap commands; Tack runtime prerequisites are handled internally
+	PostCreate        []string       `yaml:"post_create"` // deprecated compat input for project_setup.commands
 	Daytona           DaytonaConfig  `yaml:"daytona"`
+}
+
+type ProjectSetupConfig struct {
+	Commands []string `yaml:"commands"`
+	Verify   []string `yaml:"verify"`
 }
 
 type DaytonaConfig struct {
@@ -181,6 +187,14 @@ func (c *Config) EffectiveDeterministicModel() string {
 
 func (c *Config) EffectiveSmallTaskModel() string {
 	return firstNonEmpty(c.Models.SmallTasks, c.Models.Deterministic, c.Models.Default, c.Models.Agent, c.Planning.Model, c.Agents.Pi.Model)
+}
+
+func (c *Config) EffectiveProjectSetup() ProjectSetupConfig {
+	setup := c.ProjectSetup
+	if len(setup.Commands) == 0 && len(c.Sandbox.PostCreate) > 0 {
+		setup.Commands = append([]string(nil), c.Sandbox.PostCreate...)
+	}
+	return setup
 }
 
 type WatchdogConfig struct {

@@ -370,11 +370,11 @@ func (m *ProjectContextManager) newSandboxProvider(project *domain.Project, cfg 
 			repoURL = strings.TrimSpace(string(out))
 		}
 		dp, err := daytona.New(daytona.Config{
-			APIKey:     apiKey,
-			APIURL:     cfg.Sandbox.Daytona.APIURL,
-			Snapshot:   cfg.Sandbox.Daytona.Snapshot,
-			RepoURL:    repoURL,
-			PostCreate: effectivePostCreateCommands(cfg),
+			APIKey:       apiKey,
+			APIURL:       cfg.Sandbox.Daytona.APIURL,
+			Snapshot:     cfg.Sandbox.Daytona.Snapshot,
+			RepoURL:      repoURL,
+			ProjectSetup: effectiveProjectSetup(cfg),
 		}, m.creds, m.logger)
 		if err != nil {
 			return nil, fmt.Errorf("creating daytona provider for project %s: %w", project.ID, err)
@@ -387,7 +387,7 @@ func (m *ProjectContextManager) newSandboxProvider(project *domain.Project, cfg 
 
 func newLocalProvider(projectRoot string, cfg *config.Config, logger *slog.Logger) sandbox.SandboxProvider {
 	lp := local.New(projectRoot, localWorktreeDir(cfg), logger)
-	lp.SetPostCreate(effectivePostCreateCommands(cfg))
+	lp.SetProjectSetup(effectiveProjectSetup(cfg))
 	lp.Rediscover(context.Background())
 	return lp
 }
@@ -422,17 +422,15 @@ func userRulesDir() string {
 	return filepath.Join(home, ".config", "tack", "rules")
 }
 
-func effectivePostCreateCommands(cfg *config.Config) []string {
-	if len(cfg.Sandbox.PostCreate) == 0 {
-		return nil
-	}
-	commands := make([]string, 0, len(cfg.Sandbox.PostCreate))
-	for _, cmd := range cfg.Sandbox.PostCreate {
+func effectiveProjectSetup(cfg *config.Config) sandbox.ProjectSetup {
+	setup := cfg.EffectiveProjectSetup()
+	commands := make([]string, 0, len(setup.Commands))
+	for _, cmd := range setup.Commands {
 		normalized := strings.TrimSpace(cmd)
 		if cfg.Agents.Runtime == "pi" && strings.Contains(normalized, "@mariozechner/pi-coding-agent") {
 			continue
 		}
 		commands = append(commands, cmd)
 	}
-	return commands
+	return sandbox.ProjectSetup{Commands: commands, Verify: append([]string(nil), setup.Verify...)}
 }

@@ -159,6 +159,25 @@ func advanceStreamForHandlersTest(t *testing.T, env *dispatchTestEnv, id string,
 	}
 }
 
+func TestSchedulerMarkCompletedPreservesMergeReady(t *testing.T) {
+	env := setupDispatchEnv(t)
+	env.createObjective(t, "obj-preserve-merge-ready", domain.ObjectiveStatusExecuting)
+	streams := env.createPlan(t, "plan-preserve-merge-ready", "obj-preserve-merge-ready", []string{"stream-1"})
+	advanceStreamForHandlersTest(t, env, streams[0].ID, domain.StreamStatusMergeReady)
+
+	scheduler := NewScheduler(env.streams, env.plans, 1, env.eventBus, env.logger)
+	if err := scheduler.MarkCompleted(context.Background(), streams[0].ID, "plan-preserve-merge-ready"); err != nil {
+		t.Fatalf("MarkCompleted: %v", err)
+	}
+	stream, err := env.streams.Get(context.Background(), streams[0].ID)
+	if err != nil {
+		t.Fatalf("Get stream: %v", err)
+	}
+	if stream.Status != domain.StreamStatusMergeReady {
+		t.Fatalf("stream status = %s, want merge_ready", stream.Status)
+	}
+}
+
 func TestCreatePR_SkipsWhenNoMergedHeadAvailable(t *testing.T) {
 	env := setupDispatchEnv(t)
 	env.createObjective(t, "obj-skip-pr", domain.ObjectiveStatusExecuting)

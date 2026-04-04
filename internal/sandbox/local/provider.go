@@ -28,12 +28,12 @@ const sandboxMetaFile = ".tack-sandbox.json"
 // Provider creates sandboxes as local git worktrees.
 // Each sandbox is an isolated worktree with its own branch.
 type Provider struct {
-	repoRoot    string   // path to the main git repository
-	worktreeDir string   // base directory for worktrees
-	postCreate  []string // commands to run after worktree creation
-	mu          sync.Mutex
-	sandboxes   map[string]*LocalSandbox
-	logger      *slog.Logger
+	repoRoot     string // path to the main git repository
+	worktreeDir  string // base directory for worktrees
+	projectSetup sandbox.ProjectSetup
+	mu           sync.Mutex
+	sandboxes    map[string]*LocalSandbox
+	logger       *slog.Logger
 }
 
 func New(repoRoot string, worktreeDir string, logger *slog.Logger) *Provider {
@@ -155,9 +155,9 @@ func loadMeta(worktreePath string) map[string]string {
 	return labels
 }
 
-// SetPostCreate sets commands to run after worktree creation (e.g., "bun install").
-func (p *Provider) SetPostCreate(commands []string) {
-	p.postCreate = commands
+// SetProjectSetup configures project bootstrap for fresh worktrees.
+func (p *Provider) SetProjectSetup(setup sandbox.ProjectSetup) {
+	p.projectSetup = setup
 }
 
 // Create provisions a new git worktree sandbox.
@@ -211,17 +211,23 @@ func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox
 		}
 	}
 
-	// Run post-create commands (e.g., "bun install").
-	// Uses system essentials + sandbox env only — no model credentials needed.
-	postCreateEnv := sandboxEnv(opts.EnvVars, nil)
-	for _, cmd := range p.postCreate {
-		p.logger.Info("running post-create command", "command", cmd, "worktree", id)
-		c := exec.CommandContext(ctx, "sh", "-c", cmd)
+	setupEnv := sandboxEnv(opts.EnvVars, nil)
+	if err := sandbox.RunProjectSetup(ctx, p.projectSetup, func(ctx context.Context, command string) (sandbox.ExecResult, error) {
+		c := exec.CommandContext(ctx, "sh", "-c", command)
 		c.Dir = worktreePath
-		c.Env = postCreateEnv
-		if out, err := c.CombinedOutput(); err != nil {
-			p.logger.Warn("post-create command failed", "command", cmd, "error", err, "output", string(out))
+		c.Env = setupEnv
+		out, err := c.CombinedOutput()
+		result := sandbox.ExecResult{Stdout: strings.TrimSpace(string(out))}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+			return result, nil
 		}
+		if err != nil {
+			return result, err
+		}
+		return result, nil
+	}, p.logger); err != nil {
+		return nil, fmt.Errorf("running project setup: %w", err)
 	}
 
 	sb := &LocalSandbox{

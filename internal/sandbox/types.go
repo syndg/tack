@@ -25,6 +25,11 @@ type CreateOpts struct {
 	SkipIgnoredCopy bool              `json:"skip_ignored_copy,omitempty"`
 }
 
+type ProjectSetup struct {
+	Commands []string `json:"commands,omitempty"`
+	Verify   []string `json:"verify,omitempty"`
+}
+
 type ResourceSpec struct {
 	CPU    int `json:"cpu"`
 	Memory int `json:"memory"`

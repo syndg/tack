@@ -185,7 +185,8 @@ type initWizardResult struct {
 	AgentModel      string
 	PlannerModel    string
 	SmallTaskModel  string
-	PostCreate      string
+	SetupCommands   string
+	SetupVerify     string
 }
 
 func runInitWizard(ctx context.Context, store *credentials.Store) (initWizardResult, error) {
@@ -251,8 +252,14 @@ func runInitWizard(ctx context.Context, store *credentials.Store) (initWizardRes
 		return result, err
 	}
 	if err := huh.NewInput().
-		Title("Optional project post-create commands? (e.g., bun install; Tack runtime bootstrap is automatic)").
-		Value(&result.PostCreate).
+		Title("Optional project setup commands? (use ';;' between multiple commands, e.g. cd backend && bun install ;; cd frontend && bun install)").
+		Value(&result.SetupCommands).
+		Run(); err != nil {
+		return result, err
+	}
+	if err := huh.NewInput().
+		Title("Optional project setup verify commands? (use ';;' between multiple commands; skipped if empty)").
+		Value(&result.SetupVerify).
 		Run(); err != nil {
 		return result, err
 	}
@@ -275,8 +282,11 @@ func confirmInitPlan(result initWizardResult) error {
 	if result.RuntimeAuthMode == runtimeauth.ModeTack {
 		summary = append(summary, fmt.Sprintf("Credential ref: %s", result.CredentialRef))
 	}
-	if result.PostCreate != "" {
-		summary = append(summary, fmt.Sprintf("Post-create: %s", result.PostCreate))
+	if result.SetupCommands != "" {
+		summary = append(summary, fmt.Sprintf("Project setup commands: %s", result.SetupCommands))
+	}
+	if result.SetupVerify != "" {
+		summary = append(summary, fmt.Sprintf("Project setup verify: %s", result.SetupVerify))
 	}
 	var proceed bool
 	if err := huh.NewConfirm().
@@ -455,11 +465,34 @@ func buildProjectConfig(result initWizardResult) map[string]interface{} {
 		authMap := projectCfg["runtime_auth"].(map[string]interface{})
 		authMap["credential_ref"] = result.CredentialRef
 	}
-	if result.PostCreate != "" {
-		sandboxMap := projectCfg["sandbox"].(map[string]interface{})
-		sandboxMap["post_create"] = []string{result.PostCreate}
+	commands := splitSetupCommands(result.SetupCommands)
+	verify := splitSetupCommands(result.SetupVerify)
+	if len(commands) > 0 || len(verify) > 0 {
+		projectCfg["project_setup"] = map[string]interface{}{}
+		setupMap := projectCfg["project_setup"].(map[string]interface{})
+		if len(commands) > 0 {
+			setupMap["commands"] = commands
+		}
+		if len(verify) > 0 {
+			setupMap["verify"] = verify
+		}
 	}
 	return projectCfg
+}
+
+func splitSetupCommands(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ";;")
+	commands := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			commands = append(commands, trimmed)
+		}
+	}
+	return commands
 }
 
 func promptAPIKeyCredential(store *credentials.Store, credentialRef, displayProvider string) error {

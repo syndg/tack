@@ -38,12 +38,12 @@ type Provider struct {
 
 // Config holds Daytona connection settings.
 type Config struct {
-	APIKey     string
-	APIURL     string
-	Snapshot   string
-	RepoURL    string   // git remote URL for clone/pull
-	RepoPath   string   // path inside sandbox where repo lives (default: /home/daytona/project)
-	PostCreate []string // commands to run after repo setup
+	APIKey       string
+	APIURL       string
+	Snapshot     string
+	RepoURL      string // git remote URL for clone/pull
+	RepoPath     string // path inside sandbox where repo lives (default: /home/daytona/project)
+	ProjectSetup sandbox.ProjectSetup
 }
 
 func New(cfg Config, creds *credentials.Store, logger *slog.Logger) (*Provider, error) {
@@ -208,17 +208,14 @@ func (p *Provider) bootstrap(ctx context.Context, sb *daytona.Sandbox, opts sand
 		}
 	}
 
-	// Run post-create commands.
-	for _, cmd := range p.cfg.PostCreate {
-		p.logger.Info("bootstrap: running post-create", "command", cmd)
-		resp, err := sb.Process.ExecuteCommand(ctx, cmd, options.WithCwd(repoPath))
+	if err := sandbox.RunProjectSetup(ctx, p.cfg.ProjectSetup, func(ctx context.Context, command string) (sandbox.ExecResult, error) {
+		resp, err := sb.Process.ExecuteCommand(ctx, command, options.WithCwd(repoPath))
 		if err != nil {
-			p.logger.Warn("bootstrap: post-create command failed", "command", cmd, "error", err)
-			continue
+			return sandbox.ExecResult{}, err
 		}
-		if resp.ExitCode != 0 {
-			p.logger.Warn("bootstrap: post-create non-zero exit", "command", cmd, "exit", resp.ExitCode, "output", resp.Result)
-		}
+		return sandbox.ExecResult{ExitCode: resp.ExitCode, Stdout: strings.TrimSpace(resp.Result)}, nil
+	}, p.logger); err != nil {
+		return fmt.Errorf("running project setup: %w", err)
 	}
 
 	return nil

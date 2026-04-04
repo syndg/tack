@@ -42,12 +42,14 @@ var snapshotCreateCmd = &cobra.Command{
 
 		// Hash the lockfile
 		lockHash, lockFile := hashLockfile()
+		setup := cfg.EffectiveProjectSetup()
 
 		fmt.Printf("Repo:     %s\n", repoURL)
 		if lockFile != "" {
 			fmt.Printf("Lockfile: %s (hash: %s)\n", lockFile, lockHash[:12])
 		}
-		fmt.Printf("Post-create: %v\n", cfg.Sandbox.PostCreate)
+		fmt.Printf("Project setup commands: %v\n", setup.Commands)
+		fmt.Printf("Project setup verify: %v\n", setup.Verify)
 		fmt.Println()
 
 		// Print the Daytona snapshot creation instructions.
@@ -56,8 +58,8 @@ var snapshotCreateCmd = &cobra.Command{
 		fmt.Println()
 		fmt.Printf("  daytona snapshot create \\\n")
 		fmt.Printf("    --repo %s \\\n", repoURL)
-		if len(cfg.Sandbox.PostCreate) > 0 {
-			fmt.Printf("    --post-create %q \\\n", strings.Join(cfg.Sandbox.PostCreate, " && "))
+		if len(setup.Commands) > 0 {
+			fmt.Printf("    --post-create %q \\\n", strings.Join(setup.Commands, " && "))
 		}
 		if lockHash != "" {
 			fmt.Printf("    --label tack.lockfile-hash=%s \\\n", lockHash[:12])

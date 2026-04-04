@@ -188,6 +188,28 @@ func TestEffectiveRuntimeAuthCanonicalizesCredentialRef(t *testing.T) {
 	}
 }
 
+func TestEffectiveProjectSetupFallsBackToSandboxPostCreate(t *testing.T) {
+	cfg := Default()
+	cfg.Sandbox.PostCreate = []string{"bun install"}
+	setup := cfg.EffectiveProjectSetup()
+	if len(setup.Commands) != 1 || setup.Commands[0] != "bun install" {
+		t.Fatalf("setup = %#v", setup)
+	}
+}
+
+func TestEffectiveProjectSetupPrefersProjectSetupCommands(t *testing.T) {
+	cfg := Default()
+	cfg.Sandbox.PostCreate = []string{"bun install"}
+	cfg.ProjectSetup = ProjectSetupConfig{Commands: []string{"uv sync"}, Verify: []string{"test -d .venv"}}
+	setup := cfg.EffectiveProjectSetup()
+	if len(setup.Commands) != 1 || setup.Commands[0] != "uv sync" {
+		t.Fatalf("setup commands = %#v", setup.Commands)
+	}
+	if len(setup.Verify) != 1 || setup.Verify[0] != "test -d .venv" {
+		t.Fatalf("setup verify = %#v", setup.Verify)
+	}
+}
+
 func TestLoad_DefaultGitIdentity(t *testing.T) {
 	cfg, err := Load("", "")
 	if err != nil {
