@@ -14,7 +14,10 @@ var planCmd = &cobra.Command{
 	Short: "Create a new objective",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
 		obj, err := c.CreateObjectiveWithOptions(cmd.Context(), args[0], client.CreateObjectiveOptions{
 			Blueprint: planBlueprint,
 		})

@@ -12,6 +12,7 @@ import (
 // Execution represents a running blueprint instance tied to an objective.
 type Execution struct {
 	ID          string                `json:"id"`
+	ProjectID   string                `json:"project_id"`
 	BlueprintID string                `json:"blueprint_id"`
 	ObjectiveID string                `json:"objective_id"`
 	CurrentStep string                `json:"current_step"`

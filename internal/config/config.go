@@ -16,6 +16,12 @@ const UserConfigPath = "~/.config/tack/config.yaml"
 // ProjectConfigDir is the directory name Tack looks for in project roots.
 const ProjectConfigDir = ".tack"
 
+// ProjectConfigFileName is the canonical project config filename.
+const ProjectConfigFileName = "config.yaml"
+
+// ProjectIDFileName stores the stable project identity inside the repo.
+const ProjectIDFileName = "project-id"
+
 // DefaultBaseBranch is the fallback base branch when not configured.
 const DefaultBaseBranch = "main"
 
@@ -258,7 +264,17 @@ func ResolveProjectConfig(override string) (string, error) {
 	if root == "" {
 		return "", nil
 	}
-	return filepath.Join(root, ProjectConfigDir, "config.yaml"), nil
+	return ProjectConfigPath(root), nil
+}
+
+// ProjectConfigPath returns the canonical config path for a repo root.
+func ProjectConfigPath(root string) string {
+	return filepath.Join(root, ProjectConfigDir, ProjectConfigFileName)
+}
+
+// ProjectIDPath returns the canonical project ID file path for a repo root.
+func ProjectIDPath(root string) string {
+	return filepath.Join(root, ProjectConfigDir, ProjectIDFileName)
 }
 
 // Default returns a Config with sensible defaults.

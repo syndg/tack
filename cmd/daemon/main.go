@@ -14,15 +14,14 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "", "project config path override")
+	configPath := flag.String("config", "", "user config path override")
 	flag.Parse()
 
-	projectCfg, err := config.ResolveProjectConfig(*configPath)
-	if err != nil {
-		slog.Error("resolving project config", "error", err)
-		os.Exit(1)
+	userCfg := config.UserConfigPath
+	if *configPath != "" {
+		userCfg = *configPath
 	}
-	cfg, err := config.Load(projectCfg, config.UserConfigPath)
+	cfg, err := config.Load("", userCfg)
 	if err != nil {
 		slog.Error("loading config", "error", err)
 		os.Exit(1)

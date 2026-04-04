@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/tack/internal/client"
 	"github.com/syndg/tack/internal/domain"
 )
 
@@ -15,7 +14,10 @@ var mailCmd = &cobra.Command{
 	Short: "View unread mail for an agent",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
 		msgs, err := c.ListMail(cmd.Context(), args[0])
 		if err != nil {
 			return err
@@ -54,7 +56,10 @@ var sendMailCmd = &cobra.Command{
 	Short: "Send mail to an agent or broadcast group",
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
 		msg := &domain.MailMessage{
 			From:      "@human",
 			To:        args[0],
@@ -64,7 +69,7 @@ var sendMailCmd = &cobra.Command{
 			Priority:  "normal",
 			Objective: mailObjective,
 		}
-		err := c.SendMail(cmd.Context(), msg)
+		err = c.SendMail(cmd.Context(), msg)
 		if err != nil {
 			return err
 		}

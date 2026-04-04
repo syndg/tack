@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/tack/internal/client"
 )
 
 func init() {
@@ -16,8 +15,11 @@ var execCmd = &cobra.Command{
 	Short: "Trigger execution for an approved objective",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
-		err := c.ExecuteObjective(cmd.Context(), args[0])
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
+		err = c.ExecuteObjective(cmd.Context(), args[0])
 		if err != nil {
 			return err
 		}

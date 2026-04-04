@@ -20,6 +20,7 @@ import (
 
 // Processor manages the merge queue lifecycle.
 type Processor struct {
+	projectID   string
 	queue       *db.MergeQueueStore
 	streams     *db.StreamStore
 	plans       *db.PlanStore
@@ -38,6 +39,7 @@ type Processor struct {
 
 // NewProcessor creates a new merge queue Processor.
 func NewProcessor(
+	projectID string,
 	queue *db.MergeQueueStore,
 	streams *db.StreamStore,
 	plans *db.PlanStore,
@@ -54,6 +56,7 @@ func NewProcessor(
 	}
 	procLogger := logger.With("component", "merge-processor")
 	return &Processor{
+		projectID:   projectID,
 		queue:       queue,
 		streams:     streams,
 		plans:       plans,
@@ -114,7 +117,15 @@ func (p *Processor) Stop() {
 // Returns true if an entry was processed, false if queue was empty
 // or all pending entries have unsatisfied dependencies.
 func (p *Processor) ProcessNext(ctx context.Context) (bool, error) {
-	entries, err := p.queue.ListPending(ctx)
+	var (
+		entries []domain.MergeEntry
+		err     error
+	)
+	if p.projectID != "" {
+		entries, err = p.queue.ListPendingByProject(ctx, p.projectID)
+	} else {
+		entries, err = p.queue.ListPending(ctx)
+	}
 	if err != nil {
 		return false, fmt.Errorf("listing pending entries: %w", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/syndg/tack/internal/domain"
@@ -13,7 +14,19 @@ import (
 
 // handleListExecutions returns all blueprint executions as a JSON array.
 func (d *Daemon) handleListExecutions(w http.ResponseWriter, r *http.Request) {
-	executions, err := d.executions.List(r.Context())
+	var (
+		executions []blueprint.Execution
+		err        error
+	)
+	if wantsAllProjects(r) {
+		executions, err = d.executions.List(r.Context())
+	} else {
+		projectCtx, ok := d.requireProjectContext(w, r)
+		if !ok {
+			return
+		}
+		executions, err = d.executions.ListByProject(r.Context(), projectCtx.Project.ID)
+	}
 	if err != nil {
 		d.logger.Error("listing executions", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list executions")
@@ -41,6 +54,9 @@ func (d *Daemon) handleGetExecution(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to get execution")
 		return
 	}
+	if !d.ensureProjectMatch(w, r, exec.ProjectID) {
+		return
+	}
 
 	writeJSON(w, http.StatusOK, exec)
 }
@@ -60,6 +76,9 @@ func (d *Daemon) handleApproveExecution(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to approve execution")
 		return
 	}
+	if !d.ensureProjectMatch(w, r, exec.ProjectID) {
+		return
+	}
 
 	run, err := d.runStore.GetByObjective(r.Context(), exec.ObjectiveID)
 	if err != nil {
@@ -67,7 +86,12 @@ func (d *Daemon) handleApproveExecution(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	snap, err := d.runsService.Command(r.Context(), run.ID, domain.Command{Kind: domain.CommandApprove})
+	projectCtx, err := d.projectCtxs.Get(r.Context(), exec.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
+		return
+	}
+	snap, err := projectCtx.RunsService.Command(r.Context(), run.ID, domain.Command{Kind: domain.CommandApprove})
 	if err != nil {
 		switch {
 		case errors.Is(err, runs.ErrInvalidState):
@@ -104,6 +128,9 @@ func (d *Daemon) handleRetryExecution(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to retry execution")
 		return
 	}
+	if !d.ensureProjectMatch(w, r, exec.ProjectID) {
+		return
+	}
 
 	run, err := d.runStore.GetByObjective(r.Context(), exec.ObjectiveID)
 	if err != nil {
@@ -111,7 +138,12 @@ func (d *Daemon) handleRetryExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snap, err := d.runsService.Command(r.Context(), run.ID, domain.Command{
+	projectCtx, err := d.projectCtxs.Get(r.Context(), exec.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
+		return
+	}
+	snap, err := projectCtx.RunsService.Command(r.Context(), run.ID, domain.Command{
 		Kind:     domain.CommandRetry,
 		StreamID: exec.StreamID,
 		Guidance: req.Guidance,

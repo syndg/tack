@@ -99,6 +99,9 @@ func setupTestCoordinator(t *testing.T) *testEnv {
 	if err := database.Migrate(); err != nil {
 		t.Fatalf("migrating test db: %v", err)
 	}
+	if err := db.NewProjectStore(database.Conn()).Upsert(context.Background(), &domain.Project{ID: "test-project", Name: "test", RootPath: t.TempDir(), ConfigPath: t.TempDir() + "/.tack/config.yaml"}); err != nil {
+		t.Fatalf("registering test project: %v", err)
+	}
 
 	conn := database.Conn()
 	executions := db.NewExecutionStore(conn)
@@ -168,7 +171,7 @@ func (e *testEnv) createObjective(t *testing.T, id string) {
 		ID:          id,
 		Description: "test objective",
 		Status:      domain.ObjectiveStatusApproved,
-		Blueprint:    "build-review",
+		Blueprint:   "build-review",
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -194,7 +197,7 @@ func TestApprove_AbsorbsFullDance(t *testing.T) {
 		ID:          "obj-approve",
 		Description: "test approve",
 		Status:      domain.ObjectiveStatusApproved,
-		Blueprint:    "standard",
+		Blueprint:   "standard",
 	}
 	if err := env.objectives.Create(ctx, obj); err != nil {
 		t.Fatalf("creating objective: %v", err)
@@ -255,7 +258,7 @@ func TestApprove_RejectsNonWaitingExecution(t *testing.T) {
 	// Create a running execution directly.
 	exec := &blueprint.Execution{
 		ID:          "exec-running",
-		BlueprintID:  "build-review",
+		BlueprintID: "build-review",
 		ObjectiveID: "obj-x",
 		Status:      "running",
 		StepStates:  make(map[string]*blueprint.StepState),
@@ -309,7 +312,7 @@ func TestRetry_TrackedInActiveExecs(t *testing.T) {
 
 	failedExec := &blueprint.Execution{
 		ID:          "exec-failed",
-		BlueprintID:  "build-review",
+		BlueprintID: "build-review",
 		ObjectiveID: "obj-retry",
 		StreamID:    "stream-retry",
 		ParentID:    "exec-parent",
@@ -343,7 +346,7 @@ func TestRetry_RejectsNonFailedExecution(t *testing.T) {
 
 	exec := &blueprint.Execution{
 		ID:          "exec-running-2",
-		BlueprintID:  "build-review",
+		BlueprintID: "build-review",
 		ObjectiveID: "obj-y",
 		Status:      "running",
 		StepStates:  make(map[string]*blueprint.StepState),
@@ -404,7 +407,7 @@ func TestStop_CancelsRetryGoroutines(t *testing.T) {
 
 	failedExec := &blueprint.Execution{
 		ID:          "exec-stop-fail",
-		BlueprintID:  "build-review",
+		BlueprintID: "build-review",
 		ObjectiveID: "obj-stop",
 		StreamID:    "stream-stop",
 		ParentID:    "exec-parent",

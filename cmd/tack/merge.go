@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/tack/internal/client"
 )
 
 var mergeObjective string
@@ -23,7 +22,10 @@ var mergeCmd = &cobra.Command{
 	Use:   "merge",
 	Short: "View merge queue status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
 		entries, err := c.ListMergeQueue(cmd.Context(), mergeObjective)
 		if err != nil {
 			return err
@@ -55,7 +57,10 @@ var mergeRetryCmd = &cobra.Command{
 	Short: "Retry a failed merge",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
 		if err := c.RetryMerge(cmd.Context(), args[0]); err != nil {
 			return err
 		}
@@ -69,7 +74,10 @@ var mergeDiffCmd = &cobra.Command{
 	Short: "View diff for a merged stream",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
 		diff, err := c.GetStreamDiff(cmd.Context(), args[0])
 		if err != nil {
 			return err

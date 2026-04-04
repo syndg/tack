@@ -23,6 +23,16 @@ func NewRunStore(db *sql.DB) *RunStore {
 // Create inserts a new run. Generates a UUID if ID is empty and
 // defaults status to "active".
 func (s *RunStore) Create(ctx context.Context, run *domain.Run) error {
+	if run.ProjectID == "" {
+		projectID, err := projectIDForObjective(ctx, s.db, run.ObjectiveID)
+		if err != nil {
+			projectID, err = defaultProjectID(ctx, s.db)
+			if err != nil {
+				return err
+			}
+		}
+		run.ProjectID = projectID
+	}
 	if run.ID == "" {
 		run.ID = uuid.New().String()
 	}
@@ -34,9 +44,9 @@ func (s *RunStore) Create(ctx context.Context, run *domain.Run) error {
 	run.UpdatedAt = now
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO runs (id, objective_id, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		run.ID, run.ObjectiveID, string(run.Status),
+		`INSERT INTO runs (id, project_id, objective_id, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		run.ID, run.ProjectID, run.ObjectiveID, string(run.Status),
 		now.Unix(), now.Unix(),
 	)
 	if err != nil {
@@ -48,7 +58,7 @@ func (s *RunStore) Create(ctx context.Context, run *domain.Run) error {
 // Get retrieves a run by ID.
 func (s *RunStore) Get(ctx context.Context, id string) (*domain.Run, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, objective_id, status, created_at, updated_at
+		`SELECT id, project_id, objective_id, status, created_at, updated_at
 		 FROM runs WHERE id = ?`, id,
 	)
 
@@ -56,7 +66,7 @@ func (s *RunStore) Get(ctx context.Context, id string) (*domain.Run, error) {
 	var status string
 	var createdAt, updatedAt int64
 
-	err := row.Scan(&run.ID, &run.ObjectiveID, &status, &createdAt, &updatedAt)
+	err := row.Scan(&run.ID, &run.ProjectID, &run.ObjectiveID, &status, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("run not found: %s", id)
@@ -73,7 +83,7 @@ func (s *RunStore) Get(ctx context.Context, id string) (*domain.Run, error) {
 // GetByObjective retrieves the most recent run for a given objective.
 func (s *RunStore) GetByObjective(ctx context.Context, objectiveID string) (*domain.Run, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, objective_id, status, created_at, updated_at
+		`SELECT id, project_id, objective_id, status, created_at, updated_at
 		 FROM runs WHERE objective_id = ? ORDER BY created_at DESC LIMIT 1`, objectiveID,
 	)
 
@@ -81,7 +91,7 @@ func (s *RunStore) GetByObjective(ctx context.Context, objectiveID string) (*dom
 	var status string
 	var createdAt, updatedAt int64
 
-	err := row.Scan(&run.ID, &run.ObjectiveID, &status, &createdAt, &updatedAt)
+	err := row.Scan(&run.ID, &run.ProjectID, &run.ObjectiveID, &status, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("run not found for objective: %s", objectiveID)
@@ -117,10 +127,25 @@ func (s *RunStore) UpdateStatus(ctx context.Context, id string, status domain.Ru
 
 // ListActive returns all runs with non-terminal status, ordered by creation time.
 func (s *RunStore) ListActive(ctx context.Context) ([]domain.Run, error) {
+	return s.listActive(ctx, "", false)
+}
+
+// ListActiveByProject returns active runs for a single project.
+func (s *RunStore) ListActiveByProject(ctx context.Context, projectID string) ([]domain.Run, error) {
+	return s.listActive(ctx, projectID, true)
+}
+
+func (s *RunStore) listActive(ctx context.Context, projectID string, filterByProject bool) ([]domain.Run, error) {
+	query := `SELECT id, project_id, objective_id, status, created_at, updated_at FROM runs WHERE status IN ('active', 'blocked')`
+	args := []any{}
+	if filterByProject {
+		query += ` AND project_id = ?`
+		args = append(args, projectID)
+	}
+	query += ` ORDER BY created_at ASC`
+
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, objective_id, status, created_at, updated_at
-		 FROM runs WHERE status IN ('active', 'blocked')
-		 ORDER BY created_at ASC`,
+		query, args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing active runs: %w", err)
@@ -133,7 +158,7 @@ func (s *RunStore) ListActive(ctx context.Context) ([]domain.Run, error) {
 		var status string
 		var createdAt, updatedAt int64
 
-		if err := rows.Scan(&run.ID, &run.ObjectiveID, &status, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&run.ID, &run.ProjectID, &run.ObjectiveID, &status, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scanning run: %w", err)
 		}
 

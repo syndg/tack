@@ -21,6 +21,7 @@ func (d *Daemon) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	sub, unsub := d.eventBus.Subscribe(64)
 	defer unsub()
+	targetProjectID := d.targetProjectID(r)
 
 	d.logger.Info("SSE client connected", "remote", r.RemoteAddr)
 
@@ -32,6 +33,9 @@ func (d *Daemon) handleSSE(w http.ResponseWriter, r *http.Request) {
 		case event, ok := <-sub:
 			if !ok {
 				return
+			}
+			if targetProjectID != "" && event.ProjectID != targetProjectID {
+				continue
 			}
 			data, err := json.Marshal(event)
 			if err != nil {

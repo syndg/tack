@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
+	"github.com/syndg/tack/internal/client"
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
 	"gopkg.in/yaml.v3"
@@ -188,8 +189,22 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err := store.Save(); err != nil {
 		return fmt.Errorf("saving credentials: %w", err)
 	}
+	projectUUID, err := ensureStableProjectID(cwd)
+	if err != nil {
+		return err
+	}
+	if daemonClient, err := newDaemonClient(cmd, false); err == nil {
+		if _, err := daemonClient.RegisterProject(cmd.Context(), client.ProjectRegistration{
+			ProjectID:  projectUUID,
+			RootPath:   cwd,
+			ConfigPath: configPath,
+		}); err != nil {
+			return fmt.Errorf("registering project with daemon: %w", err)
+		}
+	}
 
 	fmt.Printf("\nCreated %s\n", configPath)
+	fmt.Printf("Project ID: %s\n", projectUUID)
 	fmt.Printf("Credentials saved to %s\n", store.Path())
 	return nil
 }

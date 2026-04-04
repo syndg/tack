@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/tack/internal/client"
 )
 
 func init() {
@@ -17,7 +16,10 @@ var approveCmd = &cobra.Command{
 	Short: "Approve a plan for execution",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
 		if err := c.ApprovePlan(cmd.Context(), args[0]); err != nil {
 			return err
 		}
@@ -31,7 +33,10 @@ var rejectCmd = &cobra.Command{
 	Short: "Reject a plan and return to planning",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
 		if err := c.RejectPlan(cmd.Context(), args[0]); err != nil {
 			return err
 		}

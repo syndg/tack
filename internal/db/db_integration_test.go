@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ func TestStoresIntegration(t *testing.T) {
 	if err := database.Migrate(); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
+	registerIntegrationProject(t, database)
 
 	ctx := context.Background()
 	objectives := NewObjectiveStore(database.Conn())
@@ -98,6 +100,7 @@ func TestUpdateMissingReturnsNoRows(t *testing.T) {
 	if err := database.Migrate(); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
+	registerIntegrationProject(t, database)
 
 	err = NewObjectiveStore(database.Conn()).UpdateStatus(context.Background(), "missing", domain.ObjectiveStatusFailed)
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -115,12 +118,15 @@ func TestRoleMigration_NormalizesDeprecatedRoleToBuilder(t *testing.T) {
 	if err := database.Migrate(); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-
+	registerIntegrationProject(t, database)
 	ctx := context.Background()
+	if err := NewObjectiveStore(database.Conn()).Create(ctx, &domain.Objective{ID: "obj-1", ProjectID: integrationProjectID, Description: "test objective"}); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
 	if _, err := database.Conn().ExecContext(ctx,
-		`INSERT INTO agent_sessions (id, objective_id, stream_id, role, sandbox_id, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		"agent-1", "obj-1", "", "worker", "", "pending", time.Now().Unix(), time.Now().Unix(),
+		`INSERT INTO agent_sessions (id, project_id, objective_id, stream_id, role, sandbox_id, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"agent-1", integrationProjectID, "obj-1", "", "worker", "", "pending", time.Now().Unix(), time.Now().Unix(),
 	); err != nil {
 		t.Fatalf("Insert deprecated role row: %v", err)
 	}
@@ -148,6 +154,7 @@ func TestExecutionStoreIntegration(t *testing.T) {
 	if err := database.Migrate(); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
+	registerIntegrationProject(t, database)
 
 	store := NewExecutionStore(database.Conn())
 	now := time.Now()
@@ -203,5 +210,20 @@ func TestExecutionStoreIntegration(t *testing.T) {
 	}
 	if len(list) != 1 {
 		t.Fatalf("expected 1 execution, got %d", len(list))
+	}
+}
+
+const integrationProjectID = "integration-project"
+
+func registerIntegrationProject(t *testing.T, database *DB) {
+	t.Helper()
+	root := t.TempDir()
+	if err := NewProjectStore(database.Conn()).Upsert(context.Background(), &domain.Project{
+		ID:         integrationProjectID,
+		Name:       "integration",
+		RootPath:   root,
+		ConfigPath: filepath.Join(root, ".tack", "config.yaml"),
+	}); err != nil {
+		t.Fatalf("register integration project: %v", err)
 	}
 }

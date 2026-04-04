@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/syndg/tack/internal/domain"
@@ -17,7 +18,15 @@ import (
 // Client communicates with the Tack daemon over HTTP.
 type Client struct {
 	baseURL    string
+	projectID  string
 	httpClient *http.Client
+}
+
+type ProjectRegistration struct {
+	ProjectID  string `json:"project_id,omitempty"`
+	Name       string `json:"name,omitempty"`
+	RootPath   string `json:"root_path"`
+	ConfigPath string `json:"config_path,omitempty"`
 }
 
 // StatusResponse is the response from the /status endpoint.
@@ -35,6 +44,99 @@ func New(baseURL string) *Client {
 			Timeout: 10 * time.Second,
 		},
 	}
+}
+
+// SetProjectID configures the default project target header.
+func (c *Client) SetProjectID(projectID string) {
+	c.projectID = projectID
+}
+
+// ResolveProjectByPath resolves a registered project from a filesystem path.
+func (c *Client) ResolveProjectByPath(ctx context.Context, path string) (*domain.Project, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/projects/resolve?path="+url.QueryEscape(path), nil)
+	if err != nil {
+		return nil, fmt.Errorf("resolving project: %w", err)
+	}
+	defer closeBody(resp)
+	var project domain.Project
+	if err := json.NewDecoder(resp.Body).Decode(&project); err != nil {
+		return nil, fmt.Errorf("decoding project response: %w", err)
+	}
+	return &project, nil
+}
+
+// RegisterProject adds or refreshes a project registration.
+func (c *Client) RegisterProject(ctx context.Context, req ProjectRegistration) (*domain.Project, error) {
+	jsonBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling project registration: %w", err)
+	}
+	resp, err := c.do(ctx, http.MethodPost, "/projects/register", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("registering project: %w", err)
+	}
+	defer closeBody(resp)
+	var project domain.Project
+	if err := json.NewDecoder(resp.Body).Decode(&project); err != nil {
+		return nil, fmt.Errorf("decoding project response: %w", err)
+	}
+	return &project, nil
+}
+
+// ListProjects returns all registered projects.
+func (c *Client) ListProjects(ctx context.Context) ([]domain.Project, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/projects", nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing projects: %w", err)
+	}
+	defer closeBody(resp)
+	var projects []domain.Project
+	if err := json.NewDecoder(resp.Body).Decode(&projects); err != nil {
+		return nil, fmt.Errorf("decoding projects response: %w", err)
+	}
+	return projects, nil
+}
+
+// GetProject returns a single registered project.
+func (c *Client) GetProject(ctx context.Context, id string) (*domain.Project, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/projects/"+id, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting project: %w", err)
+	}
+	defer closeBody(resp)
+	var project domain.Project
+	if err := json.NewDecoder(resp.Body).Decode(&project); err != nil {
+		return nil, fmt.Errorf("decoding project response: %w", err)
+	}
+	return &project, nil
+}
+
+// RelinkProject moves a project registration to a new root path.
+func (c *Client) RelinkProject(ctx context.Context, id, rootPath, configPath string) (*domain.Project, error) {
+	body, err := json.Marshal(ProjectRegistration{RootPath: rootPath, ConfigPath: configPath})
+	if err != nil {
+		return nil, fmt.Errorf("marshaling relink request: %w", err)
+	}
+	resp, err := c.do(ctx, http.MethodPost, "/projects/"+id+"/relink", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("relinking project: %w", err)
+	}
+	defer closeBody(resp)
+	var project domain.Project
+	if err := json.NewDecoder(resp.Body).Decode(&project); err != nil {
+		return nil, fmt.Errorf("decoding project response: %w", err)
+	}
+	return &project, nil
+}
+
+// RemoveProject removes a registered project.
+func (c *Client) RemoveProject(ctx context.Context, id string) error {
+	resp, err := c.do(ctx, http.MethodDelete, "/projects/"+id, nil)
+	if err != nil {
+		return fmt.Errorf("removing project: %w", err)
+	}
+	closeBody(resp)
+	return nil
 }
 
 // CreateObjectiveOptions configures objective creation.
@@ -450,6 +552,9 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.projectID != "" {
+		req.Header.Set("X-Tack-Project-ID", c.projectID)
 	}
 
 	resp, err := c.httpClient.Do(req)

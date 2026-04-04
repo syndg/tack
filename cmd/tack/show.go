@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/tack/internal/client"
 )
 
 func init() {
@@ -17,7 +16,10 @@ var showCmd = &cobra.Command{
 	Short: "Show plan details with streams",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
 		resp, err := c.GetPlan(cmd.Context(), args[0])
 		if err != nil {
 			return err

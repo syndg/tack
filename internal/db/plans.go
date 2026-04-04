@@ -24,6 +24,16 @@ func NewPlanStore(db *sql.DB) *PlanStore {
 // Create inserts a new plan. Generates UUID if ID is empty.
 // Stores QualityGates as JSON text. Timestamps as Unix seconds.
 func (s *PlanStore) Create(ctx context.Context, plan *domain.Plan) error {
+	if plan.ProjectID == "" {
+		projectID, err := projectIDForObjective(ctx, s.db, plan.ObjectiveID)
+		if err != nil {
+			projectID, err = defaultProjectID(ctx, s.db)
+			if err != nil {
+				return err
+			}
+		}
+		plan.ProjectID = projectID
+	}
 	if plan.ID == "" {
 		plan.ID = uuid.New().String()
 	}
@@ -40,9 +50,9 @@ func (s *PlanStore) Create(ctx context.Context, plan *domain.Plan) error {
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO plans (id, objective_id, status, quality_gates, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		plan.ID, plan.ObjectiveID, string(plan.Status), string(gates),
+		`INSERT INTO plans (id, project_id, objective_id, status, quality_gates, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		plan.ID, plan.ProjectID, plan.ObjectiveID, string(plan.Status), string(gates),
 		now.Unix(), now.Unix(),
 	)
 	if err != nil {
@@ -54,7 +64,7 @@ func (s *PlanStore) Create(ctx context.Context, plan *domain.Plan) error {
 // Get retrieves a plan by ID.
 func (s *PlanStore) Get(ctx context.Context, id string) (*domain.Plan, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, objective_id, status, quality_gates, created_at, updated_at
+		`SELECT id, project_id, objective_id, status, quality_gates, created_at, updated_at
 		 FROM plans WHERE id = ?`, id,
 	)
 
@@ -62,7 +72,7 @@ func (s *PlanStore) Get(ctx context.Context, id string) (*domain.Plan, error) {
 	var status, gatesJSON string
 	var createdAt, updatedAt int64
 
-	err := row.Scan(&plan.ID, &plan.ObjectiveID, &status, &gatesJSON, &createdAt, &updatedAt)
+	err := row.Scan(&plan.ID, &plan.ProjectID, &plan.ObjectiveID, &status, &gatesJSON, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("plan not found: %s", id)
@@ -83,7 +93,7 @@ func (s *PlanStore) Get(ctx context.Context, id string) (*domain.Plan, error) {
 // GetByObjective retrieves the plan for a given objective.
 func (s *PlanStore) GetByObjective(ctx context.Context, objectiveID string) (*domain.Plan, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, objective_id, status, quality_gates, created_at, updated_at
+		`SELECT id, project_id, objective_id, status, quality_gates, created_at, updated_at
 		 FROM plans WHERE objective_id = ? ORDER BY created_at DESC LIMIT 1`, objectiveID,
 	)
 
@@ -91,7 +101,7 @@ func (s *PlanStore) GetByObjective(ctx context.Context, objectiveID string) (*do
 	var status, gatesJSON string
 	var createdAt, updatedAt int64
 
-	err := row.Scan(&plan.ID, &plan.ObjectiveID, &status, &gatesJSON, &createdAt, &updatedAt)
+	err := row.Scan(&plan.ID, &plan.ProjectID, &plan.ObjectiveID, &status, &gatesJSON, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("plan not found for objective: %s", objectiveID)
@@ -111,9 +121,25 @@ func (s *PlanStore) GetByObjective(ctx context.Context, objectiveID string) (*do
 
 // List returns all plans, ordered by created_at desc.
 func (s *PlanStore) List(ctx context.Context) ([]domain.Plan, error) {
+	return s.list(ctx, "", false)
+}
+
+// ListByProject returns plans for a single project ordered by creation time descending.
+func (s *PlanStore) ListByProject(ctx context.Context, projectID string) ([]domain.Plan, error) {
+	return s.list(ctx, projectID, true)
+}
+
+func (s *PlanStore) list(ctx context.Context, projectID string, filterByProject bool) ([]domain.Plan, error) {
+	query := `SELECT id, project_id, objective_id, status, quality_gates, created_at, updated_at FROM plans`
+	args := []any{}
+	if filterByProject {
+		query += ` WHERE project_id = ?`
+		args = append(args, projectID)
+	}
+	query += ` ORDER BY created_at DESC`
+
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, objective_id, status, quality_gates, created_at, updated_at
-		 FROM plans ORDER BY created_at DESC`,
+		query, args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing plans: %w", err)
@@ -126,7 +152,7 @@ func (s *PlanStore) List(ctx context.Context) ([]domain.Plan, error) {
 		var status, gatesJSON string
 		var createdAt, updatedAt int64
 
-		if err := rows.Scan(&plan.ID, &plan.ObjectiveID, &status, &gatesJSON, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&plan.ID, &plan.ProjectID, &plan.ObjectiveID, &status, &gatesJSON, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scanning plan: %w", err)
 		}
 

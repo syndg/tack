@@ -5,7 +5,6 @@ import (
 	"sort"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/tack/internal/client"
 )
 
 func init() {
@@ -16,7 +15,10 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show daemon status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
+		c, err := newDaemonClient(cmd, false)
+		if err != nil {
+			return err
+		}
 		status, err := c.GetStatus(cmd.Context())
 		if err != nil {
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Daemon not reachable at %s\n", daemonURL)

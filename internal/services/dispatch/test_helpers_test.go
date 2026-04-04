@@ -45,6 +45,9 @@ func setupDispatchEnv(t *testing.T) *dispatchTestEnv {
 	if err := database.Migrate(); err != nil {
 		t.Fatalf("migrating test db: %v", err)
 	}
+	if err := db.NewProjectStore(database.Conn()).Upsert(context.Background(), &domain.Project{ID: "test-project", Name: "test", RootPath: t.TempDir(), ConfigPath: t.TempDir() + "/.tack/config.yaml"}); err != nil {
+		t.Fatalf("registering test project: %v", err)
+	}
 
 	conn := database.Conn()
 	executionStore := db.NewExecutionStore(conn)
@@ -118,7 +121,7 @@ func (e *dispatchTestEnv) createObjective(t *testing.T, id string, status domain
 		ID:          id,
 		Description: "test objective " + id,
 		Status:      status,
-		Blueprint:    "build-review",
+		Blueprint:   "build-review",
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}

@@ -21,6 +21,26 @@ func NewMailStore(db *sql.DB) *MailStore {
 
 // Send inserts a new mail message into the mail table.
 func (s *MailStore) Send(ctx context.Context, msg *domain.MailMessage) error {
+	if msg.ProjectID == "" && msg.Objective != "" {
+		projectID, err := projectIDForObjective(ctx, s.db, msg.Objective)
+		if err != nil {
+			projectID, err = defaultProjectID(ctx, s.db)
+			if err != nil {
+				return err
+			}
+		}
+		msg.ProjectID = projectID
+	}
+	if msg.ProjectID == "" {
+		projectID, err := defaultProjectID(ctx, s.db)
+		if err != nil {
+			return err
+		}
+		msg.ProjectID = projectID
+	}
+	if err := requireProjectID(msg.ProjectID); err != nil {
+		return err
+	}
 	now := time.Now()
 	msg.CreatedAt = now
 	if msg.Priority == "" {
@@ -28,9 +48,9 @@ func (s *MailStore) Send(ctx context.Context, msg *domain.MailMessage) error {
 	}
 
 	result, err := s.db.ExecContext(ctx,
-		`INSERT INTO mail (from_agent, to_agent, subject, body, type, priority, thread_id, payload, objective, stream, read, dedup_key, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-		msg.From, msg.To, msg.Subject, msg.Body, msg.Type, msg.Priority, msg.ThreadID,
+		`INSERT INTO mail (project_id, from_agent, to_agent, subject, body, type, priority, thread_id, payload, objective, stream, read, dedup_key, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+		msg.ProjectID, msg.From, msg.To, msg.Subject, msg.Body, msg.Type, msg.Priority, msg.ThreadID,
 		msg.Payload, msg.Objective, msg.Stream, msg.DedupKey, now.Unix(),
 	)
 	if err != nil {
@@ -46,18 +66,23 @@ func (s *MailStore) Send(ctx context.Context, msg *domain.MailMessage) error {
 }
 
 // ExistsUnreadDedup checks if an unread message with the given dedup key exists.
-func (s *MailStore) ExistsUnreadDedup(ctx context.Context, dedupKey string) (bool, error) {
+
+func (s *MailStore) ExistsUnreadDedup(ctx context.Context, dedupKey string, projectID ...string) (bool, error) {
 	var count int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM mail WHERE dedup_key = ? AND read = 0`, dedupKey,
-	).Scan(&count)
+	query := `SELECT COUNT(*) FROM mail WHERE dedup_key = ? AND read = 0`
+	args := []any{dedupKey}
+	if len(projectID) > 0 && projectID[0] != "" {
+		query = `SELECT COUNT(*) FROM mail WHERE project_id = ? AND dedup_key = ? AND read = 0`
+		args = []any{projectID[0], dedupKey}
+	}
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("checking dedup key: %w", err)
 	}
 	return count > 0, nil
 }
 
-const mailColumns = `id, from_agent, to_agent, subject, body, type, priority, thread_id, payload, dedup_key, objective, stream, read, created_at`
+const mailColumns = `id, project_id, from_agent, to_agent, subject, body, type, priority, thread_id, payload, dedup_key, objective, stream, read, created_at`
 
 func scanMailMessage(rows *sql.Rows) (domain.MailMessage, error) {
 	var msg domain.MailMessage
@@ -65,7 +90,7 @@ func scanMailMessage(rows *sql.Rows) (domain.MailMessage, error) {
 	var createdAt int64
 
 	if err := rows.Scan(
-		&msg.ID, &msg.From, &msg.To, &msg.Subject, &msg.Body,
+		&msg.ID, &msg.ProjectID, &msg.From, &msg.To, &msg.Subject, &msg.Body,
 		&msg.Type, &msg.Priority, &msg.ThreadID, &msg.Payload,
 		&msg.DedupKey, &msg.Objective, &msg.Stream, &readInt, &createdAt,
 	); err != nil {
@@ -79,14 +104,15 @@ func scanMailMessage(rows *sql.Rows) (domain.MailMessage, error) {
 
 // GetUnread returns all unread mail messages for a given agent.
 // Orders by priority (urgent first) then creation time ascending.
-func (s *MailStore) GetUnread(ctx context.Context, agentName string) ([]domain.MailMessage, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+mailColumns+`
-		 FROM mail WHERE to_agent = ? AND read = 0
-		 ORDER BY
-		   CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
-		   created_at ASC`, agentName,
-	)
+func (s *MailStore) GetUnread(ctx context.Context, agentName string, projectID ...string) ([]domain.MailMessage, error) {
+	query := `SELECT ` + mailColumns + ` FROM mail WHERE to_agent = ? AND read = 0`
+	args := []any{agentName}
+	if len(projectID) > 0 && projectID[0] != "" {
+		query = `SELECT ` + mailColumns + ` FROM mail WHERE project_id = ? AND to_agent = ? AND read = 0`
+		args = []any{projectID[0], agentName}
+	}
+	query += ` ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, created_at ASC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying unread mail: %w", err)
 	}
@@ -147,10 +173,14 @@ func (s *MailStore) MarkRead(ctx context.Context, id int64) error {
 }
 
 // MarkAllRead marks all unread messages for an agent as read.
-func (s *MailStore) MarkAllRead(ctx context.Context, agentName string) (int64, error) {
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE mail SET read = 1 WHERE to_agent = ? AND read = 0`, agentName,
-	)
+func (s *MailStore) MarkAllRead(ctx context.Context, agentName string, projectID ...string) (int64, error) {
+	query := `UPDATE mail SET read = 1 WHERE to_agent = ? AND read = 0`
+	args := []any{agentName}
+	if len(projectID) > 0 && projectID[0] != "" {
+		query = `UPDATE mail SET read = 1 WHERE project_id = ? AND to_agent = ? AND read = 0`
+		args = []any{projectID[0], agentName}
+	}
+	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("marking all mail as read: %w", err)
 	}
@@ -169,6 +199,10 @@ func (s *MailStore) List(ctx context.Context, filters MailFilters) ([]domain.Mai
 	if filters.Objective != "" {
 		query += ` AND objective = ?`
 		args = append(args, filters.Objective)
+	}
+	if filters.ProjectID != "" {
+		query += ` AND project_id = ?`
+		args = append(args, filters.ProjectID)
 	}
 	if filters.From != "" {
 		query += ` AND from_agent = ?`
@@ -210,6 +244,7 @@ func (s *MailStore) List(ctx context.Context, filters MailFilters) ([]domain.Mai
 
 // MailFilters contains optional filters for listing mail.
 type MailFilters struct {
+	ProjectID  string
 	Objective  string
 	From       string
 	To         string

@@ -22,6 +22,16 @@ func NewAgentStore(db *sql.DB) *AgentStore {
 
 // Create inserts a new agent session. Generates a UUID if session.ID is empty.
 func (s *AgentStore) Create(ctx context.Context, session *domain.AgentSession) error {
+	if session.ProjectID == "" {
+		projectID, err := projectIDForObjective(ctx, s.db, session.ObjectiveID)
+		if err != nil {
+			projectID, err = defaultProjectID(ctx, s.db)
+			if err != nil {
+				return err
+			}
+		}
+		session.ProjectID = projectID
+	}
 	if session.ID == "" {
 		session.ID = uuid.New().String()
 	}
@@ -33,9 +43,9 @@ func (s *AgentStore) Create(ctx context.Context, session *domain.AgentSession) e
 	session.UpdatedAt = now
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO agent_sessions (id, objective_id, stream_id, role, sandbox_id, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		session.ID, session.ObjectiveID, session.StreamID,
+		`INSERT INTO agent_sessions (id, project_id, objective_id, stream_id, role, sandbox_id, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		session.ID, session.ProjectID, session.ObjectiveID, session.StreamID,
 		string(session.Role), session.SandboxID, session.Status,
 		now.Unix(), now.Unix(),
 	)
@@ -48,7 +58,7 @@ func (s *AgentStore) Create(ctx context.Context, session *domain.AgentSession) e
 // Get retrieves an agent session by ID. Returns a wrapped sql.ErrNoRows if not found.
 func (s *AgentStore) Get(ctx context.Context, id string) (*domain.AgentSession, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, objective_id, stream_id, role, sandbox_id, status, created_at, updated_at
+		`SELECT id, project_id, objective_id, stream_id, role, sandbox_id, status, created_at, updated_at
 		 FROM agent_sessions WHERE id = ?`, id,
 	)
 
@@ -57,7 +67,7 @@ func (s *AgentStore) Get(ctx context.Context, id string) (*domain.AgentSession, 
 	var createdAt, updatedAt int64
 
 	err := row.Scan(
-		&session.ID, &session.ObjectiveID, &session.StreamID,
+		&session.ID, &session.ProjectID, &session.ObjectiveID, &session.StreamID,
 		&role, &session.SandboxID, &session.Status,
 		&createdAt, &updatedAt,
 	)
@@ -74,7 +84,7 @@ func (s *AgentStore) Get(ctx context.Context, id string) (*domain.AgentSession, 
 // ListByObjective returns all agent sessions for a given objective, ordered by creation time descending.
 func (s *AgentStore) ListByObjective(ctx context.Context, objectiveID string) ([]domain.AgentSession, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, objective_id, stream_id, role, sandbox_id, status, created_at, updated_at
+		`SELECT id, project_id, objective_id, stream_id, role, sandbox_id, status, created_at, updated_at
 		 FROM agent_sessions WHERE objective_id = ? ORDER BY created_at DESC`, objectiveID,
 	)
 	if err != nil {
@@ -89,7 +99,7 @@ func (s *AgentStore) ListByObjective(ctx context.Context, objectiveID string) ([
 		var createdAt, updatedAt int64
 
 		if err := rows.Scan(
-			&session.ID, &session.ObjectiveID, &session.StreamID,
+			&session.ID, &session.ProjectID, &session.ObjectiveID, &session.StreamID,
 			&role, &session.SandboxID, &session.Status,
 			&createdAt, &updatedAt,
 		); err != nil {
@@ -110,9 +120,25 @@ func (s *AgentStore) ListByObjective(ctx context.Context, objectiveID string) ([
 
 // List returns all agent sessions ordered by created_at desc.
 func (s *AgentStore) List(ctx context.Context) ([]domain.AgentSession, error) {
+	return s.list(ctx, "", false)
+}
+
+// ListByProject returns all agent sessions for a project ordered by creation time descending.
+func (s *AgentStore) ListByProject(ctx context.Context, projectID string) ([]domain.AgentSession, error) {
+	return s.list(ctx, projectID, true)
+}
+
+func (s *AgentStore) list(ctx context.Context, projectID string, filterByProject bool) ([]domain.AgentSession, error) {
+	query := `SELECT id, project_id, objective_id, stream_id, role, sandbox_id, status, created_at, updated_at FROM agent_sessions`
+	args := []any{}
+	if filterByProject {
+		query += ` WHERE project_id = ?`
+		args = append(args, projectID)
+	}
+	query += ` ORDER BY created_at DESC`
+
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, objective_id, stream_id, role, sandbox_id, status, created_at, updated_at
-		 FROM agent_sessions ORDER BY created_at DESC`,
+		query, args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing agent sessions: %w", err)
@@ -126,7 +152,7 @@ func (s *AgentStore) List(ctx context.Context) ([]domain.AgentSession, error) {
 		var createdAt, updatedAt int64
 
 		if err := rows.Scan(
-			&session.ID, &session.ObjectiveID, &session.StreamID,
+			&session.ID, &session.ProjectID, &session.ObjectiveID, &session.StreamID,
 			&role, &session.SandboxID, &session.Status,
 			&createdAt, &updatedAt,
 		); err != nil {

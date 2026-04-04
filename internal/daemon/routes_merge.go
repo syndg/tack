@@ -17,9 +17,15 @@ func (d *Daemon) handleListMergeQueue(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if objectiveID != "" {
-		entries, err = d.mergeQueueStore.ListByObjective(r.Context(), objectiveID)
+		entries, err = d.mergeQueue.ListByObjective(r.Context(), objectiveID)
+	} else if wantsAllProjects(r) {
+		entries, err = d.mergeQueue.ListAll(r.Context())
 	} else {
-		entries, err = d.mergeQueueStore.ListAll(r.Context())
+		projectCtx, ok := d.requireProjectContext(w, r)
+		if !ok {
+			return
+		}
+		entries, err = d.mergeQueue.ListByProject(r.Context(), projectCtx.Project.ID)
 	}
 	if err != nil {
 		d.logger.Error("listing merge queue", "objective", objectiveID, "error", err)
@@ -38,7 +44,7 @@ func (d *Daemon) handleListMergeQueue(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleGetMergeEntry(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	entry, err := d.mergeQueueStore.Get(r.Context(), id)
+	entry, err := d.mergeQueue.Get(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "merge entry not found")
@@ -46,6 +52,9 @@ func (d *Daemon) handleGetMergeEntry(w http.ResponseWriter, r *http.Request) {
 		}
 		d.logger.Error("getting merge entry", "id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to get merge entry")
+		return
+	}
+	if !d.ensureProjectMatch(w, r, entry.ProjectID) {
 		return
 	}
 
@@ -56,7 +65,7 @@ func (d *Daemon) handleGetMergeEntry(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleRetryMerge(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	entry, err := d.mergeQueueStore.Get(r.Context(), id)
+	entry, err := d.mergeQueue.Get(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "merge entry not found")
@@ -66,13 +75,16 @@ func (d *Daemon) handleRetryMerge(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to get merge entry")
 		return
 	}
+	if !d.ensureProjectMatch(w, r, entry.ProjectID) {
+		return
+	}
 
 	if entry.Status != domain.MergeStatusFailed && entry.Status != domain.MergeStatusConflict {
 		writeError(w, http.StatusConflict, "only failed or conflict entries can be retried")
 		return
 	}
 
-	if err := d.mergeQueueStore.UpdateStatus(r.Context(), id, domain.MergeStatusPending, 0, "", ""); err != nil {
+	if err := d.mergeQueue.UpdateStatus(r.Context(), id, domain.MergeStatusPending, 0, "", ""); err != nil {
 		d.logger.Error("retrying merge entry", "id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to retry merge entry")
 		return
@@ -93,7 +105,10 @@ func (d *Daemon) handleRetryMerge(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleGetStreamDiff(w http.ResponseWriter, r *http.Request) {
 	streamID := r.PathValue("id")
 
-	entry, err := d.mergeQueueStore.GetByStream(r.Context(), streamID)
+	entry, err := d.mergeQueue.GetByStream(r.Context(), streamID)
+	if err == nil && !d.ensureProjectMatch(w, r, entry.ProjectID) {
+		return
+	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "no merge entry found for stream")

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -24,6 +25,10 @@ type CreateObjectiveRequest struct {
 // either provided explicitly on the objective or resolved by the coordinator
 // from the loaded blueprint registry.
 func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
+	projectCtx, ok := d.requireProjectContext(w, r)
+	if !ok {
+		return
+	}
 	var req CreateObjectiveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -36,6 +41,7 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 	}
 
 	obj := &domain.Objective{
+		ProjectID:   projectCtx.Project.ID,
 		Description: req.Description,
 		Blueprint:   req.Blueprint,
 	}
@@ -46,6 +52,7 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d.eventBus.Publish(domain.Event{
+		ProjectID: projectCtx.Project.ID,
 		Type:      domain.EventObjectiveCreated,
 		Objective: obj.ID,
 		Payload:   obj.Description,
@@ -54,7 +61,7 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 
 	// Start execution through the run-centric boundary. The event above
 	// is informational (SSE); execution is driven by runsService.Start().
-	if _, err := d.runsService.Start(r.Context(), obj.ID); err != nil {
+	if _, err := projectCtx.RunsService.Start(r.Context(), obj.ID); err != nil {
 		d.logger.Error("starting run for objective", "objective_id", obj.ID, "error", err)
 		writeError(w, http.StatusInternalServerError, "objective created but failed to start execution")
 		return
@@ -84,13 +91,28 @@ func (d *Daemon) handleGetObjective(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to get objective")
 		return
 	}
+	if !d.ensureProjectMatch(w, r, obj.ProjectID) {
+		return
+	}
 
 	writeJSON(w, http.StatusOK, obj)
 }
 
 // handleListObjectives returns all objectives as a JSON array.
 func (d *Daemon) handleListObjectives(w http.ResponseWriter, r *http.Request) {
-	objectives, err := d.objectives.List(r.Context())
+	var (
+		objectives []domain.Objective
+		err        error
+	)
+	if wantsAllProjects(r) {
+		objectives, err = d.objectives.List(r.Context())
+	} else {
+		projectCtx, ok := d.requireProjectContext(w, r)
+		if !ok {
+			return
+		}
+		objectives, err = d.objectives.ListByProject(r.Context(), projectCtx.Project.ID)
+	}
 	if err != nil {
 		d.logger.Error("listing objectives", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list objectives")
@@ -107,8 +129,26 @@ func (d *Daemon) handleListObjectives(w http.ResponseWriter, r *http.Request) {
 // handleGetObjectivePlan returns the plan for a given objective along with its streams.
 func (d *Daemon) handleGetObjectivePlan(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	obj, err := d.objectives.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "objective not found")
+			return
+		}
+		d.logger.Error("getting objective for plan", "objective_id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get objective")
+		return
+	}
+	if !d.ensureProjectMatch(w, r, obj.ProjectID) {
+		return
+	}
+	projectCtx, err := d.projectCtxs.Get(r.Context(), obj.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
+		return
+	}
 
-	plan, streams, err := d.planningService.GetPlanByObjective(r.Context(), id)
+	plan, streams, err := projectCtx.PlanningService.GetPlanByObjective(r.Context(), id)
 	if err != nil {
 		if isPlanNotFound(err) {
 			writeError(w, http.StatusNotFound, "plan not found for objective")
@@ -129,13 +169,26 @@ func (d *Daemon) handleGetObjectivePlan(w http.ResponseWriter, r *http.Request) 
 // the run-centric orchestration boundary. Creates a durable Run record and
 // returns its initial snapshot.
 func (d *Daemon) handleExecuteObjective(w http.ResponseWriter, r *http.Request) {
-	if d.runsService == nil {
-		writeError(w, http.StatusServiceUnavailable, "runs service not available")
+	id := r.PathValue("id")
+	obj, err := d.objectives.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "objective not found")
+			return
+		}
+		d.logger.Error("loading objective for execute", "objective_id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to execute objective")
 		return
 	}
-
-	id := r.PathValue("id")
-	snap, err := d.runsService.Start(r.Context(), id)
+	if !d.ensureProjectMatch(w, r, obj.ProjectID) {
+		return
+	}
+	projectCtx, err := d.projectCtxs.Get(r.Context(), obj.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
+		return
+	}
+	snap, err := projectCtx.RunsService.Start(r.Context(), id)
 	if err != nil {
 		switch {
 		case errors.Is(err, dispatch.ErrNotFound):

@@ -4,12 +4,21 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 )
 
 const migrationSQL = `
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    root_path TEXT NOT NULL UNIQUE,
+    config_path TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS objectives (
     id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     description TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'planning',
     blueprint TEXT NOT NULL DEFAULT '',
@@ -20,7 +29,8 @@ CREATE TABLE IF NOT EXISTS objectives (
 
 CREATE TABLE IF NOT EXISTS plans (
     id TEXT PRIMARY KEY,
-    objective_id TEXT NOT NULL REFERENCES objectives(id),
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    objective_id TEXT NOT NULL REFERENCES objectives(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'draft',
     quality_gates TEXT NOT NULL DEFAULT '[]',
     created_at INTEGER NOT NULL,
@@ -29,17 +39,20 @@ CREATE TABLE IF NOT EXISTS plans (
 
 CREATE TABLE IF NOT EXISTS streams (
     id TEXT PRIMARY KEY,
-    plan_id TEXT NOT NULL REFERENCES plans(id),
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     file_scope TEXT NOT NULL DEFAULT '[]',
     dependencies TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'pending',
+    execution_id TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS agent_sessions (
     id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     objective_id TEXT NOT NULL,
     stream_id TEXT NOT NULL DEFAULT '',
     role TEXT NOT NULL,
@@ -51,10 +64,16 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
 
 CREATE TABLE IF NOT EXISTS mail (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     from_agent TEXT NOT NULL,
     to_agent TEXT NOT NULL,
+    subject TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
     type TEXT NOT NULL,
+    priority TEXT NOT NULL DEFAULT 'normal',
+    thread_id TEXT NOT NULL DEFAULT '',
     payload TEXT NOT NULL,
+    dedup_key TEXT NOT NULL DEFAULT '',
     objective TEXT NOT NULL,
     stream TEXT NOT NULL DEFAULT '',
     read INTEGER NOT NULL DEFAULT 0,
@@ -63,6 +82,7 @@ CREATE TABLE IF NOT EXISTS mail (
 
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     type TEXT NOT NULL,
     objective TEXT NOT NULL DEFAULT '',
     stream TEXT NOT NULL DEFAULT '',
@@ -73,6 +93,7 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE TABLE IF NOT EXISTS merge_queue (
     id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     stream_id TEXT NOT NULL,
     plan_id TEXT NOT NULL DEFAULT '',
     objective_id TEXT NOT NULL DEFAULT '',
@@ -81,100 +102,122 @@ CREATE TABLE IF NOT EXISTS merge_queue (
     tier INTEGER NOT NULL DEFAULT 0,
     error TEXT NOT NULL DEFAULT '',
     diff_stat TEXT NOT NULL DEFAULT '',
+    merger_sandbox_id TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_mail_to_unread ON mail(to_agent, read, created_at);
-CREATE INDEX IF NOT EXISTS idx_events_type ON events(type, created_at);
-CREATE INDEX IF NOT EXISTS idx_events_objective ON events(objective, created_at);
-
 CREATE TABLE IF NOT EXISTS executions (
     id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     blueprint_name TEXT NOT NULL,
     objective_id TEXT NOT NULL,
     current_step TEXT NOT NULL,
     step_states TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'running',
+    parent_id TEXT NOT NULL DEFAULT '',
+    stream_id TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_executions_objective ON executions(objective_id);
-
 CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     objective_id TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_projects_root_path ON projects(root_path);
+CREATE INDEX IF NOT EXISTS idx_objectives_project_created ON objectives(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_plans_project_created ON plans(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_plans_objective ON plans(objective_id);
+CREATE INDEX IF NOT EXISTS idx_streams_project_plan_created ON streams(project_id, plan_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_project_created ON agent_sessions(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_objective ON agent_sessions(objective_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mail_project_to_unread ON mail(project_id, to_agent, read, created_at);
+CREATE INDEX IF NOT EXISTS idx_mail_project_dedup ON mail(project_id, dedup_key, read);
+CREATE INDEX IF NOT EXISTS idx_events_project_type ON events(project_id, type, created_at);
+CREATE INDEX IF NOT EXISTS idx_events_project_objective ON events(project_id, objective, created_at);
+CREATE INDEX IF NOT EXISTS idx_merge_queue_project_status ON merge_queue(project_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_merge_queue_objective ON merge_queue(objective_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_executions_project_objective ON executions(project_id, objective_id);
+CREATE INDEX IF NOT EXISTS idx_runs_project_status ON runs(project_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_runs_objective ON runs(objective_id);
 `
 
-// RunMigrations executes all schema migrations against the database.
+// RunMigrations executes the clean-break multi-project schema migration.
 func RunMigrations(db *sql.DB) error {
+	if err := maybeResetLegacySchema(db); err != nil {
+		return fmt.Errorf("resetting legacy schema: %w", err)
+	}
 	if _, err := db.ExecContext(context.Background(), migrationSQL); err != nil {
 		return fmt.Errorf("running migrations: %w", err)
-	}
-	if err := ensureColumnExists(db, "objectives", "planning_mode", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return fmt.Errorf("ensuring objectives.planning_mode: %w", err)
 	}
 	if _, err := db.ExecContext(context.Background(), `UPDATE agent_sessions SET role = 'builder' WHERE role = 'worker'`); err != nil {
 		return fmt.Errorf("normalizing agent session roles: %w", err)
 	}
-	// Ensure execution columns for nested sub-executions
-	for _, col := range []struct{ name, def string }{
-		{"parent_id", "TEXT NOT NULL DEFAULT ''"},
-		{"stream_id", "TEXT NOT NULL DEFAULT ''"},
-	} {
-		if err := ensureColumnExists(db, "executions", col.name, col.def); err != nil {
-			return fmt.Errorf("ensuring executions.%s: %w", col.name, err)
-		}
+	return nil
+}
+
+func maybeResetLegacySchema(db *sql.DB) error {
+	hasProjects, err := tableExists(db, "projects")
+	if err != nil {
+		return err
 	}
-	// Ensure stream.execution_id for sub-execution linkage
-	if err := ensureColumnExists(db, "streams", "execution_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return fmt.Errorf("ensuring streams.execution_id: %w", err)
+	if !hasProjects {
+		return resetSchema(db)
 	}
-	// Ensure mail table has new communication protocol columns
-	for _, col := range []struct{ name, def string }{
-		{"subject", "TEXT NOT NULL DEFAULT ''"},
-		{"body", "TEXT NOT NULL DEFAULT ''"},
-		{"priority", "TEXT NOT NULL DEFAULT 'normal'"},
-		{"thread_id", "TEXT NOT NULL DEFAULT ''"},
-	} {
-		if err := ensureColumnExists(db, "mail", col.name, col.def); err != nil {
-			return fmt.Errorf("ensuring mail.%s: %w", col.name, err)
-		}
+	hasProjectID, err := columnExists(db, "objectives", "project_id")
+	if err != nil {
+		return err
 	}
-	// Ensure mail dedup_key column for escalation dedup
-	if err := ensureColumnExists(db, "mail", "dedup_key", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return fmt.Errorf("ensuring mail.dedup_key: %w", err)
-	}
-	// Ensure merge_queue columns added in Phase 5
-	for _, col := range []struct{ name, def string }{
-		{"plan_id", "TEXT NOT NULL DEFAULT ''"},
-		{"objective_id", "TEXT NOT NULL DEFAULT ''"},
-		{"tier", "INTEGER NOT NULL DEFAULT 0"},
-		{"error", "TEXT NOT NULL DEFAULT ''"},
-		{"diff_stat", "TEXT NOT NULL DEFAULT ''"},
-	} {
-		if err := ensureColumnExists(db, "merge_queue", col.name, col.def); err != nil {
-			return fmt.Errorf("ensuring merge_queue.%s: %w", col.name, err)
-		}
-	}
-	// Persist merger sandbox ID so it survives daemon restarts.
-	if err := ensureColumnExists(db, "merge_queue", "merger_sandbox_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return fmt.Errorf("ensuring merge_queue.merger_sandbox_id: %w", err)
+	if !hasProjectID {
+		return resetSchema(db)
 	}
 	return nil
 }
 
-func ensureColumnExists(db *sql.DB, table, column, definition string) error {
+func resetSchema(db *sql.DB) error {
+	for _, table := range []string{
+		"agent_sessions",
+		"events",
+		"executions",
+		"mail",
+		"merge_queue",
+		"runs",
+		"streams",
+		"plans",
+		"objectives",
+		"projects",
+	} {
+		if _, err := db.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s", table)); err != nil {
+			return fmt.Errorf("dropping %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func tableExists(db *sql.DB, table string) (bool, error) {
+	var name string
+	err := db.QueryRowContext(context.Background(), `
+		SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?
+	`, table).Scan(&name)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checking table %s: %w", table, err)
+	}
+	return true, nil
+}
+
+func columnExists(db *sql.DB, table, column string) (bool, error) {
 	rows, err := db.QueryContext(context.Background(), fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
-		return fmt.Errorf("reading table info: %w", err)
+		return false, fmt.Errorf("reading table info for %s: %w", table, err)
 	}
 	defer rows.Close()
 
@@ -188,18 +231,14 @@ func ensureColumnExists(db *sql.DB, table, column, definition string) error {
 			primaryKey int
 		)
 		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultV, &primaryKey); err != nil {
-			return fmt.Errorf("scanning table info: %w", err)
+			return false, fmt.Errorf("scanning table info for %s: %w", table, err)
 		}
-		if strings.EqualFold(name, column) {
-			return nil
+		if name == column {
+			return true, nil
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterating table info: %w", err)
+		return false, fmt.Errorf("iterating table info for %s: %w", table, err)
 	}
-
-	if _, err := db.ExecContext(context.Background(), fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {
-		return fmt.Errorf("adding column: %w", err)
-	}
-	return nil
+	return false, nil
 }

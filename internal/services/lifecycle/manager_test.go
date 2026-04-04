@@ -21,6 +21,9 @@ func setupManager(t *testing.T) (*Manager, *db.ObjectiveStore, *db.PlanStore) {
 	if err := d.Migrate(); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
+	if err := db.NewProjectStore(d.Conn()).Upsert(context.Background(), &domain.Project{ID: "test-project", Name: "test", RootPath: t.TempDir(), ConfigPath: t.TempDir() + "/.tack/config.yaml"}); err != nil {
+		t.Fatalf("register test project: %v", err)
+	}
 
 	objStore := db.NewObjectiveStore(d.Conn())
 	planStore := db.NewPlanStore(d.Conn())

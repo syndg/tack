@@ -21,10 +21,13 @@ func setupJanitorTest(t *testing.T) (*Janitor, *db.ObjectiveStore, *[]string) {
 	if err := database.Migrate(); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
+	if err := db.NewProjectStore(database.Conn()).Upsert(context.Background(), &domain.Project{ID: "test-project", Name: "test", RootPath: "/repo", ConfigPath: "/repo/.tack/config.yaml"}); err != nil {
+		t.Fatalf("register test project: %v", err)
+	}
 
 	store := db.NewObjectiveStore(database.Conn())
 	calls := []string{}
-	j := NewJanitor(store, "/repo", slog.Default())
+	j := NewJanitor(store, "test-project", "/repo", slog.Default())
 	j.exec = func(_ context.Context, _ string, name string, args ...string) ([]byte, error) {
 		cmd := strings.TrimSpace(name + " " + strings.Join(args, " "))
 		calls = append(calls, cmd)
@@ -92,6 +95,9 @@ func TestJanitorDeletesMergeBranchWhenNoOpenPR(t *testing.T) {
 	if err := database.Migrate(); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
+	if err := db.NewProjectStore(database.Conn()).Upsert(context.Background(), &domain.Project{ID: "test-project", Name: "test", RootPath: "/repo", ConfigPath: "/repo/.tack/config.yaml"}); err != nil {
+		t.Fatalf("register test project: %v", err)
+	}
 
 	store := db.NewObjectiveStore(database.Conn())
 	ctx := context.Background()
@@ -104,7 +110,7 @@ func TestJanitorDeletesMergeBranchWhenNoOpenPR(t *testing.T) {
 	}
 
 	calls := []string{}
-	j := NewJanitor(store, "/repo", slog.Default())
+	j := NewJanitor(store, "test-project", "/repo", slog.Default())
 	j.exec = func(_ context.Context, _ string, name string, args ...string) ([]byte, error) {
 		cmd := strings.TrimSpace(name + " " + strings.Join(args, " "))
 		calls = append(calls, cmd)

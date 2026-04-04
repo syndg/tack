@@ -23,6 +23,16 @@ func NewMergeQueueStore(db *sql.DB) *MergeQueueStore {
 // Enqueue adds a stream branch to the merge queue.
 // Generates UUID, sets status to "pending", sets created_at/updated_at.
 func (s *MergeQueueStore) Enqueue(ctx context.Context, entry *domain.MergeEntry) error {
+	if entry.ProjectID == "" {
+		projectID, err := projectIDForStream(ctx, s.db, entry.StreamID)
+		if err != nil {
+			projectID, err = defaultProjectID(ctx, s.db)
+			if err != nil {
+				return err
+			}
+		}
+		entry.ProjectID = projectID
+	}
 	if entry.ID == "" {
 		entry.ID = uuid.New().String()
 	}
@@ -34,9 +44,9 @@ func (s *MergeQueueStore) Enqueue(ctx context.Context, entry *domain.MergeEntry)
 	entry.UpdatedAt = now
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO merge_queue (id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		entry.ID, entry.StreamID, entry.PlanID, entry.ObjectiveID,
+		`INSERT INTO merge_queue (id, project_id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		entry.ID, entry.ProjectID, entry.StreamID, entry.PlanID, entry.ObjectiveID,
 		entry.Branch, string(entry.Status), entry.Tier, entry.Error,
 		entry.DiffStat, entry.CreatedAt, entry.UpdatedAt,
 	)
@@ -48,12 +58,16 @@ func (s *MergeQueueStore) Enqueue(ctx context.Context, entry *domain.MergeEntry)
 
 // Dequeue returns the next pending entry (FIFO by created_at).
 // Returns nil, nil if queue is empty.
-func (s *MergeQueueStore) Dequeue(ctx context.Context) (*domain.MergeEntry, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at
-		 FROM merge_queue WHERE status = ? ORDER BY created_at ASC LIMIT 1`,
-		string(domain.MergeStatusPending),
-	)
+func (s *MergeQueueStore) Dequeue(ctx context.Context, projectID ...string) (*domain.MergeEntry, error) {
+	query := `SELECT id, project_id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at
+		 FROM merge_queue WHERE status = ? ORDER BY created_at ASC LIMIT 1`
+	args := []any{string(domain.MergeStatusPending)}
+	if len(projectID) > 0 && projectID[0] != "" {
+		query = `SELECT id, project_id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at
+		 FROM merge_queue WHERE project_id = ? AND status = ? ORDER BY created_at ASC LIMIT 1`
+		args = []any{projectID[0], string(domain.MergeStatusPending)}
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 
 	entry, err := scanMergeEntry(row)
 	if err == sql.ErrNoRows {
@@ -68,7 +82,7 @@ func (s *MergeQueueStore) Dequeue(ctx context.Context) (*domain.MergeEntry, erro
 // Get returns a merge entry by ID.
 func (s *MergeQueueStore) Get(ctx context.Context, id string) (*domain.MergeEntry, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at
+		`SELECT id, project_id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at
 		 FROM merge_queue WHERE id = ?`, id,
 	)
 
@@ -82,7 +96,7 @@ func (s *MergeQueueStore) Get(ctx context.Context, id string) (*domain.MergeEntr
 // GetByStream returns the merge entry for a stream (most recent).
 func (s *MergeQueueStore) GetByStream(ctx context.Context, streamID string) (*domain.MergeEntry, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at
+		`SELECT id, project_id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at
 		 FROM merge_queue WHERE stream_id = ? ORDER BY created_at DESC LIMIT 1`, streamID,
 	)
 
@@ -117,7 +131,7 @@ func (s *MergeQueueStore) UpdateStatus(ctx context.Context, id string, status do
 // ListByObjective returns all merge entries for an objective's streams.
 func (s *MergeQueueStore) ListByObjective(ctx context.Context, objectiveID string) ([]domain.MergeEntry, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at
+		`SELECT id, project_id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at
 		 FROM merge_queue WHERE objective_id = ? ORDER BY created_at ASC`, objectiveID,
 	)
 	if err != nil {
@@ -130,9 +144,29 @@ func (s *MergeQueueStore) ListByObjective(ctx context.Context, objectiveID strin
 
 // ListAll returns all merge entries ordered by created_at (oldest first).
 func (s *MergeQueueStore) ListAll(ctx context.Context) ([]domain.MergeEntry, error) {
+	return s.list(ctx, "", false, "")
+}
+
+// ListByProject returns all merge entries for a project.
+func (s *MergeQueueStore) ListByProject(ctx context.Context, projectID string) ([]domain.MergeEntry, error) {
+	return s.list(ctx, projectID, true, "")
+}
+
+func (s *MergeQueueStore) list(ctx context.Context, projectID string, filterByProject bool, status string) ([]domain.MergeEntry, error) {
+	query := `SELECT id, project_id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at FROM merge_queue WHERE 1=1`
+	args := []any{}
+	if filterByProject {
+		query += ` AND project_id = ?`
+		args = append(args, projectID)
+	}
+	if status != "" {
+		query += ` AND status = ?`
+		args = append(args, status)
+	}
+	query += ` ORDER BY created_at ASC, rowid ASC`
+
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at
-		 FROM merge_queue ORDER BY created_at ASC`,
+		query, args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing all merge entries: %w", err)
@@ -144,26 +178,24 @@ func (s *MergeQueueStore) ListAll(ctx context.Context) ([]domain.MergeEntry, err
 
 // ListPending returns all pending entries ordered by created_at (FIFO).
 func (s *MergeQueueStore) ListPending(ctx context.Context) ([]domain.MergeEntry, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, stream_id, plan_id, objective_id, branch, status, tier, error, diff_stat, created_at, updated_at
-		 FROM merge_queue WHERE status = ? ORDER BY created_at ASC`,
-		string(domain.MergeStatusPending),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("listing pending merge entries: %w", err)
-	}
-	defer rows.Close()
+	return s.list(ctx, "", false, string(domain.MergeStatusPending))
+}
 
-	return scanMergeEntries(rows)
+// ListPendingByProject returns pending entries for a single project.
+func (s *MergeQueueStore) ListPendingByProject(ctx context.Context, projectID string) ([]domain.MergeEntry, error) {
+	return s.list(ctx, projectID, true, string(domain.MergeStatusPending))
 }
 
 // CountPending returns the number of pending entries.
-func (s *MergeQueueStore) CountPending(ctx context.Context) (int, error) {
+func (s *MergeQueueStore) CountPending(ctx context.Context, projectID ...string) (int, error) {
 	var count int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM merge_queue WHERE status = ?`,
-		string(domain.MergeStatusPending),
-	).Scan(&count)
+	query := `SELECT COUNT(*) FROM merge_queue WHERE status = ?`
+	args := []any{string(domain.MergeStatusPending)}
+	if len(projectID) > 0 && projectID[0] != "" {
+		query = `SELECT COUNT(*) FROM merge_queue WHERE project_id = ? AND status = ?`
+		args = []any{projectID[0], string(domain.MergeStatusPending)}
+	}
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("counting pending merge entries: %w", err)
 	}
@@ -207,7 +239,7 @@ func scanMergeEntry(row scannable) (*domain.MergeEntry, error) {
 	var status string
 
 	err := row.Scan(
-		&entry.ID, &entry.StreamID, &entry.PlanID, &entry.ObjectiveID,
+		&entry.ID, &entry.ProjectID, &entry.StreamID, &entry.PlanID, &entry.ObjectiveID,
 		&entry.Branch, &status, &entry.Tier, &entry.Error,
 		&entry.DiffStat, &entry.CreatedAt, &entry.UpdatedAt,
 	)

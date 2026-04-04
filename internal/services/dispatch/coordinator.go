@@ -55,6 +55,7 @@ type MailSender interface {
 
 // Config holds all dependencies for constructing a Coordinator.
 type Config struct {
+	ProjectID      string                 // owning project for recovery filtering
 	Engine         *blueprint.Engine      // blueprint execution engine
 	Scheduler      *Scheduler             // stream scheduling
 	Spawner        *Spawner               // agent process spawning
@@ -135,6 +136,7 @@ type Coordinator struct {
 	eventBus      *events.PersistentBus
 	tracker       AgentTracker
 	logger        *slog.Logger
+	projectID     string
 
 	ctx         context.Context // set in Start(); used as parent for execution goroutines
 	mu          sync.Mutex
@@ -163,6 +165,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		eventBus:      cfg.EventBus,
 		tracker:       newAgentTracker(cfg.Spawner, cfg.ActivityLogger, cfg.EventBus, cfg.Timeouts, cfg.Logger),
 		logger:        cfg.Logger,
+		projectID:     cfg.ProjectID,
 		activeExecs:   make(map[string]context.CancelFunc),
 	}
 
@@ -212,7 +215,15 @@ func (c *Coordinator) Start(ctx context.Context) error {
 // recoverExecutions resumes in-flight executions after a daemon restart.
 // Only top-level executions (ParentID == "") are considered.
 func (c *Coordinator) recoverExecutions(ctx context.Context) {
-	allExecs, err := c.executions.List(ctx)
+	var (
+		allExecs []blueprint.Execution
+		err      error
+	)
+	if c.projectID != "" {
+		allExecs, err = c.executions.ListByProject(ctx, c.projectID)
+	} else {
+		allExecs, err = c.executions.List(ctx)
+	}
 	if err != nil {
 		c.logger.Error("execution recovery: failed to list executions", "error", err)
 		return

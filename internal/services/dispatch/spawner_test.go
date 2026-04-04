@@ -102,6 +102,9 @@ func setupSpawnerTest(t *testing.T) (*Spawner, *mockRuntime, *mockSandboxProvide
 	if err := d.Migrate(); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
+	if err := db.NewProjectStore(d.Conn()).Upsert(context.Background(), &domain.Project{ID: "test-project", Name: "test", RootPath: t.TempDir(), ConfigPath: t.TempDir() + "/.tack/config.yaml"}); err != nil {
+		t.Fatalf("register test project: %v", err)
+	}
 
 	agentStore := db.NewAgentStore(d.Conn())
 	eventStore := db.NewEventStore(d.Conn())
@@ -118,6 +121,7 @@ func setupSpawnerTest(t *testing.T) (*Spawner, *mockRuntime, *mockSandboxProvide
 func makeSpawnObjective(id string) *domain.Objective {
 	return &domain.Objective{
 		ID:          id,
+		ProjectID:   "test-project",
 		Description: "test objective for spawner",
 		Status:      domain.ObjectiveStatusApproved,
 	}

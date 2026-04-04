@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/tack/internal/client"
 )
 
 func init() {
@@ -18,7 +17,10 @@ var plansCmd = &cobra.Command{
 	Use:   "plans",
 	Short: "List plans",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
 		plans, err := c.ListPlans(cmd.Context())
 		if err != nil {
 			return err

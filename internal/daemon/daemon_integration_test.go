@@ -27,6 +27,7 @@ func TestDaemonIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	registerDaemonTestProject(t, d, t.TempDir())
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -101,6 +102,7 @@ func TestCreateObjectiveValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	registerDaemonTestProject(t, d, t.TempDir())
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -142,6 +144,7 @@ func TestBlueprintEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	registerDaemonTestProject(t, d, t.TempDir())
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -218,6 +221,7 @@ func TestCreateObjectiveWithOptionsPersistsBlueprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	registerDaemonTestProject(t, d, t.TempDir())
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -265,6 +269,7 @@ func TestRetryMergePublishesQueuedEvent(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	defer d.db.Close()
+	registerDaemonTestProject(t, d, t.TempDir())
 
 	ctx := context.Background()
 	obj := &domain.Objective{Description: "retry merge", Status: domain.ObjectiveStatusExecuting}
@@ -339,6 +344,7 @@ func TestListMergeQueueReturnsAllEntriesByDefault(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	defer d.db.Close()
+	registerDaemonTestProject(t, d, t.TempDir())
 
 	ctx := context.Background()
 	obj := &domain.Objective{Description: "list merge queue", Status: domain.ObjectiveStatusExecuting}
@@ -420,6 +426,9 @@ steps:
 	if err := os.WriteFile(filepath.Join(project, ".tack", "blueprints", "build-review.yaml"), []byte(projectBlueprint), 0o644); err != nil {
 		t.Fatalf("WriteFile project blueprint: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(project, ".tack", "config.yaml"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile project config: %v", err)
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -439,8 +448,16 @@ steps:
 		t.Fatalf("New: %v", err)
 	}
 	defer d.db.Close()
+	registeredProject := &domain.Project{ID: "test-project", Name: "test", RootPath: project, ConfigPath: filepath.Join(project, ".tack", "config.yaml")}
+	if err := d.projectStore.Upsert(context.Background(), registeredProject); err != nil {
+		t.Fatalf("register project: %v", err)
+	}
+	projectCtx, err := d.projectCtxs.Get(context.Background(), registeredProject.ID)
+	if err != nil {
+		t.Fatalf("load project context: %v", err)
+	}
 
-	bp, ok := d.blueprintRegistry.Get("build-review")
+	bp, ok := projectCtx.BlueprintRegistry.Get("build-review")
 	if !ok {
 		t.Fatal("build-review blueprint not found")
 	}
@@ -835,6 +852,11 @@ func startExecutionDaemonWithInstance(t *testing.T, listen string, qualityGates 
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	registerDaemonTestProject(t, d, cwd)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -854,6 +876,24 @@ func startExecutionDaemonWithInstance(t *testing.T, listen string, qualityGates 
 		// reuses the port.
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+func registerDaemonTestProject(t *testing.T, d *Daemon, root string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, ".tack"), 0o755); err != nil {
+		t.Fatalf("MkdirAll .tack: %v", err)
+	}
+	configPath := filepath.Join(root, ".tack", "config.yaml")
+	if _, err := os.Stat(configPath); err != nil {
+		if err := os.WriteFile(configPath, []byte("{}\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile config: %v", err)
+		}
+	}
+	project := &domain.Project{ID: "test-project", Name: filepath.Base(root), RootPath: root, ConfigPath: configPath}
+	if err := d.projectStore.Upsert(context.Background(), project); err != nil {
+		t.Fatalf("register daemon test project: %v", err)
+	}
+	d.projectCtxs.Invalidate(project.ID)
 }
 
 func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool) {

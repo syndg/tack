@@ -2,6 +2,15 @@ package domain
 
 import "time"
 
+type Project struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	RootPath   string    `json:"root_path"`
+	ConfigPath string    `json:"config_path"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 // Objective lifecycle
 
 type ObjectiveStatus string
@@ -17,6 +26,7 @@ const (
 
 type Objective struct {
 	ID           string          `json:"id"`
+	ProjectID    string          `json:"project_id"`
 	Description  string          `json:"description"`
 	Status       ObjectiveStatus `json:"status"`
 	Blueprint    string          `json:"blueprint,omitempty"`
@@ -40,6 +50,7 @@ const (
 
 type Plan struct {
 	ID           string     `json:"id"`
+	ProjectID    string     `json:"project_id"`
 	ObjectiveID  string     `json:"objective_id"`
 	Status       PlanStatus `json:"status"`
 	QualityGates []string   `json:"quality_gates"`
@@ -49,6 +60,7 @@ type Plan struct {
 
 type Stream struct {
 	ID           string       `json:"id"`
+	ProjectID    string       `json:"project_id"`
 	PlanID       string       `json:"plan_id"`
 	Title        string       `json:"title"`
 	Description  string       `json:"description"`
@@ -74,6 +86,7 @@ const (
 
 type AgentSession struct {
 	ID          string    `json:"id"`
+	ProjectID   string    `json:"project_id"`
 	ObjectiveID string    `json:"objective_id"`
 	StreamID    string    `json:"stream_id"`
 	Role        AgentRole `json:"role"`
@@ -108,6 +121,7 @@ const (
 
 type MailMessage struct {
 	ID        int64     `json:"id"`
+	ProjectID string    `json:"project_id"`
 	From      string    `json:"from"`
 	To        string    `json:"to"`
 	Subject   string    `json:"subject"`
@@ -173,6 +187,7 @@ const (
 // MergeEntry represents a stream branch queued for merge.
 type MergeEntry struct {
 	ID          string      `json:"id"`
+	ProjectID   string      `json:"project_id"`
 	StreamID    string      `json:"stream_id"`
 	PlanID      string      `json:"plan_id"`
 	ObjectiveID string      `json:"objective_id"`
@@ -200,6 +215,7 @@ const (
 // Run is the durable aggregate that owns objective orchestration.
 type Run struct {
 	ID          string    `json:"id"`
+	ProjectID   string    `json:"project_id"`
 	ObjectiveID string    `json:"objective_id"`
 	Status      RunStatus `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -249,6 +265,7 @@ type RunStreamState struct {
 // Snapshot is the observable state of a run at a point in time.
 type Snapshot struct {
 	RunID       string           `json:"run_id"`
+	ProjectID   string           `json:"project_id"`
 	ObjectiveID string           `json:"objective_id"`
 	Status      RunStatus        `json:"status"`
 	Blocked     *BlockedState    `json:"blocked,omitempty"`
@@ -282,6 +299,7 @@ const (
 
 type Event struct {
 	ID        int64     `json:"id"`
+	ProjectID string    `json:"project_id"`
 	Type      EventType `json:"type"`
 	Objective string    `json:"objective"`
 	Stream    string    `json:"stream"`

@@ -11,6 +11,14 @@ import (
 
 // registerRoutes sets up all HTTP route handlers on the daemon's mux.
 func (d *Daemon) registerRoutes() {
+	// Projects
+	d.mux.HandleFunc("POST /projects/register", d.handleRegisterProject)
+	d.mux.HandleFunc("GET /projects", d.handleListProjects)
+	d.mux.HandleFunc("GET /projects/resolve", d.handleResolveProject)
+	d.mux.HandleFunc("GET /projects/{id}", d.handleGetProject)
+	d.mux.HandleFunc("POST /projects/{id}/relink", d.handleRelinkProject)
+	d.mux.HandleFunc("DELETE /projects/{id}", d.handleRemoveProject)
+
 	// Objectives
 	d.mux.HandleFunc("POST /objectives", d.handleCreateObjective)
 	d.mux.HandleFunc("GET /objectives/{id}", d.handleGetObjective)
@@ -104,10 +112,14 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleListBlueprints returns all available blueprints as a JSON array.
 func (d *Daemon) handleListBlueprints(w http.ResponseWriter, r *http.Request) {
-	ids := d.blueprintRegistry.List()
+	projectCtx, ok := d.requireProjectContext(w, r)
+	if !ok {
+		return
+	}
+	ids := projectCtx.BlueprintRegistry.List()
 	blueprints := make([]blueprint.Blueprint, 0, len(ids))
 	for _, id := range ids {
-		bp, ok := d.blueprintRegistry.Get(id)
+		bp, ok := projectCtx.BlueprintRegistry.Get(id)
 		if ok {
 			blueprints = append(blueprints, *bp)
 		}
@@ -117,9 +129,13 @@ func (d *Daemon) handleListBlueprints(w http.ResponseWriter, r *http.Request) {
 
 // handleGetBlueprint returns a specific blueprint by ID.
 func (d *Daemon) handleGetBlueprint(w http.ResponseWriter, r *http.Request) {
+	projectCtx, ok := d.requireProjectContext(w, r)
+	if !ok {
+		return
+	}
 	id := r.PathValue("id")
 
-	bp, ok := d.blueprintRegistry.Get(id)
+	bp, ok := projectCtx.BlueprintRegistry.Get(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "blueprint not found")
 		return

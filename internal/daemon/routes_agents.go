@@ -11,7 +11,19 @@ import (
 
 // handleListAgents returns all agent sessions as a JSON array.
 func (d *Daemon) handleListAgents(w http.ResponseWriter, r *http.Request) {
-	sessions, err := d.agents.List(r.Context())
+	var (
+		sessions []domain.AgentSession
+		err      error
+	)
+	if wantsAllProjects(r) {
+		sessions, err = d.agents.List(r.Context())
+	} else {
+		projectCtx, ok := d.requireProjectContext(w, r)
+		if !ok {
+			return
+		}
+		sessions, err = d.agents.ListByProject(r.Context(), projectCtx.Project.ID)
+	}
 	if err != nil {
 		d.logger.Error("listing agent sessions", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list agents")
@@ -39,6 +51,9 @@ func (d *Daemon) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to get agent session")
 		return
 	}
+	if !d.ensureProjectMatch(w, r, session.ProjectID) {
+		return
+	}
 
 	writeJSON(w, http.StatusOK, session)
 }
@@ -58,6 +73,9 @@ func (d *Daemon) handleKillAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to kill agent")
 		return
 	}
+	if !d.ensureProjectMatch(w, r, session.ProjectID) {
+		return
+	}
 
 	run, err := d.runStore.GetByObjective(r.Context(), session.ObjectiveID)
 	if err != nil {
@@ -65,7 +83,12 @@ func (d *Daemon) handleKillAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snap, err := d.runsService.Command(r.Context(), run.ID, domain.Command{
+	projectCtx, err := d.projectCtxs.Get(r.Context(), session.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	snap, err := projectCtx.RunsService.Command(r.Context(), run.ID, domain.Command{
 		Kind:      domain.CommandKill,
 		SessionID: id,
 	})

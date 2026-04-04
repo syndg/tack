@@ -6,10 +6,13 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/syndg/tack/internal/client"
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/daemon"
 )
@@ -17,6 +20,7 @@ import (
 var (
 	cfgPath   string
 	daemonURL string
+	projectID string
 )
 
 var rootCmd = &cobra.Command{
@@ -33,6 +37,7 @@ func Execute() {
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "", "project config path override (default: walk up for .tack/config.yaml)")
 	rootCmd.PersistentFlags().StringVar(&daemonURL, "daemon-url", "http://localhost:9800", "daemon HTTP address")
+	rootCmd.PersistentFlags().StringVar(&projectID, "project", "", "target registered project ID or path")
 
 	rootCmd.AddCommand(daemonCmd)
 }
@@ -55,11 +60,79 @@ func loadConfig() (*config.Config, error) {
 	return cfg, nil
 }
 
+func loadUserConfigOnly() (*config.Config, error) {
+	cfg, err := config.Load("", userConfigPath())
+	if err != nil {
+		return nil, err
+	}
+	cfg.ExpandPaths()
+	return cfg, nil
+}
+
+func newDaemonClient(cmd *cobra.Command, requireProject bool) (*client.Client, error) {
+	c := client.New(daemonURL)
+	if !requireProject {
+		return c, nil
+	}
+	pid, err := resolveTargetProjectID(cmd, c)
+	if err != nil {
+		return nil, err
+	}
+	c.SetProjectID(pid)
+	return c, nil
+}
+
+func resolveTargetProjectID(cmd *cobra.Command, c *client.Client) (string, error) {
+	if projectID != "" {
+		if looksLikePath(projectID) {
+			project, err := c.ResolveProjectByPath(cmd.Context(), projectID)
+			if err != nil {
+				return "", err
+			}
+			return project.ID, nil
+		}
+		return projectID, nil
+	}
+	root, err := currentProjectRoot()
+	if err != nil {
+		return "", err
+	}
+	if root == "" {
+		return "", fmt.Errorf("not inside a registered Tack project; run tack init or pass --project")
+	}
+	project, err := c.ResolveProjectByPath(cmd.Context(), root)
+	if err != nil {
+		return "", err
+	}
+	return project.ID, nil
+}
+
+func currentProjectRoot() (string, error) {
+	if cfgPath != "" {
+		configPath, err := config.ResolveProjectConfig(cfgPath)
+		if err != nil {
+			return "", err
+		}
+		if configPath != "" {
+			return filepath.Dir(filepath.Dir(configPath)), nil
+		}
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return config.FindProjectRoot(cwd), nil
+}
+
+func looksLikePath(v string) bool {
+	return strings.HasPrefix(v, ".") || strings.HasPrefix(v, "~") || strings.Contains(v, "/")
+}
+
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
 	Short: "Start the Tack daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := loadConfig()
+		cfg, err := loadUserConfigOnly()
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
 		}

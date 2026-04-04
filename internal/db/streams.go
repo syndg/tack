@@ -61,6 +61,16 @@ func NewStreamStore(db *sql.DB) *StreamStore {
 // Create inserts a new stream. Generates UUID if ID is empty.
 // Stores FileScope and Dependencies as JSON text.
 func (s *StreamStore) Create(ctx context.Context, stream *domain.Stream) error {
+	if stream.ProjectID == "" {
+		projectID, err := projectIDForPlan(ctx, s.db, stream.PlanID)
+		if err != nil {
+			projectID, err = defaultProjectID(ctx, s.db)
+			if err != nil {
+				return err
+			}
+		}
+		stream.ProjectID = projectID
+	}
 	if stream.ID == "" {
 		stream.ID = uuid.New().String()
 	}
@@ -80,9 +90,9 @@ func (s *StreamStore) Create(ctx context.Context, stream *domain.Stream) error {
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO streams (id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		stream.ID, stream.PlanID, stream.Title, stream.Description,
+		`INSERT INTO streams (id, project_id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		stream.ID, stream.ProjectID, stream.PlanID, stream.Title, stream.Description,
 		string(fileScope), string(dependencies), stream.Status, stream.ExecutionID, now.Unix(),
 	)
 	if err != nil {
@@ -94,7 +104,7 @@ func (s *StreamStore) Create(ctx context.Context, stream *domain.Stream) error {
 // Get retrieves a stream by ID.
 func (s *StreamStore) Get(ctx context.Context, id string) (*domain.Stream, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at
+		`SELECT id, project_id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at
 		 FROM streams WHERE id = ?`, id,
 	)
 
@@ -103,7 +113,7 @@ func (s *StreamStore) Get(ctx context.Context, id string) (*domain.Stream, error
 	var createdAt int64
 
 	err := row.Scan(
-		&stream.ID, &stream.PlanID, &stream.Title, &stream.Description,
+		&stream.ID, &stream.ProjectID, &stream.PlanID, &stream.Title, &stream.Description,
 		&fileScope, &dependencies, &stream.Status, &stream.ExecutionID, &createdAt,
 	)
 	if err != nil {
@@ -126,7 +136,7 @@ func (s *StreamStore) Get(ctx context.Context, id string) (*domain.Stream, error
 // ListByPlan returns all streams for a plan, ordered by created_at asc.
 func (s *StreamStore) ListByPlan(ctx context.Context, planID string) ([]domain.Stream, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at
+		`SELECT id, project_id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at
 		 FROM streams WHERE plan_id = ? ORDER BY created_at ASC`, planID,
 	)
 	if err != nil {
@@ -141,7 +151,7 @@ func (s *StreamStore) ListByPlan(ctx context.Context, planID string) ([]domain.S
 		var createdAt int64
 
 		if err := rows.Scan(
-			&stream.ID, &stream.PlanID, &stream.Title, &stream.Description,
+			&stream.ID, &stream.ProjectID, &stream.PlanID, &stream.Title, &stream.Description,
 			&fileScope, &dependencies, &stream.Status, &stream.ExecutionID, &createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning stream: %w", err)
@@ -161,6 +171,19 @@ func (s *StreamStore) ListByPlan(ctx context.Context, planID string) ([]domain.S
 		return nil, fmt.Errorf("iterating streams: %w", err)
 	}
 	return streams, nil
+}
+
+// ListByProject returns streams for a single project ordered by creation time.
+func (s *StreamStore) ListByProject(ctx context.Context, projectID string) ([]domain.Stream, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, project_id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at
+		 FROM streams WHERE project_id = ? ORDER BY created_at ASC`, projectID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing streams for project %s: %w", projectID, err)
+	}
+	defer rows.Close()
+	return scanStreams(rows)
 }
 
 // UpdateStatus atomically transitions a stream's status, enforcing valid
@@ -211,6 +234,36 @@ func (s *StreamStore) UpdateStatus(ctx context.Context, id string, status domain
 	}
 
 	return &InvalidTransitionError{StreamID: id, From: currentStatus, To: status}
+}
+
+func scanStreams(rows *sql.Rows) ([]domain.Stream, error) {
+	var streams []domain.Stream
+	for rows.Next() {
+		var stream domain.Stream
+		var fileScope string
+		var dependencies string
+		var createdAt int64
+
+		if err := rows.Scan(
+			&stream.ID, &stream.ProjectID, &stream.PlanID, &stream.Title, &stream.Description,
+			&fileScope, &dependencies, &stream.Status, &stream.ExecutionID, &createdAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning stream: %w", err)
+		}
+
+		if err := json.Unmarshal([]byte(fileScope), &stream.FileScope); err != nil {
+			return nil, fmt.Errorf("unmarshalling file_scope: %w", err)
+		}
+		if err := json.Unmarshal([]byte(dependencies), &stream.Dependencies); err != nil {
+			return nil, fmt.Errorf("unmarshalling dependencies: %w", err)
+		}
+		stream.CreatedAt = time.Unix(createdAt, 0)
+		streams = append(streams, stream)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating streams: %w", err)
+	}
+	return streams, nil
 }
 
 // Update saves the mutable fields of a stream (title, description, file_scope,

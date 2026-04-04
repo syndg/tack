@@ -30,16 +30,21 @@ var watchCmd = &cobra.Command{
 	Use:   "watch",
 	Short: "Live stream of agent activity",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		url := daemonURL + "/events"
-		req, err := http.NewRequestWithContext(cmd.Context(), http.MethodGet, url, nil)
+		eventsURL := daemonURL + "/events"
+		req, err := http.NewRequestWithContext(cmd.Context(), http.MethodGet, eventsURL, nil)
 		if err != nil {
 			return fmt.Errorf("creating request: %w", err)
+		}
+		if c, err := newDaemonClient(cmd, false); err == nil {
+			if pid, err := resolveTargetProjectID(cmd, c); err == nil {
+				req.Header.Set("X-Tack-Project-ID", pid)
+			}
 		}
 		req.Header.Set("Accept", "text/event-stream")
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			return fmt.Errorf("connecting to %s: %w", url, err)
+			return fmt.Errorf("connecting to %s: %w", eventsURL, err)
 		}
 		defer resp.Body.Close()
 

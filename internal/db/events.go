@@ -21,13 +21,33 @@ func NewEventStore(db *sql.DB) *EventStore {
 
 // Insert stores a new event in the events table.
 func (s *EventStore) Insert(ctx context.Context, event *domain.Event) error {
+	if event.ProjectID == "" && event.Objective != "" {
+		projectID, err := projectIDForObjective(ctx, s.db, event.Objective)
+		if err != nil {
+			projectID, err = defaultProjectID(ctx, s.db)
+			if err != nil {
+				return err
+			}
+		}
+		event.ProjectID = projectID
+	}
+	if event.ProjectID == "" {
+		projectID, err := defaultProjectID(ctx, s.db)
+		if err != nil {
+			return err
+		}
+		event.ProjectID = projectID
+	}
+	if err := requireProjectID(event.ProjectID); err != nil {
+		return err
+	}
 	now := time.Now()
 	event.CreatedAt = now
 
 	result, err := s.db.ExecContext(ctx,
-		`INSERT INTO events (type, objective, stream, agent, payload, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		string(event.Type), event.Objective, event.Stream,
+		`INSERT INTO events (project_id, type, objective, stream, agent, payload, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		event.ProjectID, string(event.Type), event.Objective, event.Stream,
 		event.Agent, event.Payload, now.Unix(),
 	)
 	if err != nil {
@@ -45,7 +65,7 @@ func (s *EventStore) Insert(ctx context.Context, event *domain.Event) error {
 // ListByObjective returns events for a given objective, ordered by creation time descending.
 func (s *EventStore) ListByObjective(ctx context.Context, objectiveID string, limit int) ([]domain.Event, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, type, objective, stream, agent, payload, created_at
+		`SELECT id, project_id, type, objective, stream, agent, payload, created_at
 		 FROM events WHERE objective = ? ORDER BY created_at DESC LIMIT ?`,
 		objectiveID, limit,
 	)
@@ -59,9 +79,26 @@ func (s *EventStore) ListByObjective(ctx context.Context, objectiveID string, li
 
 // ListRecent returns the most recent events across all objectives.
 func (s *EventStore) ListRecent(ctx context.Context, limit int) ([]domain.Event, error) {
+	return s.listRecent(ctx, "", limit, false)
+}
+
+// ListRecentByProject returns recent events for a single project.
+func (s *EventStore) ListRecentByProject(ctx context.Context, projectID string, limit int) ([]domain.Event, error) {
+	return s.listRecent(ctx, projectID, limit, true)
+}
+
+func (s *EventStore) listRecent(ctx context.Context, projectID string, limit int, filterByProject bool) ([]domain.Event, error) {
+	query := `SELECT id, project_id, type, objective, stream, agent, payload, created_at FROM events`
+	args := []any{}
+	if filterByProject {
+		query += ` WHERE project_id = ?`
+		args = append(args, projectID)
+	}
+	query += ` ORDER BY created_at DESC LIMIT ?`
+	args = append(args, limit)
+
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, type, objective, stream, agent, payload, created_at
-		 FROM events ORDER BY created_at DESC LIMIT ?`, limit,
+		query, args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying recent events: %w", err)
@@ -79,7 +116,7 @@ func scanEvents(rows *sql.Rows) ([]domain.Event, error) {
 		var createdAt int64
 
 		if err := rows.Scan(
-			&ev.ID, &eventType, &ev.Objective, &ev.Stream,
+			&ev.ID, &ev.ProjectID, &eventType, &ev.Objective, &ev.Stream,
 			&ev.Agent, &ev.Payload, &createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning event: %w", err)

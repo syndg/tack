@@ -6,14 +6,16 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/tack/internal/client"
 )
 
 var agentsCmd = &cobra.Command{
 	Use:   "agents",
 	Short: "List active agent sessions",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
 		sessions, err := c.ListAgents(cmd.Context())
 		if err != nil {
 			return err
@@ -41,8 +43,11 @@ var killAgentCmd = &cobra.Command{
 	Short: "Terminate an active agent",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.New(daemonURL)
-		err := c.KillAgent(cmd.Context(), args[0])
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
+		err = c.KillAgent(cmd.Context(), args[0])
 		if err != nil {
 			return err
 		}

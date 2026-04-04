@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/syndg/tack/internal/domain"
@@ -12,8 +14,26 @@ import (
 // handleGetRunSnapshot returns the snapshot for a run by ID.
 func (d *Daemon) handleGetRunSnapshot(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	run, err := d.runStore.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "run not found")
+			return
+		}
+		d.logger.Error("getting run", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get run")
+		return
+	}
+	if !d.ensureProjectMatch(w, r, run.ProjectID) {
+		return
+	}
+	projectCtx, err := d.projectCtxs.Get(r.Context(), run.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
+		return
+	}
 
-	snap, err := d.runsService.Snapshot(r.Context(), id)
+	snap, err := projectCtx.RunsService.Snapshot(r.Context(), id)
 	if err != nil {
 		d.logger.Error("getting run snapshot", "id", id, "error", err)
 		writeError(w, http.StatusNotFound, "run not found")
@@ -28,12 +48,25 @@ func (d *Daemon) handleGetRunSnapshot(w http.ResponseWriter, r *http.Request) {
 //
 // Body: {"kind": "approve"|"retry"|"abort"|"kill", "stream_id": "...", "session_id": "...", "guidance": "...", "reason": "..."}
 func (d *Daemon) handleRunCommand(w http.ResponseWriter, r *http.Request) {
-	if d.runsService == nil {
-		writeError(w, http.StatusServiceUnavailable, "runs service not available")
+	runID := r.PathValue("id")
+	run, err := d.runStore.Get(r.Context(), runID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "run not found")
+			return
+		}
+		d.logger.Error("loading run", "run_id", runID, "error", err)
+		writeError(w, http.StatusInternalServerError, "command failed")
 		return
 	}
-
-	runID := r.PathValue("id")
+	if !d.ensureProjectMatch(w, r, run.ProjectID) {
+		return
+	}
+	projectCtx, err := d.projectCtxs.Get(r.Context(), run.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
+		return
+	}
 
 	var req struct {
 		Kind      domain.CommandKind `json:"kind"`
@@ -55,7 +88,7 @@ func (d *Daemon) handleRunCommand(w http.ResponseWriter, r *http.Request) {
 		Reason:    req.Reason,
 	}
 
-	snap, err := d.runsService.Command(r.Context(), runID, cmd)
+	snap, err := projectCtx.RunsService.Command(r.Context(), runID, cmd)
 	if err != nil {
 		switch {
 		case errors.Is(err, runs.ErrInvalidState):
@@ -74,8 +107,21 @@ func (d *Daemon) handleRunCommand(w http.ResponseWriter, r *http.Request) {
 // of an objective.
 func (d *Daemon) handleGetObjectiveRunSnapshot(w http.ResponseWriter, r *http.Request) {
 	objectiveID := r.PathValue("id")
+	obj, err := d.objectives.Get(r.Context(), objectiveID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "objective not found")
+		return
+	}
+	if !d.ensureProjectMatch(w, r, obj.ProjectID) {
+		return
+	}
+	projectCtx, err := d.projectCtxs.Get(r.Context(), obj.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
+		return
+	}
 
-	snap, err := d.runsService.SnapshotByObjective(r.Context(), objectiveID)
+	snap, err := projectCtx.RunsService.SnapshotByObjective(r.Context(), objectiveID)
 	if err != nil {
 		d.logger.Error("getting objective run snapshot", "objective_id", objectiveID, "error", err)
 		writeError(w, http.StatusNotFound, "run not found for objective")

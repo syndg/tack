@@ -123,6 +123,8 @@ type MergeOrchestrator interface {
 // stack. The runs service owns construction of internal helpers (scheduler,
 // step handlers, coordinator) — callers provide raw infrastructure only.
 type Config struct {
+	ProjectID string
+
 	// Orchestrator overrides internal coordinator construction (testing only).
 	// When non-nil, the service uses this orchestrator directly and ignores
 	// the fields below marked "construction-only". When nil, the service
@@ -218,6 +220,7 @@ type Service struct {
 	coordinator    dispatch.Orchestrator
 	mergeProcessor MergeOrchestrator
 	eventBus       *events.PersistentBus
+	projectID      string
 
 	logger *slog.Logger
 }
@@ -286,6 +289,7 @@ func New(cfg Config) (*Service, error) {
 		// Agent and blueprint_ref step handlers are registered inside NewCoordinator.
 		var err error
 		coordinator, err = dispatch.NewCoordinator(dispatch.Config{
+			ProjectID:      cfg.ProjectID,
 			Engine:         cfg.Engine,
 			Scheduler:      scheduler,
 			Spawner:        spawner,
@@ -317,6 +321,7 @@ func New(cfg Config) (*Service, error) {
 		coordinator:    coordinator,
 		mergeProcessor: cfg.MergeProcessor,
 		eventBus:       cfg.EventBus,
+		projectID:      cfg.ProjectID,
 		logger:         logger,
 	}, nil
 }
@@ -561,6 +566,7 @@ func (s *Service) Snapshot(ctx context.Context, runID string) (domain.Snapshot, 
 
 	snap := domain.Snapshot{
 		RunID:       run.ID,
+		ProjectID:   run.ProjectID,
 		ObjectiveID: run.ObjectiveID,
 		Status:      run.Status,
 		CreatedAt:   run.CreatedAt,
@@ -659,7 +665,15 @@ func (s *Service) Run(ctx context.Context) error {
 //   - Still executing → leave as active (coordinator resumes the execution)
 //   - Objective missing or in unexpected state → mark run failed
 func (s *Service) recoverRuns(ctx context.Context) {
-	activeRuns, err := s.runs.ListActive(ctx)
+	var (
+		activeRuns []domain.Run
+		err        error
+	)
+	if s.projectID != "" {
+		activeRuns, err = s.runs.ListActiveByProject(ctx, s.projectID)
+	} else {
+		activeRuns, err = s.runs.ListActive(ctx)
+	}
 	if err != nil {
 		s.logger.Warn("failed to list active runs for recovery", "error", err)
 		return

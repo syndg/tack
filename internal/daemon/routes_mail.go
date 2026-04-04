@@ -22,6 +22,13 @@ func (d *Daemon) handleSendMail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	if msg.ProjectID == "" {
+		projectCtx, ok := d.requireProjectContext(w, r)
+		if !ok {
+			return
+		}
+		msg.ProjectID = projectCtx.Project.ID
+	}
 
 	if err := d.mailBroker.Send(r.Context(), &msg); err != nil {
 		d.logger.Error("sending mail", "from", msg.From, "to", msg.To, "error", err)
@@ -42,11 +49,19 @@ func (d *Daemon) handleListMail(w http.ResponseWriter, r *http.Request) {
 
 	q := r.URL.Query()
 	filters := db.MailFilters{
+		ProjectID:  d.targetProjectID(r),
 		Objective:  q.Get("objective"),
 		From:       q.Get("from"),
 		To:         q.Get("to"),
 		Type:       q.Get("type"),
 		UnreadOnly: q.Get("unread") == "true",
+	}
+	if filters.ProjectID == "" && !wantsAllProjects(r) {
+		projectCtx, ok := d.requireProjectContext(w, r)
+		if !ok {
+			return
+		}
+		filters.ProjectID = projectCtx.Project.ID
 	}
 
 	messages, err := d.mailBroker.List(r.Context(), filters)
@@ -71,8 +86,12 @@ func (d *Daemon) handleGetUnreadMail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agentName := r.PathValue("agentName")
+	projectCtx, ok := d.requireProjectContext(w, r)
+	if !ok {
+		return
+	}
 
-	messages, err := d.mailBroker.GetUnread(r.Context(), agentName)
+	messages, err := d.mailBroker.GetUnread(r.Context(), agentName, projectCtx.Project.ID)
 	if err != nil {
 		d.logger.Error("getting unread mail", "agent", agentName, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to get unread mail")
@@ -117,8 +136,12 @@ func (d *Daemon) handleMarkAllMailRead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agentName := r.PathValue("agentName")
+	projectCtx, ok := d.requireProjectContext(w, r)
+	if !ok {
+		return
+	}
 
-	if err := d.mailBroker.MarkAllRead(r.Context(), agentName); err != nil {
+	if err := d.mailBroker.MarkAllRead(r.Context(), agentName, projectCtx.Project.ID); err != nil {
 		d.logger.Error("marking all mail read", "agent", agentName, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to mark all messages read")
 		return

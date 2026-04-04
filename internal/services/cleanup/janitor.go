@@ -29,15 +29,17 @@ type execFunc func(ctx context.Context, dir, name string, args ...string) ([]byt
 // This makes the PR head branch the only durable branch visible to humans.
 type Janitor struct {
 	objectives  *db.ObjectiveStore
+	projectID   string
 	projectRoot string
 	interval    time.Duration
 	logger      *slog.Logger
 	exec        execFunc
 }
 
-func NewJanitor(objectives *db.ObjectiveStore, projectRoot string, logger *slog.Logger) *Janitor {
+func NewJanitor(objectives *db.ObjectiveStore, projectID string, projectRoot string, logger *slog.Logger) *Janitor {
 	return &Janitor{
 		objectives:  objectives,
+		projectID:   projectID,
 		projectRoot: projectRoot,
 		interval:    defaultJanitorInterval,
 		logger:      logger.With("component", "branch-janitor"),
@@ -82,7 +84,7 @@ func (j *Janitor) prune(ctx context.Context) error {
 
 	_, _ = j.exec(ctx, j.projectRoot, "git", "worktree", "prune")
 
-	objectives, err := j.objectives.List(ctx)
+	objectives, err := j.objectives.ListByProject(ctx, j.projectID)
 	if err != nil {
 		return fmt.Errorf("listing objectives: %w", err)
 	}

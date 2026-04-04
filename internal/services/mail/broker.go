@@ -48,7 +48,7 @@ func (b *Broker) Send(ctx context.Context, msg *domain.MailMessage) error {
 		dedupKey := computeDedupKey(msg.Subject, msg.Stream, msg.Objective)
 		msg.DedupKey = dedupKey
 
-		exists, err := b.mail.ExistsUnreadDedup(ctx, dedupKey)
+		exists, err := b.mail.ExistsUnreadDedup(ctx, dedupKey, msg.ProjectID)
 		if err != nil {
 			b.logger.Error("checking escalation dedup", "error", err)
 			// Continue anyway — better to duplicate than to drop
@@ -66,6 +66,7 @@ func (b *Broker) Send(ctx context.Context, msg *domain.MailMessage) error {
 		}
 
 		b.eventBus.Publish(domain.Event{
+			ProjectID: msg.ProjectID,
 			Type:      domain.EventEscalation,
 			Objective: msg.Objective,
 			Stream:    msg.Stream,
@@ -81,6 +82,7 @@ func (b *Broker) Send(ctx context.Context, msg *domain.MailMessage) error {
 	}
 
 	b.eventBus.Publish(domain.Event{
+		ProjectID: msg.ProjectID,
 		Type:      domain.EventMailSent,
 		Objective: msg.Objective,
 		Stream:    msg.Stream,
@@ -92,8 +94,8 @@ func (b *Broker) Send(ctx context.Context, msg *domain.MailMessage) error {
 }
 
 // GetUnread retrieves unread messages for an agent.
-func (b *Broker) GetUnread(ctx context.Context, agentName string) ([]domain.MailMessage, error) {
-	messages, err := b.mail.GetUnread(ctx, agentName)
+func (b *Broker) GetUnread(ctx context.Context, agentName string, projectID ...string) ([]domain.MailMessage, error) {
+	messages, err := b.mail.GetUnread(ctx, agentName, projectID...)
 	if err != nil {
 		return nil, fmt.Errorf("getting unread mail for %s: %w", agentName, err)
 	}
@@ -109,8 +111,8 @@ func (b *Broker) MarkRead(ctx context.Context, messageID int64) error {
 }
 
 // MarkAllRead marks all unread messages for an agent as read.
-func (b *Broker) MarkAllRead(ctx context.Context, agentName string) error {
-	if _, err := b.mail.MarkAllRead(ctx, agentName); err != nil {
+func (b *Broker) MarkAllRead(ctx context.Context, agentName string, projectID ...string) error {
+	if _, err := b.mail.MarkAllRead(ctx, agentName, projectID...); err != nil {
 		return fmt.Errorf("marking all messages for %s as read: %w", agentName, err)
 	}
 	return nil

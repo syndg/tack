@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -42,7 +43,20 @@ func (d *Daemon) handleCreatePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plan, err := d.planningService.CreatePlan(r.Context(), req.ObjectiveID, req.Output)
+	obj, err := d.objectives.Get(r.Context(), req.ObjectiveID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "objective not found")
+		return
+	}
+	if !d.ensureProjectMatch(w, r, obj.ProjectID) {
+		return
+	}
+	projectCtx, err := d.projectCtxs.Get(r.Context(), obj.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
+		return
+	}
+	plan, err := projectCtx.PlanningService.CreatePlan(r.Context(), req.ObjectiveID, req.Output)
 	if err != nil {
 		if strings.Contains(err.Error(), "parsing plan") || strings.Contains(err.Error(), "validating plan") {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -58,7 +72,19 @@ func (d *Daemon) handleCreatePlan(w http.ResponseWriter, r *http.Request) {
 
 // handleListPlans returns all plans as a JSON array.
 func (d *Daemon) handleListPlans(w http.ResponseWriter, r *http.Request) {
-	plans, err := d.plans.List(r.Context())
+	var (
+		plans []domain.Plan
+		err   error
+	)
+	if wantsAllProjects(r) {
+		plans, err = d.plans.List(r.Context())
+	} else {
+		projectCtx, ok := d.requireProjectContext(w, r)
+		if !ok {
+			return
+		}
+		plans, err = d.plans.ListByProject(r.Context(), projectCtx.Project.ID)
+	}
 	if err != nil {
 		d.logger.Error("listing plans", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list plans")
@@ -73,8 +99,26 @@ func (d *Daemon) handleListPlans(w http.ResponseWriter, r *http.Request) {
 // handleGetPlan returns a plan together with its streams.
 func (d *Daemon) handleGetPlan(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	planMeta, err := d.plans.Get(r.Context(), id)
+	if err != nil {
+		if isPlanNotFound(err) {
+			writeError(w, http.StatusNotFound, "plan not found")
+			return
+		}
+		d.logger.Error("getting plan", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get plan")
+		return
+	}
+	if !d.ensureProjectMatch(w, r, planMeta.ProjectID) {
+		return
+	}
+	projectCtx, err := d.projectCtxs.Get(r.Context(), planMeta.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
+		return
+	}
 
-	plan, streams, err := d.planningService.GetPlanWithStreams(r.Context(), id)
+	plan, streams, err := projectCtx.PlanningService.GetPlanWithStreams(r.Context(), id)
 	if err != nil {
 		if isPlanNotFound(err) {
 			writeError(w, http.StatusNotFound, "plan not found")
@@ -94,8 +138,25 @@ func (d *Daemon) handleGetPlan(w http.ResponseWriter, r *http.Request) {
 // handleApprovePlan approves a plan through the planning workflow boundary.
 func (d *Daemon) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	planMeta, err := d.plans.Get(r.Context(), id)
+	if err != nil {
+		if isPlanNotFound(err) {
+			writeError(w, http.StatusNotFound, "plan not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to approve plan")
+		return
+	}
+	if !d.ensureProjectMatch(w, r, planMeta.ProjectID) {
+		return
+	}
+	projectCtx, err := d.projectCtxs.Get(r.Context(), planMeta.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
+		return
+	}
 
-	plan, err := d.planningService.ApprovePlan(r.Context(), id)
+	plan, err := projectCtx.PlanningService.ApprovePlan(r.Context(), id)
 	if err != nil {
 		switch {
 		case isPlanNotFound(err):
@@ -115,8 +176,25 @@ func (d *Daemon) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 // handleRejectPlan rejects a plan and returns the objective to planning.
 func (d *Daemon) handleRejectPlan(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	planMeta, err := d.plans.Get(r.Context(), id)
+	if err != nil {
+		if isPlanNotFound(err) {
+			writeError(w, http.StatusNotFound, "plan not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to reject plan")
+		return
+	}
+	if !d.ensureProjectMatch(w, r, planMeta.ProjectID) {
+		return
+	}
+	projectCtx, err := d.projectCtxs.Get(r.Context(), planMeta.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
+		return
+	}
 
-	plan, err := d.planningService.RejectPlan(r.Context(), id)
+	plan, err := projectCtx.PlanningService.RejectPlan(r.Context(), id)
 	if err != nil {
 		if isPlanNotFound(err) {
 			writeError(w, http.StatusNotFound, "plan not found")
@@ -134,13 +212,17 @@ func (d *Daemon) handleRejectPlan(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleListStreams(w http.ResponseWriter, r *http.Request) {
 	planID := r.PathValue("id")
 
-	if _, err := d.plans.Get(r.Context(), planID); err != nil {
+	plan, err := d.plans.Get(r.Context(), planID)
+	if err != nil {
 		if isPlanNotFound(err) {
 			writeError(w, http.StatusNotFound, "plan not found")
 			return
 		}
 		d.logger.Error("getting plan for stream list", "plan_id", planID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to get plan")
+		return
+	}
+	if !d.ensureProjectMatch(w, r, plan.ProjectID) {
 		return
 	}
 
@@ -169,6 +251,9 @@ func (d *Daemon) handleGetStream(w http.ResponseWriter, r *http.Request) {
 		}
 		d.logger.Error("getting stream", "id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to get stream")
+		return
+	}
+	if !d.ensureProjectMatch(w, r, stream.ProjectID) {
 		return
 	}
 
