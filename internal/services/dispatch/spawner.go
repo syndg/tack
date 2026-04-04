@@ -146,7 +146,6 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	var err error
 
 	sandboxEnvVars := map[string]string{}
-	injectRuntimeCredentials(s.creds, s.runtimeAuth, s.logger, sandboxEnvVars)
 	injectRuntimeGitIdentity(s.gitAuthorName, s.gitAuthorEmail, sandboxEnvVars)
 
 	if req.Stream != nil {
@@ -249,6 +248,9 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	envVars := make(map[string]string, len(sandboxEnvVars)+6)
 	for k, v := range sandboxEnvVars {
 		envVars[k] = v
+	}
+	if err := injectRuntimeCredentials(ctx, s.rt.Name(), s.runtimeAuth.Provider, s.creds, s.logger, sb, envVars); err != nil {
+		return nil, fmt.Errorf("preparing runtime credentials: %w", err)
 	}
 	envVars["TACK_DAEMON_URL"] = s.daemonURL
 	envVars["TACK_AGENT_TOKEN"] = agentToken
@@ -425,7 +427,6 @@ func (s *Spawner) CleanupObjective(ctx context.Context, objectiveID string) {
 
 // injectCredentials adds model provider and git credentials to the env map.
 func (s *Spawner) injectCredentials(envVars map[string]string) {
-	injectRuntimeCredentials(s.creds, s.runtimeAuth, s.logger, envVars)
 	// Git token: always inject if configured.
 	if s.creds == nil {
 		return

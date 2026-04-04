@@ -749,7 +749,9 @@ func (h *Handlers) generatePRMessages(ctx context.Context, sb sandbox.Sandbox, s
 		return agents.GeneratedMessages{}, nil
 	}
 	envVars := map[string]string{}
-	injectRuntimeCredentials(h.creds, h.runtimeAuth, h.logger, envVars)
+	if err := injectRuntimeCredentials(ctx, h.agentRuntime.Name(), h.runtimeAuth.Provider, h.creds, h.logger, sb, envVars); err != nil {
+		return agents.GeneratedMessages{}, fmt.Errorf("preparing pr-writer auth: %w", err)
+	}
 	proc, err := h.agentRuntime.Spawn(ctx, sb, runtime.AgentOpts{
 		Role:    "pr-writer",
 		Model:   h.modelForDeterministicStep(step),

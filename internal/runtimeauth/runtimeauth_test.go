@@ -26,6 +26,9 @@ func TestPIProbeUsesNativeProvidersAndLiveCatalog(t *testing.T) {
 	if !probe.NativeAvailable {
 		t.Fatal("expected native providers to be detected")
 	}
+	if probe.NativeMethods["anthropic"] != MethodOAuth || probe.NativeMethods["openai-codex"] != MethodAPIKey {
+		t.Fatalf("NativeMethods = %#v", probe.NativeMethods)
+	}
 	if len(probe.NativeProviders) != 2 {
 		t.Fatalf("NativeProviders = %v, want 2 providers", probe.NativeProviders)
 	}
@@ -48,24 +51,27 @@ func TestClaudeProbeParsesAuthStatus(t *testing.T) {
 	if !probe.NativeAvailable {
 		t.Fatal("expected Claude native auth to be detected")
 	}
+	if probe.NativeMethods["anthropic"] != MethodOAuth {
+		t.Fatalf("NativeMethods[anthropic] = %q, want oauth", probe.NativeMethods["anthropic"])
+	}
 }
 
-func TestInjectEnvUsesCanonicalProviderRefAndOAuthVar(t *testing.T) {
+func TestInjectEnvUsesCanonicalProviderRef(t *testing.T) {
 	store, err := credentials.Load(filepath.Join(t.TempDir(), "credentials.yaml"))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	store.SetModelProvider("anthropic", credentials.ProviderCredential{Type: credentials.TypeSetupToken, Token: "tok-123"})
+	store.SetModelProvider("anthropic", credentials.ProviderCredential{Type: credentials.TypeAPIKey, APIKey: "tok-123"})
 	binding := config.RuntimeAuthConfig{Mode: ModeTack, Runtime: "claude-code", Provider: "anthropic", CredentialRef: "anthropic"}
 	env := map[string]string{}
 	if err := InjectEnv(binding, store, nil, env); err != nil {
 		t.Fatalf("InjectEnv: %v", err)
 	}
-	if env["ANTHROPIC_OAUTH_TOKEN"] != "tok-123" {
-		t.Fatalf("ANTHROPIC_OAUTH_TOKEN = %q, want tok-123", env["ANTHROPIC_OAUTH_TOKEN"])
+	if env["ANTHROPIC_API_KEY"] != "tok-123" {
+		t.Fatalf("ANTHROPIC_API_KEY = %q, want tok-123", env["ANTHROPIC_API_KEY"])
 	}
-	if CredentialRefForProvider("openai-codex") != "openai" {
-		t.Fatalf("CredentialRefForProvider(openai-codex) = %q, want openai", CredentialRefForProvider("openai-codex"))
+	if CredentialRefForProvider("openai-codex") != "openai-codex" {
+		t.Fatalf("CredentialRefForProvider(openai-codex) = %q, want openai-codex", CredentialRefForProvider("openai-codex"))
 	}
 }
 
@@ -76,5 +82,15 @@ func TestValidateBindingRejectsNativeRemote(t *testing.T) {
 	binding := config.RuntimeAuthConfig{Mode: ModeNative, Runtime: "claude-code", Provider: "anthropic"}
 	if err := ValidateBinding(adapter, binding, "daytona"); err == nil {
 		t.Fatal("expected native remote binding to be rejected")
+	}
+}
+
+func TestValidateBindingRejectsAnthropicOAuth(t *testing.T) {
+	adapter := newPIAdapter(func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\n"), nil
+	})
+	binding := config.RuntimeAuthConfig{Mode: ModeNative, Runtime: "pi", Provider: "anthropic", Method: MethodOAuth}
+	if err := ValidateBinding(adapter, binding, "local"); err == nil {
+		t.Fatal("expected anthropic oauth binding to be rejected")
 	}
 }

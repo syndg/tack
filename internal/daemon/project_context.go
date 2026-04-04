@@ -234,6 +234,9 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 	if err != nil {
 		m.logger.Warn("runtime auth probe failed", "runtime", binding.Runtime, "project_id", project.ID, "error", err)
 	}
+	if binding.Mode == runtimeauth.ModeNative && binding.Method == "" {
+		binding.Method = probe.NativeMethods[binding.Provider]
+	}
 	if err := runtimeauth.ValidateBinding(adapter, binding, cfg.Sandbox.Provider); err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
 	"github.com/syndg/tack/internal/credentials"
+	"github.com/syndg/tack/internal/providerauth"
 )
 
 func init() {
@@ -41,78 +43,85 @@ var authAddCmd = &cobra.Command{
 		}
 
 		switch provider {
-		case "anthropic", "openai", "gemini", "groq", "mistral", "xai":
+		case "anthropic", "openai", "openai-codex", "gemini", "groq", "mistral", "xai":
 			return addModelProvider(store, provider)
 		case "github", "gitlab", "git":
 			return addGitCredential(store, provider)
 		case "daytona":
 			return addSandboxCredential(store, provider)
 		default:
-			return fmt.Errorf("unknown provider %q (supported: anthropic, openai, gemini, groq, mistral, xai, github, gitlab, daytona)", provider)
+			return fmt.Errorf("unknown provider %q (supported: anthropic, openai, openai-codex, gemini, groq, mistral, xai, github, gitlab, daytona)", provider)
 		}
 	},
 }
 
 func addModelProvider(store *credentials.Store, provider string) error {
-	var credType string
-	typeOptions := []huh.Option[string]{
-		huh.NewOption("API Key", credentials.TypeAPIKey),
-	}
-	if provider == "anthropic" {
-		typeOptions = append(typeOptions, huh.NewOption("Setup Token (subscription)", credentials.TypeSetupToken))
-	}
-
-	if len(typeOptions) == 1 {
-		credType = credentials.TypeAPIKey
-	} else {
+	if provider == "openai-codex" {
+		var method string
 		err := huh.NewSelect[string]().
-			Title("Auth method for " + provider).
-			Options(typeOptions...).
-			Value(&credType).
+			Title("Auth method for OpenAI Codex").
+			Options(
+				huh.NewOption("API Key", credentials.TypeAPIKey),
+				huh.NewOption("Sign in with OpenAI Codex", credentials.TypeOAuth),
+			).
+			Value(&method).
 			Run()
 		if err != nil {
 			return err
+		}
+		if method == credentials.TypeOAuth {
+			return addOpenAICodexOAuth(store)
 		}
 	}
 
 	var value string
-	switch credType {
-	case credentials.TypeAPIKey:
-		err := huh.NewInput().
-			Title("API key for " + provider).
-			EchoMode(huh.EchoModePassword).
-			Value(&value).
-			Run()
-		if err != nil {
-			return err
-		}
-		store.SetModelProvider(provider, credentials.ProviderCredential{
-			Type:   credentials.TypeAPIKey,
-			APIKey: value,
-		})
-
-	case credentials.TypeSetupToken:
-		err := huh.NewInput().
-			Title("Setup token (run `claude setup-token` to get one)").
-			EchoMode(huh.EchoModePassword).
-			Value(&value).
-			Run()
-		if err != nil {
-			return err
-		}
-		if err := credentials.ValidateSetupToken(value); err != nil {
-			return fmt.Errorf("invalid setup token: %w", err)
-		}
-		store.SetModelProvider(provider, credentials.ProviderCredential{
-			Type:  credentials.TypeSetupToken,
-			Token: value,
-		})
+	err := huh.NewInput().
+		Title("API key for " + provider).
+		EchoMode(huh.EchoModePassword).
+		Value(&value).
+		Run()
+	if err != nil {
+		return err
 	}
+	store.SetModelProvider(provider, credentials.ProviderCredential{
+		Type:   credentials.TypeAPIKey,
+		APIKey: value,
+	})
 
 	if err := store.Save(); err != nil {
 		return err
 	}
 	fmt.Printf("Stored %s credential in %s\n", provider, store.Path())
+	return nil
+}
+
+func addOpenAICodexOAuth(store *credentials.Store) error {
+	creds, err := providerauth.LoginOpenAICodex(context.Background(), providerauth.OAuthLoginCallbacks{
+		OnAuth: func(url, instructions string) {
+			fmt.Printf("\nOpenAI Codex sign-in\n%s\n%s\n\n", url, instructions)
+		},
+		OnPrompt: func(message string) (string, error) {
+			var input string
+			if err := huh.NewInput().Title(message).Value(&input).Run(); err != nil {
+				return "", err
+			}
+			return input, nil
+		},
+	})
+	if err != nil {
+		return err
+	}
+	store.SetModelProvider("openai-codex", credentials.ProviderCredential{
+		Type:         credentials.TypeOAuth,
+		AccessToken:  creds.AccessToken,
+		RefreshToken: creds.RefreshToken,
+		ExpiresAt:    creds.ExpiresAt,
+		AccountID:    creds.AccountID,
+	})
+	if err := store.Save(); err != nil {
+		return err
+	}
+	fmt.Printf("Stored openai-codex oauth credential in %s\n", store.Path())
 	return nil
 }
 

@@ -13,7 +13,9 @@ func TestBuildProjectConfigWritesRuntimeAuthAndModels(t *testing.T) {
 		SandboxProvider: "local",
 		Provider:        "openai-codex",
 		RuntimeAuthMode: "tack",
-		CredentialRef:   "openai",
+		AuthMethod:      "api_key",
+		AuthMethodLabel: "Enter OpenAI Codex API key",
+		CredentialRef:   "openai-codex",
 		AgentModel:      "gpt-5.4",
 		PlannerModel:    "gpt-5.4",
 		SmallTaskModel:  "gpt-5.4-mini",
@@ -23,8 +25,11 @@ func TestBuildProjectConfigWritesRuntimeAuthAndModels(t *testing.T) {
 	if runtimeAuth["provider"] != "openai-codex" {
 		t.Fatalf("provider = %v, want openai-codex", runtimeAuth["provider"])
 	}
-	if runtimeAuth["credential_ref"] != "openai" {
-		t.Fatalf("credential_ref = %v, want openai", runtimeAuth["credential_ref"])
+	if runtimeAuth["method"] != "api_key" {
+		t.Fatalf("method = %v, want api_key", runtimeAuth["method"])
+	}
+	if runtimeAuth["credential_ref"] != "openai-codex" {
+		t.Fatalf("credential_ref = %v, want openai-codex", runtimeAuth["credential_ref"])
 	}
 	models := configMap["models"].(map[string]interface{})
 	if models["planner"] != "gpt-5.4" || models["small_tasks"] != "gpt-5.4-mini" {

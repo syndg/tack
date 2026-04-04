@@ -19,6 +19,9 @@ import (
 const (
 	ModeNative = "native"
 	ModeTack   = "tack"
+
+	MethodAPIKey = "api_key"
+	MethodOAuth  = "oauth"
 )
 
 type ModelOption struct {
@@ -36,6 +39,7 @@ type ProbeResult struct {
 	RuntimeAvailable   bool
 	NativeAvailable    bool
 	NativeProviders    []string
+	NativeMethods      map[string]string
 	NativeDescription  string
 	SuggestedProvider  string
 	SupportedProviders []ProviderOption
@@ -81,7 +85,7 @@ type adapter struct {
 var providerCredentialRefs = map[string]string{
 	"anthropic":    "anthropic",
 	"openai":       "openai",
-	"openai-codex": "openai",
+	"openai-codex": "openai-codex",
 	"gemini":       "gemini",
 	"google":       "gemini",
 	"groq":         "groq",
@@ -147,6 +151,10 @@ func CredentialRefForProvider(provider string) string {
 	return canonicalCredentialRef(provider)
 }
 
+func ProviderDisplayName(provider string) string {
+	return providerLabel(provider)
+}
+
 func ValidateBinding(adapter Adapter, binding config.RuntimeAuthConfig, sandboxProvider string) error {
 	if binding.Mode == "" {
 		return nil
@@ -156,6 +164,21 @@ func ValidateBinding(adapter Adapter, binding config.RuntimeAuthConfig, sandboxP
 	}
 	if err := adapter.ValidateProvider(binding.Provider); err != nil {
 		return err
+	}
+	if binding.Mode == ModeTack {
+		switch binding.Provider {
+		case "anthropic", "openai":
+			if binding.Method != "" && binding.Method != MethodAPIKey {
+				return fmt.Errorf("runtime_auth.method=%q is not supported for provider %s", binding.Method, binding.Provider)
+			}
+		case "openai-codex":
+			if binding.Method != "" && binding.Method != MethodAPIKey && binding.Method != MethodOAuth {
+				return fmt.Errorf("runtime_auth.method=%q is not supported for provider %s", binding.Method, binding.Provider)
+			}
+		}
+	}
+	if binding.Provider == "anthropic" && binding.Method == MethodOAuth {
+		return fmt.Errorf("Anthropic subscription/OAuth auth is not supported by Tack; use an Anthropic API key instead")
 	}
 	if binding.Mode == ModeNative {
 		if sandboxProvider != "local" && !adapter.SupportsNativeRemote() {
@@ -198,6 +221,7 @@ func newPIAdapter(execRunner execFunc) Adapter {
 		runtime: "pi",
 		providers: []ProviderOption{
 			{ID: "anthropic", Label: "Anthropic"},
+			{ID: "openai", Label: "OpenAI"},
 			{ID: "openai-codex", Label: "OpenAI Codex"},
 		},
 		models: map[string][]ModelOption{
@@ -209,35 +233,77 @@ func newPIAdapter(execRunner execFunc) Adapter {
 				{ID: "claude-haiku-4-5", Label: "claude-haiku-4-5"},
 			},
 			"openai-codex": {
-				{ID: "gpt-5.4", Label: "gpt-5.4"},
-				{ID: "gpt-5.4-mini", Label: "gpt-5.4-mini"},
+				{ID: "gpt-5.1", Label: "gpt-5.1"},
+				{ID: "gpt-5.1-codex-max", Label: "gpt-5.1-codex-max"},
+				{ID: "gpt-5.1-codex-mini", Label: "gpt-5.1-codex-mini"},
+				{ID: "gpt-5.2", Label: "gpt-5.2"},
+				{ID: "gpt-5.2-codex", Label: "gpt-5.2-codex"},
 				{ID: "gpt-5.3-codex", Label: "gpt-5.3-codex"},
 				{ID: "gpt-5.3-codex-spark", Label: "gpt-5.3-codex-spark"},
+				{ID: "gpt-5.4", Label: "gpt-5.4"},
+				{ID: "gpt-5.4-mini", Label: "gpt-5.4-mini"},
+			},
+			"openai": {
+				{ID: "gpt-4.1", Label: "gpt-4.1"},
+				{ID: "gpt-4.1-mini", Label: "gpt-4.1-mini"},
+				{ID: "gpt-4o", Label: "gpt-4o"},
+				{ID: "gpt-5", Label: "gpt-5"},
+				{ID: "gpt-5-mini", Label: "gpt-5-mini"},
+				{ID: "gpt-5.1", Label: "gpt-5.1"},
+				{ID: "gpt-5.2", Label: "gpt-5.2"},
+				{ID: "gpt-5.4", Label: "gpt-5.4"},
+				{ID: "o3", Label: "o3"},
+				{ID: "o4-mini", Label: "o4-mini"},
 			},
 		},
 		localOnly:  true,
 		remoteOkay: false,
 		probe: func(ctx context.Context) (ProbeResult, error) {
-			result := ProbeResult{RuntimeAvailable: commandAvailable("pi")}
+			result := ProbeResult{RuntimeAvailable: commandAvailable("pi"), NativeMethods: map[string]string{}}
 			catalogProviders, catalogModels, err := loadPIModelCatalog(ctx, execRunner)
 			if err == nil {
-				a.providers = catalogProviders
-				a.models = catalogModels
-				result.SupportedProviders = append([]ProviderOption(nil), catalogProviders...)
-				if len(catalogProviders) > 0 {
-					result.SuggestedProvider = catalogProviders[0].ID
+				for _, provider := range catalogProviders {
+					found := false
+					for i, existing := range a.providers {
+						if existing.ID == provider.ID {
+							a.providers[i] = provider
+							found = true
+							break
+						}
+					}
+					if !found {
+						a.providers = append(a.providers, provider)
+					}
+				}
+				for providerID, models := range catalogModels {
+					a.models[providerID] = models
+				}
+				result.SupportedProviders = append([]ProviderOption(nil), a.providers...)
+				if len(result.SupportedProviders) > 0 {
+					result.SuggestedProvider = result.SupportedProviders[0].ID
 				}
 			}
-			nativeProviders, err := loadPINativeProviders()
+			nativeMethods, err := loadPINativeMethods()
 			if err != nil {
 				return result, err
+			}
+			for provider, method := range nativeMethods {
+				result.NativeMethods[provider] = method
+			}
+			nativeProviders := make([]string, 0, len(nativeMethods))
+			for provider := range nativeMethods {
+				nativeProviders = append(nativeProviders, provider)
 			}
 			filtered := filterSupportedProviders(nativeProviders, a.models)
 			if len(filtered) > 0 {
 				result.NativeAvailable = true
 				result.NativeProviders = filtered
 				result.SuggestedProvider = filtered[0]
-				result.NativeDescription = fmt.Sprintf("Found Pi auth for %s", strings.Join(filtered, ", "))
+				descriptions := make([]string, 0, len(filtered))
+				for _, provider := range filtered {
+					descriptions = append(descriptions, provider+" ("+result.NativeMethods[provider]+")")
+				}
+				result.NativeDescription = fmt.Sprintf("Found Pi auth for %s", strings.Join(descriptions, ", "))
 			}
 			_ = ctx
 			return result, nil
@@ -262,7 +328,7 @@ func newClaudeAdapter(execRunner execFunc) Adapter {
 		localOnly:  true,
 		remoteOkay: false,
 		probe: func(ctx context.Context) (ProbeResult, error) {
-			result := ProbeResult{RuntimeAvailable: commandAvailable("claude"), SuggestedProvider: "anthropic"}
+			result := ProbeResult{RuntimeAvailable: commandAvailable("claude"), SuggestedProvider: "anthropic", NativeMethods: map[string]string{}}
 			stdout, err := execRunner(ctx, "claude", "auth", "status")
 			if err != nil {
 				if !result.RuntimeAvailable {
@@ -278,6 +344,7 @@ func newClaudeAdapter(execRunner execFunc) Adapter {
 			if status.LoggedIn {
 				result.NativeAvailable = true
 				result.NativeProviders = []string{"anthropic"}
+				result.NativeMethods["anthropic"] = MethodOAuth
 				details := []string{"Found Claude auth"}
 				if status.Email != "" {
 					details = append(details, status.Email)
@@ -301,12 +368,12 @@ func commandAvailable(name string) bool {
 	return err == nil
 }
 
-func loadPINativeProviders() ([]string, error) {
+func loadPINativeMethods() (map[string]string, error) {
 	path := piAuthPath()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return map[string]string{}, nil
 		}
 		return nil, fmt.Errorf("reading Pi auth store: %w", err)
 	}
@@ -314,12 +381,15 @@ func loadPINativeProviders() ([]string, error) {
 	if err := yaml.Unmarshal(data, &auth); err != nil {
 		return nil, fmt.Errorf("parsing Pi auth store: %w", err)
 	}
-	providers := make([]string, 0, len(auth))
-	for provider := range auth {
-		providers = append(providers, provider)
+	methods := make(map[string]string, len(auth))
+	for provider, cred := range auth {
+		method := cred.Type
+		if method == "" {
+			method = MethodAPIKey
+		}
+		methods[provider] = method
 	}
-	slices.Sort(providers)
-	return providers, nil
+	return methods, nil
 }
 
 func piAuthPath() string {
@@ -412,7 +482,7 @@ func envForResolvedProvider(provider, credType, value string) map[string]string 
 		switch credType {
 		case credentials.TypeAPIKey:
 			result["ANTHROPIC_API_KEY"] = value
-		case credentials.TypeSetupToken, credentials.TypeOAuth:
+		case credentials.TypeOAuth:
 			result["ANTHROPIC_OAUTH_TOKEN"] = value
 		}
 	case "openai":

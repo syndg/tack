@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadMissing(t *testing.T) {
@@ -11,8 +12,8 @@ func TestLoadMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(s.data.ModelProviders) != 0 {
-		t.Fatal("expected empty model_providers")
+	if len(s.data.Providers) != 0 {
+		t.Fatal("expected empty providers")
 	}
 	if s.data.Git != nil {
 		t.Fatal("expected nil git")
@@ -141,53 +142,31 @@ func TestResolveLiteral(t *testing.T) {
 	}
 }
 
-func TestSetupTokenValidation(t *testing.T) {
-	tests := []struct {
-		token string
-		ok    bool
-	}{
-		{"sk-ant-oat01-abc", false}, // right prefix but too short (17 chars)
-		{"sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz01234", true},  // exactly 80
-		{"sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz012345", true}, // 81
-		{"sk-ant-api03-short", false}, // wrong prefix
-		{"sk-ant-oat01-short", false}, // too short
-	}
-	for _, tt := range tests {
-		err := ValidateSetupToken(tt.token)
-		if tt.ok && err != nil {
-			t.Errorf("ValidateSetupToken(%q[:20]...) = %v, want nil", tt.token[:20], err)
-		}
-		if !tt.ok && err == nil {
-			t.Errorf("ValidateSetupToken(%q[:20]...) = nil, want error", tt.token[:20])
-		}
-	}
-}
-
-func TestSetupTokenType(t *testing.T) {
+func TestOAuthProviderRefreshesAndResolves(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "creds.yaml")
 	s, _ := Load(path)
-	s.SetModelProvider("anthropic", ProviderCredential{
-		Type:  TypeSetupToken,
-		Token: "sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz01234",
-	})
+	s.SetModelProvider("openai-codex", ProviderCredential{Type: TypeOAuth, AccessToken: "tok", RefreshToken: "refresh", ExpiresAt: time.Now().Add(5 * time.Minute).UnixMilli(), AccountID: "acct_123"})
 
-	rp, err := s.ModelProvider("anthropic")
+	rp, err := s.ModelProvider("openai-codex")
 	if err != nil {
 		t.Fatalf("ModelProvider: %v", err)
 	}
-	if rp.Type != TypeSetupToken {
-		t.Errorf("type = %q, want setup_token", rp.Type)
+	if rp.Type != TypeOAuth || rp.Value != "tok" {
+		t.Fatalf("resolved provider = %+v", rp)
 	}
 }
 
-func TestOAuthUnsupported(t *testing.T) {
+func TestLoadLegacyModelProviders(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "creds.yaml")
-	s, _ := Load(path)
-	s.SetModelProvider("test", ProviderCredential{Type: TypeOAuth, AccessToken: "tok"})
-
-	_, err := s.ModelProvider("test")
-	if err == nil {
-		t.Fatal("expected error for oauth type")
+	if err := os.WriteFile(path, []byte("model_providers:\n  anthropic:\n    type: api_key\n    api_key: test\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !s.HasProvider("anthropic") {
+		t.Fatal("expected legacy model_providers to populate providers")
 	}
 }
 

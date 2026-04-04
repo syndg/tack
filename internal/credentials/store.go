@@ -11,15 +11,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/syndg/tack/internal/providerauth"
 	"gopkg.in/yaml.v3"
 )
 
 // Credential types.
 const (
-	TypeAPIKey     = "api_key"
-	TypeSetupToken = "setup_token"
-	TypePAT        = "pat"
-	TypeOAuth      = "oauth"
+	TypeAPIKey = "api_key"
+	TypePAT    = "pat"
+	TypeOAuth  = "oauth"
 )
 
 // envVarPattern matches strings that look like environment variable names.
@@ -30,20 +30,20 @@ const shellTimeout = 10 * time.Second
 
 // Credentials is the top-level YAML structure of ~/.config/tack/credentials.yaml.
 type Credentials struct {
-	ModelProviders map[string]ProviderCredential `yaml:"model_providers,omitempty"`
-	Git            *GitCredential                `yaml:"git,omitempty"`
-	Sandbox        map[string]SandboxCredential  `yaml:"sandbox,omitempty"`
+	Providers            map[string]ProviderCredential `yaml:"providers,omitempty"`
+	LegacyModelProviders map[string]ProviderCredential `yaml:"model_providers,omitempty"`
+	Git                  *GitCredential                `yaml:"git,omitempty"`
+	Sandbox              map[string]SandboxCredential  `yaml:"sandbox,omitempty"`
 }
 
 // ProviderCredential holds authentication for a model provider (Anthropic, OpenAI, etc.).
 type ProviderCredential struct {
-	Type   string `yaml:"type"`
-	APIKey string `yaml:"api_key,omitempty"` // for type: api_key
-	Token  string `yaml:"token,omitempty"`   // for type: setup_token
-	// OAuth fields (schema-only, deferred)
-	AccessToken  string `yaml:"access_token,omitempty"`
-	RefreshToken string `yaml:"refresh_token,omitempty"`
-	ExpiresAt    int64  `yaml:"expires_at,omitempty"`
+	Type         string `yaml:"type" json:"type"`
+	APIKey       string `yaml:"api_key,omitempty" json:"key,omitempty"`
+	AccessToken  string `yaml:"access_token,omitempty" json:"access,omitempty"`
+	RefreshToken string `yaml:"refresh_token,omitempty" json:"refresh,omitempty"`
+	ExpiresAt    int64  `yaml:"expires_at,omitempty" json:"expires,omitempty"`
+	AccountID    string `yaml:"account_id,omitempty" json:"accountId,omitempty"`
 }
 
 // GitCredential holds a personal access token for git operations.
@@ -61,7 +61,7 @@ type SandboxCredential struct {
 
 // ResolvedProvider is the result of looking up and resolving a model provider credential.
 type ResolvedProvider struct {
-	Type  string // "api_key" or "setup_token"
+	Type  string // "api_key" or "oauth"
 	Value string // the resolved secret value
 }
 
@@ -86,8 +86,8 @@ func Load(path string) (*Store, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			s.data = Credentials{
-				ModelProviders: make(map[string]ProviderCredential),
-				Sandbox:        make(map[string]SandboxCredential),
+				Providers: make(map[string]ProviderCredential),
+				Sandbox:   make(map[string]SandboxCredential),
 			}
 			return s, nil
 		}
@@ -97,8 +97,11 @@ func Load(path string) (*Store, error) {
 	if err := yaml.Unmarshal(raw, &s.data); err != nil {
 		return nil, fmt.Errorf("parsing credentials: %w", err)
 	}
-	if s.data.ModelProviders == nil {
-		s.data.ModelProviders = make(map[string]ProviderCredential)
+	if s.data.Providers == nil {
+		s.data.Providers = make(map[string]ProviderCredential)
+	}
+	if len(s.data.Providers) == 0 && len(s.data.LegacyModelProviders) > 0 {
+		s.data.Providers = s.data.LegacyModelProviders
 	}
 	if s.data.Sandbox == nil {
 		s.data.Sandbox = make(map[string]SandboxCredential)
@@ -128,46 +131,75 @@ func (s *Store) Path() string { return s.path }
 
 // --- Model Provider ---
 
-// ModelProvider resolves the credential for a named model provider.
+// ModelProvider resolves the credential for a named provider.
 func (s *Store) ModelProvider(name string) (*ResolvedProvider, error) {
-	s.mu.RLock()
-	cred, ok := s.data.ModelProviders[name]
-	s.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("no credential for model provider %q", name)
+	cred, err := s.GetProviderCredential(name)
+	if err != nil {
+		return nil, err
 	}
-
-	var raw string
 	switch cred.Type {
 	case TypeAPIKey:
-		raw = cred.APIKey
-	case TypeSetupToken:
-		raw = cred.Token
+		return &ResolvedProvider{Type: cred.Type, Value: cred.APIKey}, nil
 	case TypeOAuth:
-		return nil, fmt.Errorf("OAuth credentials not yet supported, use api_key or setup_token")
+		return &ResolvedProvider{Type: cred.Type, Value: cred.AccessToken}, nil
 	default:
 		return nil, fmt.Errorf("unknown credential type %q for provider %q", cred.Type, name)
 	}
-
-	val, err := s.resolve(raw)
-	if err != nil {
-		return nil, fmt.Errorf("resolving %s credential: %w", name, err)
-	}
-	return &ResolvedProvider{Type: cred.Type, Value: val}, nil
 }
 
-// SetModelProvider adds or replaces a model provider credential.
+// GetProviderCredential returns a provider credential with any shell/env values resolved and OAuth refreshed if needed.
+func (s *Store) GetProviderCredential(name string) (*ProviderCredential, error) {
+	s.mu.RLock()
+	cred, ok := s.data.Providers[name]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("no credential for provider %q", name)
+	}
+	resolved := cred
+	switch resolved.Type {
+	case TypeAPIKey:
+		val, err := s.resolve(resolved.APIKey)
+		if err != nil {
+			return nil, fmt.Errorf("resolving %s credential: %w", name, err)
+		}
+		resolved.APIKey = val
+		return &resolved, nil
+	case TypeOAuth:
+		if name != "openai-codex" {
+			return nil, fmt.Errorf("oauth credentials for provider %q are not supported", name)
+		}
+		if time.Now().Add(2*time.Minute).UnixMilli() >= resolved.ExpiresAt {
+			refreshed, err := providerauth.RefreshOpenAICodexToken(context.Background(), resolved.RefreshToken)
+			if err != nil {
+				return nil, fmt.Errorf("refreshing %s oauth: %w", name, err)
+			}
+			resolved.AccessToken = refreshed.AccessToken
+			resolved.RefreshToken = refreshed.RefreshToken
+			resolved.ExpiresAt = refreshed.ExpiresAt
+			resolved.AccountID = refreshed.AccountID
+			s.SetModelProvider(name, resolved)
+			if err := s.Save(); err != nil {
+				return nil, err
+			}
+		}
+		return &resolved, nil
+	default:
+		return nil, fmt.Errorf("unknown credential type %q for provider %q", resolved.Type, name)
+	}
+}
+
+// SetModelProvider adds or replaces a provider credential.
 func (s *Store) SetModelProvider(name string, cred ProviderCredential) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data.ModelProviders[name] = cred
+	s.data.Providers[name] = cred
 }
 
-// RemoveModelProvider removes a model provider credential.
+// RemoveModelProvider removes a provider credential.
 func (s *Store) RemoveModelProvider(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.data.ModelProviders, name)
+	delete(s.data.Providers, name)
 }
 
 // --- Git ---
@@ -239,22 +271,22 @@ func (s *Store) RemoveSandbox(name string) {
 
 // --- Listing ---
 
-// ListProviders returns the names and types of all configured model providers.
+// ListProviders returns the names and types of all configured providers.
 func (s *Store) ListProviders() map[string]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make(map[string]string, len(s.data.ModelProviders))
-	for name, cred := range s.data.ModelProviders {
+	out := make(map[string]string, len(s.data.Providers))
+	for name, cred := range s.data.Providers {
 		out[name] = cred.Type
 	}
 	return out
 }
 
-// HasProvider checks if a model provider credential exists.
+// HasProvider checks if a provider credential exists.
 func (s *Store) HasProvider(name string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	_, ok := s.data.ModelProviders[name]
+	_, ok := s.data.Providers[name]
 	return ok
 }
 

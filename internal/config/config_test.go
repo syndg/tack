@@ -155,6 +155,9 @@ func TestEffectiveRuntimeAuthDefaults(t *testing.T) {
 	if binding.Mode != "tack" {
 		t.Fatalf("Mode = %q, want tack", binding.Mode)
 	}
+	if binding.Method != "api_key" {
+		t.Fatalf("Method = %q, want api_key", binding.Method)
+	}
 	if binding.Provider != "anthropic" {
 		t.Fatalf("Provider = %q, want anthropic", binding.Provider)
 	}
@@ -180,8 +183,8 @@ func TestEffectiveRuntimeAuthCanonicalizesCredentialRef(t *testing.T) {
 	cfg := Default()
 	cfg.RuntimeAuth = RuntimeAuthConfig{Mode: "tack", Runtime: "pi", Provider: "openai-codex"}
 	binding := cfg.EffectiveRuntimeAuth()
-	if binding.CredentialRef != "openai" {
-		t.Fatalf("CredentialRef = %q, want openai", binding.CredentialRef)
+	if binding.CredentialRef != "openai-codex" {
+		t.Fatalf("CredentialRef = %q, want openai-codex", binding.CredentialRef)
 	}
 }
 

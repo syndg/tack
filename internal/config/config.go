@@ -82,6 +82,7 @@ type RuntimeAuthConfig struct {
 	Mode          string `yaml:"mode"`
 	Runtime       string `yaml:"runtime"`
 	Provider      string `yaml:"provider"`
+	Method        string `yaml:"method,omitempty"`
 	CredentialRef string `yaml:"credential_ref,omitempty"`
 }
 
@@ -160,6 +161,9 @@ func (c *Config) EffectiveRuntimeAuth() RuntimeAuthConfig {
 	}
 	if binding.Mode == "" {
 		binding.Mode = "tack"
+	}
+	if binding.Method == "" && binding.Mode == "tack" {
+		binding.Method = "api_key"
 	}
 	if binding.CredentialRef == "" && binding.Mode == "tack" {
 		binding.CredentialRef = canonicalCredentialRef(binding.Provider)
@@ -409,8 +413,6 @@ func firstNonEmpty(values ...string) string {
 
 func canonicalCredentialRef(provider string) string {
 	switch provider {
-	case "openai-codex":
-		return "openai"
 	case "google":
 		return "gemini"
 	default:
