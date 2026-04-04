@@ -105,6 +105,50 @@ func TestLayeredLoad_ProjectWinsOverUser(t *testing.T) {
 	}
 }
 
+func TestEffectiveModelsPreferExplicitModelConfig(t *testing.T) {
+	cfg := Default()
+	cfg.Models.Default = "gpt-default"
+	cfg.Models.Agent = "gpt-agent"
+	cfg.Models.Planner = "gpt-planner"
+	cfg.Models.SmallTasks = "gpt-small"
+	cfg.Models.Deterministic = "gpt-deterministic"
+	cfg.Agents.Pi.Model = "legacy-pi"
+	cfg.Planning.Model = "legacy-planning"
+
+	if got := cfg.EffectiveAgentModel(); got != "gpt-agent" {
+		t.Fatalf("EffectiveAgentModel = %q, want gpt-agent", got)
+	}
+	if got := cfg.EffectivePlannerModel(); got != "gpt-planner" {
+		t.Fatalf("EffectivePlannerModel = %q, want gpt-planner", got)
+	}
+	if got := cfg.EffectiveDeterministicModel(); got != "gpt-deterministic" {
+		t.Fatalf("EffectiveDeterministicModel = %q, want gpt-deterministic", got)
+	}
+	if got := cfg.EffectiveSmallTaskModel(); got != "gpt-small" {
+		t.Fatalf("EffectiveSmallTaskModel = %q, want gpt-small", got)
+	}
+}
+
+func TestEffectiveModelsFallBackToLegacyConfig(t *testing.T) {
+	cfg := Default()
+	cfg.Models = ModelsConfig{}
+	cfg.Agents.Pi.Model = "legacy-pi"
+	cfg.Planning.Model = "legacy-planning"
+
+	if got := cfg.EffectiveAgentModel(); got != "legacy-pi" {
+		t.Fatalf("EffectiveAgentModel = %q, want legacy-pi", got)
+	}
+	if got := cfg.EffectivePlannerModel(); got != "legacy-planning" {
+		t.Fatalf("EffectivePlannerModel = %q, want legacy-planning", got)
+	}
+	if got := cfg.EffectiveDeterministicModel(); got != "legacy-planning" {
+		t.Fatalf("EffectiveDeterministicModel = %q, want legacy-planning", got)
+	}
+	if got := cfg.EffectiveSmallTaskModel(); got != "legacy-planning" {
+		t.Fatalf("EffectiveSmallTaskModel = %q, want legacy-planning", got)
+	}
+}
+
 func TestLoad_DefaultGitIdentity(t *testing.T) {
 	cfg, err := Load("", "")
 	if err != nil {

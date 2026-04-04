@@ -60,7 +60,7 @@ daemon:
 
 sandbox:
   provider: local
-  # post_create:              # optional setup commands
+  # post_create:              # optional project setup commands only
   #   - "bun install"
 
 agents:
@@ -69,7 +69,6 @@ agents:
   stagger_delay_ms: 1000
   pi:
     provider: anthropic
-    model: claude-opus-4-6
     thinking_level: medium
   timeouts:
     default:
@@ -79,6 +78,11 @@ agents:
       max_duration_minutes: 45
     reviewer:
       max_duration_minutes: 15
+
+models:
+  default: claude-opus-4-1
+  planner: claude-opus-4-1
+  small_tasks: claude-sonnet-4
 
 quality_gates:
   - "bun test"

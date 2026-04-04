@@ -147,7 +147,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// --- Post-Create Commands ---
 	var postCreate string
 	err = huh.NewInput().
-		Title("Post-create commands? (e.g., bun install, npm install — leave empty to skip)").
+		Title("Optional project post-create commands? (e.g., bun install; Tack runtime bootstrap is automatic)").
 		Value(&postCreate).
 		Run()
 	if err != nil {
@@ -155,6 +155,24 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// --- Build config ---
+	var defaultModel string
+	err = huh.NewInput().
+		Title("Default project model? (leave empty to use runtime defaults)").
+		Value(&defaultModel).
+		Run()
+	if err != nil {
+		return err
+	}
+
+	var smallTaskModel string
+	err = huh.NewInput().
+		Title("Small-task model? (used for PR drafting and similar utility work; leave empty to reuse other model config)").
+		Value(&smallTaskModel).
+		Run()
+	if err != nil {
+		return err
+	}
+
 	projectCfg := map[string]interface{}{
 		"sandbox": map[string]interface{}{
 			"provider": sandboxProvider,
@@ -165,6 +183,16 @@ func runInit(cmd *cobra.Command, args []string) error {
 				"provider": provider,
 			},
 		},
+	}
+	modelsMap := map[string]interface{}{}
+	if defaultModel != "" {
+		modelsMap["default"] = defaultModel
+	}
+	if smallTaskModel != "" {
+		modelsMap["small_tasks"] = smallTaskModel
+	}
+	if len(modelsMap) > 0 {
+		projectCfg["models"] = modelsMap
 	}
 
 	if postCreate != "" {

@@ -74,6 +74,7 @@ type Step struct {
 	Ref               string            `yaml:"ref,omitempty" json:"ref,omitempty"`
 	Foreach           string            `yaml:"foreach,omitempty" json:"foreach,omitempty"`
 	Description       string            `yaml:"description,omitempty" json:"description,omitempty"`
+	Model             string            `yaml:"model,omitempty" json:"model,omitempty"`
 	Next              string            `yaml:"next,omitempty" json:"next,omitempty"`
 	Retry             int               `yaml:"retry,omitempty" json:"retry,omitempty"`
 	Optional          bool              `yaml:"optional,omitempty" json:"optional,omitempty"`

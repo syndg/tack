@@ -81,6 +81,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		Objective:   obj,
 		Stream:      stream,
 		Role:        role,
+		Model:       c.modelForAgentStep(step),
 		TaskSpec:    taskSpec,
 		ExecutionID: exec.ID,
 		CommitMode:  string(step.EffectiveCommitMode()),
@@ -210,6 +211,16 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		Output:   cleanSummary,
 		Metadata: generatedMessages.ToMetadata(),
 	}, nil
+}
+
+func (c *Coordinator) modelForAgentStep(step *blueprint.Step) string {
+	if step != nil && step.Model != "" {
+		return step.Model
+	}
+	if step != nil && step.Role == string(domain.AgentRolePlanner) {
+		return c.plannerModel
+	}
+	return c.agentModel
 }
 
 // streamResult reports the outcome of a stream's sub-execution.

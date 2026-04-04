@@ -281,34 +281,37 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 	toolCurator := tools.NewCurator(m.logger)
 	agentRuntime := newAgentRuntime(&cfg, m.logger)
 	runsService, err := runs.New(runs.Config{
-		ProjectID:       project.ID,
-		Engine:          bpEngine,
-		AgentRuntime:    agentRuntime,
-		SandboxProvider: sandboxProv,
-		RulesEngine:     rulesEng,
-		ToolCurator:     toolCurator,
-		Credentials:     m.creds,
-		ModelProvider:   effectiveModelProvider(&cfg),
-		DaemonURL:       m.daemonURL,
-		Lifecycle:       lifecycleMgr,
-		MergeProcessor:  mergeProcessor,
-		PlanCreator:     planningService,
-		MailSender:      m.mailBroker,
-		GateRunner:      gates.NewRunner(m.logger),
-		ActivityLogger:  m.activityLog,
-		Timeouts:        cfg.Agents.Timeouts,
-		MaxConcurrent:   cfg.Agents.MaxConcurrent,
-		BaseBranch:      cfg.Daemon.BaseBranch,
-		GitAuthorName:   cfg.Git.AuthorName,
-		GitAuthorEmail:  cfg.Git.AuthorEmail,
-		Runs:            m.runs,
-		Objectives:      m.objectives,
-		Plans:           m.plans,
-		Streams:         m.streams,
-		Executions:      m.executions,
-		Agents:          m.agents,
-		EventBus:        m.eventBus,
-		Logger:          m.logger,
+		ProjectID:          project.ID,
+		Engine:             bpEngine,
+		AgentRuntime:       agentRuntime,
+		SandboxProvider:    sandboxProv,
+		RulesEngine:        rulesEng,
+		ToolCurator:        toolCurator,
+		Credentials:        m.creds,
+		ModelProvider:      effectiveModelProvider(&cfg),
+		AgentModel:         cfg.EffectiveAgentModel(),
+		PlannerModel:       cfg.EffectivePlannerModel(),
+		DeterministicModel: cfg.EffectiveSmallTaskModel(),
+		DaemonURL:          m.daemonURL,
+		Lifecycle:          lifecycleMgr,
+		MergeProcessor:     mergeProcessor,
+		PlanCreator:        planningService,
+		MailSender:         m.mailBroker,
+		GateRunner:         gates.NewRunner(m.logger),
+		ActivityLogger:     m.activityLog,
+		Timeouts:           cfg.Agents.Timeouts,
+		MaxConcurrent:      cfg.Agents.MaxConcurrent,
+		BaseBranch:         cfg.Daemon.BaseBranch,
+		GitAuthorName:      cfg.Git.AuthorName,
+		GitAuthorEmail:     cfg.Git.AuthorEmail,
+		Runs:               m.runs,
+		Objectives:         m.objectives,
+		Plans:              m.plans,
+		Streams:            m.streams,
+		Executions:         m.executions,
+		Agents:             m.agents,
+		EventBus:           m.eventBus,
+		Logger:             m.logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating runs service for project %s: %w", project.ID, err)
@@ -351,7 +354,7 @@ func (m *ProjectContextManager) newSandboxProvider(project *domain.Project, cfg 
 			APIURL:     cfg.Sandbox.Daytona.APIURL,
 			Snapshot:   cfg.Sandbox.Daytona.Snapshot,
 			RepoURL:    repoURL,
-			PostCreate: cfg.Sandbox.PostCreate,
+			PostCreate: effectivePostCreateCommands(cfg),
 		}, m.creds, m.logger)
 		if err != nil {
 			return nil, fmt.Errorf("creating daytona provider for project %s: %w", project.ID, err)
@@ -364,7 +367,7 @@ func (m *ProjectContextManager) newSandboxProvider(project *domain.Project, cfg 
 
 func newLocalProvider(projectRoot string, cfg *config.Config, logger *slog.Logger) sandbox.SandboxProvider {
 	lp := local.New(projectRoot, localWorktreeDir(cfg), logger)
-	lp.SetPostCreate(cfg.Sandbox.PostCreate)
+	lp.SetPostCreate(effectivePostCreateCommands(cfg))
 	lp.Rediscover(context.Background())
 	return lp
 }
@@ -372,17 +375,13 @@ func newLocalProvider(projectRoot string, cfg *config.Config, logger *slog.Logge
 func newAgentRuntime(cfg *config.Config, logger *slog.Logger) runtime.AgentRuntime {
 	switch cfg.Agents.Runtime {
 	case "pi":
-		piModel := cfg.Agents.Pi.Model
-		if piModel == "" {
-			piModel = cfg.Planning.Model
-		}
 		return pi.New(pi.RuntimeConfig{
-			Model:         piModel,
+			Model:         cfg.EffectiveAgentModel(),
 			Provider:      cfg.Agents.Pi.Provider,
 			ThinkingLevel: cfg.Agents.Pi.ThinkingLevel,
 		}, logger)
 	default:
-		return claudecode.New(cfg.Planning.Model, logger)
+		return claudecode.New(cfg.EffectiveAgentModel(), logger)
 	}
 }
 
@@ -407,4 +406,19 @@ func userRulesDir() string {
 		return ""
 	}
 	return filepath.Join(home, ".config", "tack", "rules")
+}
+
+func effectivePostCreateCommands(cfg *config.Config) []string {
+	if len(cfg.Sandbox.PostCreate) == 0 {
+		return nil
+	}
+	commands := make([]string, 0, len(cfg.Sandbox.PostCreate))
+	for _, cmd := range cfg.Sandbox.PostCreate {
+		normalized := strings.TrimSpace(cmd)
+		if cfg.Agents.Runtime == "pi" && strings.Contains(normalized, "@mariozechner/pi-coding-agent") {
+			continue
+		}
+		commands = append(commands, cmd)
+	}
+	return commands
 }

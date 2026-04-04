@@ -41,6 +41,7 @@ func (h *mockProcessHandle) Kill() error        { h.killed = true; return nil }
 type mockSandbox struct {
 	uploaded   map[string][]byte
 	execCmds   []string // commands passed to Exec
+	execFn     func(ctx context.Context, cmd string, opts sandbox.ExecOpts) (sandbox.ExecResult, error)
 	streamFn   func(ctx context.Context, cmd string, opts sandbox.ExecOpts) (sandbox.ProcessHandle, error)
 	streamCmd  string
 	streamOpts sandbox.ExecOpts
@@ -54,6 +55,9 @@ func (m *mockSandbox) ID() string                    { return "mock-sb" }
 func (m *mockSandbox) Status() sandbox.SandboxStatus { return sandbox.SandboxStatusRunning }
 func (m *mockSandbox) Exec(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
 	m.execCmds = append(m.execCmds, cmd)
+	if m.execFn != nil {
+		return m.execFn(context.Background(), cmd, sandbox.ExecOpts{})
+	}
 	// Simulate git rev-parse --git-path info/exclude for addGitExclude.
 	if strings.Contains(cmd, "rev-parse --git-path info/exclude") {
 		return sandbox.ExecResult{ExitCode: 0, Stdout: ".git/info/exclude"}, nil
@@ -63,6 +67,66 @@ func (m *mockSandbox) Exec(_ context.Context, cmd string, _ sandbox.ExecOpts) (s
 		return sandbox.ExecResult{ExitCode: 1}, nil
 	}
 	return sandbox.ExecResult{ExitCode: 0, Stdout: "ok"}, nil
+}
+
+func TestRuntime_Spawn_InstallsPiWhenMissing(t *testing.T) {
+	r := New(RuntimeConfig{Model: "test-model"}, slog.Default())
+	sb := newMockSandbox()
+	handle := &mockProcessHandle{lines: []string{`{"type":"agent_end"}`}}
+	sb.execFn = func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
+		switch {
+		case strings.Contains(cmd, "echo missing"):
+			return sandbox.ExecResult{ExitCode: 0, Stdout: "missing"}, nil
+		case strings.Contains(cmd, "npm install --no-save --silent --prefix .tack-tools/pi @mariozechner/pi-coding-agent"):
+			return sandbox.ExecResult{ExitCode: 0, Stdout: "installed"}, nil
+		case strings.Contains(cmd, "rev-parse --git-path info/exclude"):
+			return sandbox.ExecResult{ExitCode: 0, Stdout: ".git/info/exclude"}, nil
+		case strings.Contains(cmd, "grep"):
+			return sandbox.ExecResult{ExitCode: 1}, nil
+		default:
+			return sandbox.ExecResult{ExitCode: 0, Stdout: "ok"}, nil
+		}
+	}
+	sb.streamFn = func(_ context.Context, _ string, _ sandbox.ExecOpts) (sandbox.ProcessHandle, error) {
+		return handle, nil
+	}
+
+	_, err := r.Spawn(context.Background(), sb, runtime.AgentOpts{Overlay: "test"})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if !strings.Contains(sb.streamCmd, sandboxPIBinary) {
+		t.Fatalf("streamCmd = %q, want sandbox-managed pi binary", sb.streamCmd)
+	}
+	if _, ok := sb.uploaded[".git/info/exclude"]; !ok {
+		t.Fatal("expected .git/info/exclude upload for .tack-tools ignore")
+	}
+}
+
+func TestRuntime_Spawn_UsesGlobalPiWhenAvailable(t *testing.T) {
+	r := New(RuntimeConfig{Model: "test-model"}, slog.Default())
+	sb := newMockSandbox()
+	handle := &mockProcessHandle{lines: []string{`{"type":"agent_end"}`}}
+	sb.execFn = func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
+		if strings.Contains(cmd, "echo missing") {
+			return sandbox.ExecResult{ExitCode: 0, Stdout: "global"}, nil
+		}
+		if strings.Contains(cmd, "npm install --no-save --silent --prefix .tack-tools/pi @mariozechner/pi-coding-agent") {
+			t.Fatal("should not install pi when global binary is available")
+		}
+		return sandbox.ExecResult{ExitCode: 0, Stdout: "ok"}, nil
+	}
+	sb.streamFn = func(_ context.Context, _ string, _ sandbox.ExecOpts) (sandbox.ProcessHandle, error) {
+		return handle, nil
+	}
+
+	_, err := r.Spawn(context.Background(), sb, runtime.AgentOpts{Overlay: "test"})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if strings.Contains(sb.streamCmd, sandboxPIBinary) {
+		t.Fatalf("streamCmd = %q, want global pi binary", sb.streamCmd)
+	}
 }
 func (m *mockSandbox) ExecStreaming(ctx context.Context, cmd string, opts sandbox.ExecOpts) (sandbox.ProcessHandle, error) {
 	m.streamCmd = cmd

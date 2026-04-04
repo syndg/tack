@@ -18,6 +18,7 @@ import (
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/harness/gates"
 	"github.com/syndg/tack/internal/naming"
+	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/sandbox"
 	"github.com/syndg/tack/internal/services/agents"
 	events "github.com/syndg/tack/internal/services/events"
@@ -39,6 +40,7 @@ type Handlers struct {
 	gateRunner      *gates.Runner
 	lifecycle       *lifecycle.Manager
 	mergeProcessor  MergeHelper
+	agentRuntime    runtime.AgentRuntime
 	plans           *db.PlanStore
 	streams         *db.StreamStore
 	objectives      *db.ObjectiveStore
@@ -48,6 +50,8 @@ type Handlers struct {
 	eventBus        *events.PersistentBus
 	baseBranch      string
 	creds           *credentials.Store
+	modelProvider   string
+	defaultModel    string
 	githubAPIBase   string
 	logger          *slog.Logger
 }
@@ -58,6 +62,7 @@ func NewHandlers(
 	gateRunner *gates.Runner,
 	lc *lifecycle.Manager,
 	mergeProcessor MergeHelper,
+	agentRuntime runtime.AgentRuntime,
 	plans *db.PlanStore,
 	streams *db.StreamStore,
 	objectives *db.ObjectiveStore,
@@ -67,6 +72,8 @@ func NewHandlers(
 	eventBus *events.PersistentBus,
 	baseBranch string,
 	creds *credentials.Store,
+	modelProvider string,
+	defaultModel string,
 	logger *slog.Logger,
 ) *Handlers {
 	if baseBranch == "" {
@@ -77,6 +84,7 @@ func NewHandlers(
 		gateRunner:      gateRunner,
 		lifecycle:       lc,
 		mergeProcessor:  mergeProcessor,
+		agentRuntime:    agentRuntime,
 		plans:           plans,
 		streams:         streams,
 		objectives:      objectives,
@@ -86,6 +94,8 @@ func NewHandlers(
 		eventBus:        eventBus,
 		baseBranch:      baseBranch,
 		creds:           creds,
+		modelProvider:   modelProvider,
+		defaultModel:    defaultModel,
 		githubAPIBase:   "https://api.github.com",
 		logger:          logger,
 	}
@@ -511,6 +521,16 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 	// race with the merge processor's final branch push.
 
 	messages := generatedMessagesFromSource(exec, step.MessageSource)
+	if drafted, draftErr := h.generatePRMessages(ctx, sb, step, obj, streamSummary, messages); draftErr != nil {
+		h.logger.Warn("failed to generate PR metadata with agent", "objective_id", exec.ObjectiveID, "error", draftErr)
+	} else {
+		if drafted.PRTitle != "" {
+			messages.PRTitle = drafted.PRTitle
+		}
+		if drafted.PRBody != "" {
+			messages.PRBody = drafted.PRBody
+		}
+	}
 	title := obj.Description
 	if messages.PRTitle != "" {
 		title = messages.PRTitle
@@ -722,6 +742,106 @@ func parseGitRemote(remote string) (owner, repo, host string, err error) {
 		return "", "", "", fmt.Errorf("unsupported git remote path: %s", remote)
 	}
 	return segments[0], segments[1], host, nil
+}
+
+func (h *Handlers) generatePRMessages(ctx context.Context, sb sandbox.Sandbox, step *blueprint.Step, obj *domain.Objective, streamSummary string, seed agents.GeneratedMessages) (agents.GeneratedMessages, error) {
+	if h.agentRuntime == nil {
+		return agents.GeneratedMessages{}, nil
+	}
+	envVars := map[string]string{}
+	injectRuntimeCredentials(h.creds, h.modelProvider, h.logger, envVars)
+	proc, err := h.agentRuntime.Spawn(ctx, sb, runtime.AgentOpts{
+		Role:    "pr-writer",
+		Model:   h.modelForDeterministicStep(step),
+		Overlay: h.buildPRPrompt(ctx, sb, obj, streamSummary, seed),
+		EnvVars: envVars,
+	})
+	if err != nil {
+		return agents.GeneratedMessages{}, fmt.Errorf("spawning pr-writer agent: %w", err)
+	}
+	result, err := proc.Wait()
+	if err != nil {
+		return agents.GeneratedMessages{}, fmt.Errorf("waiting for pr-writer agent: %w", err)
+	}
+	if !result.Success {
+		return agents.GeneratedMessages{}, fmt.Errorf("pr-writer agent failed: %s", strings.TrimSpace(result.Error))
+	}
+	_, msgs, found, err := agents.ExtractGeneratedMessages(result.Summary)
+	if err != nil {
+		return agents.GeneratedMessages{}, fmt.Errorf("parsing pr-writer messages: %w", err)
+	}
+	if !found {
+		return agents.GeneratedMessages{}, fmt.Errorf("pr-writer agent returned no TACK_MESSAGES payload")
+	}
+	return msgs, nil
+}
+
+func (h *Handlers) modelForDeterministicStep(step *blueprint.Step) string {
+	if step != nil && step.Model != "" {
+		return step.Model
+	}
+	return h.defaultModel
+}
+
+func (h *Handlers) buildPRPrompt(ctx context.Context, sb sandbox.Sandbox, obj *domain.Objective, streamSummary string, seed agents.GeneratedMessages) string {
+	var b strings.Builder
+	b.WriteString("# Tack Agent: pr-writer\n\n")
+	b.WriteString("You are drafting pull request metadata for already-merged changes.\n")
+	b.WriteString("Do not modify files, do not run git commands, and do not create commits.\n")
+	b.WriteString("Return exactly one final line starting with TACK_MESSAGES: containing compact JSON with pr_title and pr_body.\n\n")
+	b.WriteString("## Objective\n")
+	b.WriteString(obj.Description)
+	b.WriteString("\n\n")
+	b.WriteString("## Objective ID\n")
+	b.WriteString(obj.ID)
+	b.WriteString("\n\n")
+	if seed.PRTitle != "" || seed.PRBody != "" {
+		b.WriteString("## Existing Draft\n")
+		if seed.PRTitle != "" {
+			b.WriteString("Title: ")
+			b.WriteString(seed.PRTitle)
+			b.WriteString("\n")
+		}
+		if seed.PRBody != "" {
+			b.WriteString("Body:\n")
+			b.WriteString(seed.PRBody)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	if streamSummary != "" {
+		b.WriteString("## Stream Summary\n")
+		b.WriteString(strings.TrimSpace(streamSummary))
+		b.WriteString("\n\n")
+	}
+	b.WriteString("## Changed Files\n")
+	b.WriteString(h.commandOutput(ctx, sb, "git diff --name-only origin/"+h.baseBranch+"...HEAD", 4000, "(changed files unavailable)"))
+	b.WriteString("\n\n")
+	b.WriteString("## Diff Stat\n")
+	b.WriteString(h.commandOutput(ctx, sb, "git diff --stat origin/"+h.baseBranch+"...HEAD", 6000, "(diff stat unavailable)"))
+	b.WriteString("\n\n")
+	b.WriteString("## Diff Excerpt\n")
+	b.WriteString(h.commandOutput(ctx, sb, "git diff --unified=1 origin/"+h.baseBranch+"...HEAD", 16000, "(diff excerpt unavailable)"))
+	b.WriteString("\n\n")
+	b.WriteString("## Output Contract\n")
+	b.WriteString("Emit exactly one final line in this form:\n")
+	b.WriteString("TACK_MESSAGES:{\"pr_title\":\"Concise title\",\"pr_body\":\"## Summary\\n- ...\\n\\n## Testing\\n- ...\"}\n")
+	return b.String()
+}
+
+func (h *Handlers) commandOutput(ctx context.Context, sb sandbox.Sandbox, cmd string, maxLen int, fallback string) string {
+	result, err := sb.Exec(ctx, cmd, sandbox.ExecOpts{})
+	if err != nil || result.ExitCode != 0 {
+		return fallback
+	}
+	out := strings.TrimSpace(result.Stdout)
+	if out == "" {
+		return fallback
+	}
+	if len(out) > maxLen {
+		return out[:maxLen] + "\n...[truncated]"
+	}
+	return out
 }
 
 func generatedMessagesFromSource(exec *blueprint.Execution, sourceStepID string) agents.GeneratedMessages {

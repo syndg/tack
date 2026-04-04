@@ -59,6 +59,8 @@ type Config struct {
 	Engine         *blueprint.Engine      // blueprint execution engine
 	Scheduler      *Scheduler             // stream scheduling
 	Spawner        *Spawner               // agent process spawning
+	AgentModel     string                 // default model for non-planner agent steps
+	PlannerModel   string                 // default model for planner agent steps
 	Lifecycle      *lifecycle.Manager     // objective state transitions
 	MergeEnqueuer  MergeEnqueuer          // merge queue integration
 	PlanCreator    PlanCreator            // plan creation from planner output
@@ -137,6 +139,8 @@ type Coordinator struct {
 	tracker       AgentTracker
 	logger        *slog.Logger
 	projectID     string
+	agentModel    string
+	plannerModel  string
 
 	ctx         context.Context // set in Start(); used as parent for execution goroutines
 	mu          sync.Mutex
@@ -166,6 +170,8 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		tracker:       newAgentTracker(cfg.Spawner, cfg.ActivityLogger, cfg.EventBus, cfg.Timeouts, cfg.Logger),
 		logger:        cfg.Logger,
 		projectID:     cfg.ProjectID,
+		agentModel:    cfg.AgentModel,
+		plannerModel:  cfg.PlannerModel,
 		activeExecs:   make(map[string]context.CancelFunc),
 	}
 

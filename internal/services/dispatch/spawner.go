@@ -25,6 +25,7 @@ type SpawnRequest struct {
 	Objective   *domain.Objective
 	Stream      *domain.Stream             // nil for planner agents
 	Role        string                     // "planner", "lead", "builder", "reviewer", "scout"
+	Model       string                     // model override for this spawned agent
 	TaskSpec    string                     // task description or spec content
 	ParentAgent string                     // name of parent agent (empty for top-level)
 	Guidance    string                     // project-level guidance from config
@@ -154,8 +155,8 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	var err error
 
 	sandboxEnvVars := map[string]string{}
-	s.injectCredentials(sandboxEnvVars)
-	s.injectGitIdentity(sandboxEnvVars)
+	injectRuntimeCredentials(s.creds, s.provider, s.logger, sandboxEnvVars)
+	injectRuntimeGitIdentity(s.gitAuthorName, s.gitAuthorEmail, sandboxEnvVars)
 
 	if req.Stream != nil {
 		// Stream agent (scout/builder/reviewer): reuse existing stream sandbox.
@@ -278,6 +279,7 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 		Role:    req.Role,
 		Overlay: overlay,
 		Tools:   toolNames,
+		Model:   req.Model,
 		EnvVars: envVars,
 	})
 	if err != nil {
@@ -388,53 +390,6 @@ func (s *Spawner) Kill(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// injectCredentials adds model provider and git credentials to the env map.
-func (s *Spawner) injectCredentials(envVars map[string]string) {
-	if s.creds == nil {
-		return
-	}
-
-	// Model provider: only inject the one matching the configured provider.
-	if s.provider != "" {
-		resolved, err := s.creds.ModelProvider(s.provider)
-		if err != nil {
-			s.logger.Warn("credential injection: model provider not found", "provider", s.provider, "error", err)
-		} else {
-			envName, ok := providerEnvVars[s.provider]
-			if ok {
-				envVars[envName] = resolved.Value
-			} else {
-				s.logger.Warn("credential injection: no env var mapping for provider", "provider", s.provider)
-			}
-		}
-	}
-
-	// Git token: always inject if configured.
-	host := s.creds.GitHost()
-	if host != "" {
-		tok, err := s.creds.GitToken("")
-		if err != nil {
-			s.logger.Warn("credential injection: git token resolution failed", "error", err)
-		} else {
-			envName, ok := gitHostEnvVars[host]
-			if !ok {
-				envName = "GIT_TOKEN" // fallback for unknown hosts
-			}
-			envVars[envName] = tok
-		}
-	}
-}
-
-func (s *Spawner) injectGitIdentity(envVars map[string]string) {
-	if s.gitAuthorName == "" || s.gitAuthorEmail == "" {
-		return
-	}
-	envVars["GIT_AUTHOR_NAME"] = s.gitAuthorName
-	envVars["GIT_AUTHOR_EMAIL"] = s.gitAuthorEmail
-	envVars["GIT_COMMITTER_NAME"] = s.gitAuthorName
-	envVars["GIT_COMMITTER_EMAIL"] = s.gitAuthorEmail
-}
-
 // GetSandbox retrieves a sandbox by ID from the provider.
 func (s *Spawner) GetSandbox(ctx context.Context, sandboxID string) (sandbox.Sandbox, error) {
 	return s.sp.Get(ctx, sandboxID)
@@ -475,4 +430,31 @@ func (s *Spawner) CleanupObjective(ctx context.Context, objectiveID string) {
 		"deleted", deleted,
 		"total", len(sandboxes),
 	)
+}
+
+// injectCredentials adds model provider and git credentials to the env map.
+func (s *Spawner) injectCredentials(envVars map[string]string) {
+	injectRuntimeCredentials(s.creds, s.provider, s.logger, envVars)
+	// Git token: always inject if configured.
+	if s.creds == nil {
+		return
+	}
+	host := s.creds.GitHost()
+	if host == "" {
+		return
+	}
+	tok, err := s.creds.GitToken("")
+	if err != nil {
+		s.logger.Warn("credential injection: git token resolution failed", "error", err)
+		return
+	}
+	envName, ok := gitHostEnvVars[host]
+	if !ok {
+		envName = "GIT_TOKEN"
+	}
+	envVars[envName] = tok
+}
+
+func (s *Spawner) injectGitIdentity(envVars map[string]string) {
+	injectRuntimeGitIdentity(s.gitAuthorName, s.gitAuthorEmail, envVars)
 }

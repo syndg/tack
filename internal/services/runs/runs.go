@@ -166,7 +166,10 @@ type Config struct {
 	Credentials *credentials.Store
 
 	// ModelProvider is the default model provider name (e.g., "anthropic").
-	ModelProvider string
+	ModelProvider      string
+	AgentModel         string
+	PlannerModel       string
+	DeterministicModel string
 
 	// DaemonURL is the URL agents use to call back to the daemon.
 	DaemonURL string
@@ -279,8 +282,9 @@ func New(cfg Config) (*Service, error) {
 		// Step handlers for deterministic and human blueprint steps.
 		handlers := dispatch.NewHandlers(
 			scheduler, cfg.GateRunner, cfg.Lifecycle, cfg.MergeProcessor,
+			cfg.AgentRuntime,
 			cfg.Plans, cfg.Streams, cfg.Objectives, cfg.Executions, cfg.Agents,
-			cfg.SandboxProvider, cfg.EventBus, cfg.BaseBranch, cfg.Credentials, logger,
+			cfg.SandboxProvider, cfg.EventBus, cfg.BaseBranch, cfg.Credentials, cfg.ModelProvider, cfg.DeterministicModel, logger,
 		)
 		cfg.Engine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
 		cfg.Engine.RegisterHandler(blueprint.StepTypeHuman, handlers.HandleHuman)
@@ -293,6 +297,8 @@ func New(cfg Config) (*Service, error) {
 			Engine:         cfg.Engine,
 			Scheduler:      scheduler,
 			Spawner:        spawner,
+			AgentModel:     cfg.AgentModel,
+			PlannerModel:   cfg.PlannerModel,
 			Lifecycle:      cfg.Lifecycle,
 			MergeEnqueuer:  cfg.MergeProcessor,
 			PlanCreator:    cfg.PlanCreator,

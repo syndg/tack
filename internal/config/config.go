@@ -29,6 +29,7 @@ type Config struct {
 	Daemon       DaemonConfig   `yaml:"daemon"`
 	Sandbox      SandboxConfig  `yaml:"sandbox"`
 	Agents       AgentsConfig   `yaml:"agents"`
+	Models       ModelsConfig   `yaml:"models"`
 	Planning     PlanningConfig `yaml:"planning"`
 	Watchdog     WatchdogConfig `yaml:"watchdog"`
 	Tools        ToolsConfig    `yaml:"tools"`
@@ -50,7 +51,7 @@ type SandboxConfig struct {
 	DefaultResources  ResourceConfig `yaml:"default_resources"`
 	AutoStopMinutes   int            `yaml:"auto_stop_interval"`
 	AutoDeleteMinutes int            `yaml:"auto_delete_interval"`
-	PostCreate        []string       `yaml:"post_create"` // commands to run after worktree/sandbox creation
+	PostCreate        []string       `yaml:"post_create"` // optional project bootstrap commands; Tack runtime prerequisites are handled internally
 	Daytona           DaytonaConfig  `yaml:"daytona"`
 }
 
@@ -74,6 +75,14 @@ type AgentsConfig struct {
 	IdleTimeoutMinutes int           `yaml:"idle_timeout_minutes"`
 	Timeouts           TimeoutConfig `yaml:"timeouts"`
 	Pi                 PiConfig      `yaml:"pi"`
+}
+
+type ModelsConfig struct {
+	Default       string `yaml:"default"`
+	Agent         string `yaml:"agent"`
+	Planner       string `yaml:"planner"`
+	SmallTasks    string `yaml:"small_tasks"`
+	Deterministic string `yaml:"deterministic"`
 }
 
 // TimeoutConfig holds per-role timeout settings.
@@ -123,6 +132,22 @@ type PiConfig struct {
 type PlanningConfig struct {
 	DefaultMode string `yaml:"default_mode"`
 	Model       string `yaml:"model"`
+}
+
+func (c *Config) EffectiveAgentModel() string {
+	return firstNonEmpty(c.Models.Agent, c.Models.Default, c.Agents.Pi.Model, c.Planning.Model)
+}
+
+func (c *Config) EffectivePlannerModel() string {
+	return firstNonEmpty(c.Models.Planner, c.Models.Agent, c.Models.Default, c.Planning.Model, c.Agents.Pi.Model)
+}
+
+func (c *Config) EffectiveDeterministicModel() string {
+	return firstNonEmpty(c.Models.Deterministic, c.Models.Default, c.Models.Agent, c.Planning.Model, c.Agents.Pi.Model)
+}
+
+func (c *Config) EffectiveSmallTaskModel() string {
+	return firstNonEmpty(c.Models.SmallTasks, c.Models.Deterministic, c.Models.Default, c.Models.Agent, c.Planning.Model, c.Agents.Pi.Model)
 }
 
 type WatchdogConfig struct {
@@ -307,7 +332,7 @@ func Default() *Config {
 		},
 		Planning: PlanningConfig{
 			DefaultMode: "collaborative",
-			Model:       "claude-sonnet-4-20250514",
+			Model:       "",
 		},
 		Watchdog: WatchdogConfig{
 			CheckIntervalSeconds: 30,
@@ -342,4 +367,13 @@ func expandTilde(path string) string {
 		return path
 	}
 	return filepath.Join(home, path[1:])
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

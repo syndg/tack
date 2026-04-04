@@ -21,6 +21,8 @@ type Runtime struct {
 	logger        *slog.Logger
 }
 
+const sandboxPIBinary = ".tack-tools/pi/node_modules/.bin/pi"
+
 // RuntimeConfig holds Pi-specific runtime configuration.
 type RuntimeConfig struct {
 	Model         string
@@ -122,6 +124,11 @@ func (r *Runtime) SupportsHooks() bool { return true }
 //  2. Start Pi via ExecStreaming in RPC mode
 //  3. Send initial prompt via RPC
 func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.AgentOpts) (runtime.AgentProcess, error) {
+	piCommand, err := r.ensurePIInstalled(ctx, sb)
+	if err != nil {
+		return nil, err
+	}
+
 	// 1. Write extension files to a temp directory (not the project tree).
 	// For local sandboxes this avoids polluting the user's git repo with
 	// runtime artifacts. For remote sandboxes we still upload into the
@@ -141,7 +148,7 @@ func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.Ag
 
 	// 3. Build Pi command with RPC mode
 	cmdParts := []string{
-		"pi",
+		piCommand,
 		"--mode", "rpc",
 		"--provider", r.provider,
 		"--thinking", r.thinkingLevel,
@@ -190,4 +197,37 @@ func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.Ag
 	}
 
 	return proc, nil
+}
+
+func (r *Runtime) ensurePIInstalled(ctx context.Context, sb sandbox.Sandbox) (string, error) {
+	// Prefer a sandbox-managed Pi install so remote sandboxes work without user-defined post_create.
+	check, err := sb.Exec(ctx, "if [ -x "+sandboxPIBinary+" ]; then echo local; elif command -v pi >/dev/null 2>&1; then echo global; else echo missing; fi", sandbox.ExecOpts{})
+	if err == nil && check.ExitCode == 0 {
+		switch strings.TrimSpace(check.Stdout) {
+		case "local":
+			r.addGitExclude(ctx, sb, "/.tack-tools/")
+			return sandboxPIBinary, nil
+		case "global":
+			return "pi", nil
+		}
+	}
+
+	r.logger.Info("pi runtime missing in sandbox, installing internal runtime bootstrap")
+	installCmd := "mkdir -p .tack-tools/pi && " +
+		"if command -v npm >/dev/null 2>&1; then " +
+		"npm install --no-save --silent --prefix .tack-tools/pi @mariozechner/pi-coding-agent; " +
+		"else echo 'npm is required to install pi in this sandbox' >&2; exit 1; fi"
+	result, err := sb.Exec(ctx, installCmd, sandbox.ExecOpts{})
+	if err != nil {
+		return "", fmt.Errorf("installing pi runtime in sandbox: %w", err)
+	}
+	if result.ExitCode != 0 {
+		stderr := strings.TrimSpace(result.Stderr)
+		if stderr == "" {
+			stderr = strings.TrimSpace(result.Stdout)
+		}
+		return "", fmt.Errorf("installing pi runtime in sandbox failed: %s", stderr)
+	}
+	r.addGitExclude(ctx, sb, "/.tack-tools/")
+	return sandboxPIBinary, nil
 }
