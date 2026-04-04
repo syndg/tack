@@ -162,7 +162,7 @@ func (c *Config) EffectiveRuntimeAuth() RuntimeAuthConfig {
 		binding.Mode = "tack"
 	}
 	if binding.CredentialRef == "" && binding.Mode == "tack" {
-		binding.CredentialRef = binding.Provider
+		binding.CredentialRef = canonicalCredentialRef(binding.Provider)
 	}
 	return binding
 }
@@ -405,4 +405,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func canonicalCredentialRef(provider string) string {
+	switch provider {
+	case "openai-codex":
+		return "openai"
+	case "google":
+		return "gemini"
+	default:
+		return provider
+	}
 }

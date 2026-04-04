@@ -176,6 +176,15 @@ func TestEffectiveRuntimeAuthUsesExplicitBinding(t *testing.T) {
 	}
 }
 
+func TestEffectiveRuntimeAuthCanonicalizesCredentialRef(t *testing.T) {
+	cfg := Default()
+	cfg.RuntimeAuth = RuntimeAuthConfig{Mode: "tack", Runtime: "pi", Provider: "openai-codex"}
+	binding := cfg.EffectiveRuntimeAuth()
+	if binding.CredentialRef != "openai" {
+		t.Fatalf("CredentialRef = %q, want openai", binding.CredentialRef)
+	}
+}
+
 func TestLoad_DefaultGitIdentity(t *testing.T) {
 	cfg, err := Load("", "")
 	if err != nil {

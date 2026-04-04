@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestBuildProjectConfigWritesRuntimeAuthAndModels(t *testing.T) {
 	configMap := buildProjectConfig(initWizardResult{
@@ -34,5 +39,33 @@ func TestBuildProjectConfigWritesRuntimeAuthAndModels(t *testing.T) {
 	postCreate := sandbox["post_create"].([]string)
 	if len(postCreate) != 1 || postCreate[0] != "bun install" {
 		t.Fatalf("post_create = %#v", postCreate)
+	}
+}
+
+func TestEnsureProjectGitignoreAddsTackRuntimeArtifacts(t *testing.T) {
+	root := t.TempDir()
+	gitignorePath := filepath.Join(root, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte("node_modules/\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := ensureProjectGitignore(root); err != nil {
+		t.Fatalf("ensureProjectGitignore: %v", err)
+	}
+	data, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	text := string(data)
+	for _, line := range tackGitignoreBlock {
+		if !strings.Contains(text, line) {
+			t.Fatalf(".gitignore missing %q in %q", line, text)
+		}
+	}
+	if err := ensureProjectGitignore(root); err != nil {
+		t.Fatalf("ensureProjectGitignore second run: %v", err)
+	}
+	data2, _ := os.ReadFile(gitignorePath)
+	if string(data2) != text {
+		t.Fatalf("ensureProjectGitignore should be idempotent\nfirst:\n%s\nsecond:\n%s", text, string(data2))
 	}
 }

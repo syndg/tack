@@ -17,7 +17,7 @@ func TestPIProbeUsesNativeProvidersAndLiveCatalog(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	adapter := newPIAdapter(func(_ context.Context, _ string, _ ...string) ([]byte, error) {
-		return []byte("provider model context\nanthropic claude-opus-4-1 200K\nopenai-codex gpt-5.4 272K\n"), nil
+		return []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\nopenai-codex gpt-5.4 272K 128K yes yes\n"), nil
 	})
 	probe, err := adapter.Probe(context.Background())
 	if err != nil {
@@ -31,6 +31,9 @@ func TestPIProbeUsesNativeProvidersAndLiveCatalog(t *testing.T) {
 	}
 	if err := adapter.ValidateModel("openai-codex", "gpt-5.4"); err != nil {
 		t.Fatalf("ValidateModel: %v", err)
+	}
+	if got := adapter.Models("anthropic")[0].Label; got == adapter.Models("anthropic")[0].ID {
+		t.Fatalf("expected rich model label, got %q", got)
 	}
 }
 

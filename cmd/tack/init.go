@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
@@ -106,6 +107,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err := os.WriteFile(configPath, cfgYAML, 0o644); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
+	if err := ensureProjectGitignore(cwd); err != nil {
+		return err
+	}
 
 	// --- Save credentials ---
 	if err := store.Save(); err != nil {
@@ -128,6 +132,44 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Printf("\nCreated %s\n", configPath)
 	fmt.Printf("Project ID: %s\n", projectUUID)
 	fmt.Printf("Credentials saved to %s\n", store.Path())
+	return nil
+}
+
+var tackGitignoreBlock = []string{
+	"# Tack local runtime artifacts",
+	"/.tack/project-id",
+	"/.tack/*.db",
+	"/.tack/*.db-wal",
+	"/.tack/*.db-shm",
+	"/.tack/data/",
+}
+
+func ensureProjectGitignore(root string) error {
+	gitignorePath := filepath.Join(root, ".gitignore")
+	content, err := os.ReadFile(gitignorePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading .gitignore: %w", err)
+	}
+	text := string(content)
+	missing := make([]string, 0, len(tackGitignoreBlock))
+	for _, line := range tackGitignoreBlock {
+		if !strings.Contains(text, line) {
+			missing = append(missing, line)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	if text != "" {
+		text += "\n"
+	}
+	text += strings.Join(missing, "\n") + "\n"
+	if err := os.WriteFile(gitignorePath, []byte(text), 0o644); err != nil {
+		return fmt.Errorf("writing .gitignore: %w", err)
+	}
 	return nil
 }
 
@@ -240,7 +282,42 @@ func runInitWizard(ctx context.Context, store *credentials.Store) (initWizardRes
 		Run(); err != nil {
 		return result, err
 	}
+	if err := confirmInitPlan(result, probe); err != nil {
+		return result, err
+	}
 	return result, nil
+}
+
+func confirmInitPlan(result initWizardResult, probe runtimeauth.ProbeResult) error {
+	summary := []string{
+		fmt.Sprintf("Runtime: %s", result.Runtime),
+		fmt.Sprintf("Sandbox: %s", result.SandboxProvider),
+		fmt.Sprintf("Provider: %s", result.Provider),
+		fmt.Sprintf("Auth mode: %s", result.RuntimeAuthMode),
+		fmt.Sprintf("Agent model: %s", result.AgentModel),
+		fmt.Sprintf("Planner model: %s", result.PlannerModel),
+		fmt.Sprintf("Small-task model: %s", result.SmallTaskModel),
+	}
+	if result.RuntimeAuthMode == runtimeauth.ModeTack {
+		summary = append(summary, fmt.Sprintf("Credential ref: %s", result.CredentialRef))
+	}
+	if probe.NativeDescription != "" {
+		summary = append(summary, fmt.Sprintf("Detected auth: %s", probe.NativeDescription))
+	}
+	if result.PostCreate != "" {
+		summary = append(summary, fmt.Sprintf("Post-create: %s", result.PostCreate))
+	}
+	var proceed bool
+	if err := huh.NewConfirm().
+		Title("Write this Tack config?\n\n" + strings.Join(summary, "\n")).
+		Value(&proceed).
+		Run(); err != nil {
+		return err
+	}
+	if !proceed {
+		return fmt.Errorf("init cancelled")
+	}
+	return nil
 }
 
 func selectInitProvider(adapter runtimeauth.Adapter, probe runtimeauth.ProbeResult, runtimeName string) (string, error) {

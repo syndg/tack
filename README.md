@@ -50,6 +50,10 @@ go build -o tack ./cmd/tack/
 
 ### Configure your project
 
+Recommended: run `tack init` and use the runtime-aware wizard. It detects native Pi/Claude auth when available, lets you choose native vs Tack-managed credentials, and validates provider/model choices for the selected runtime.
+
+`tack init` also appends ignore rules for local Tack runtime artifacts like `.tack/project-id` and `.tack/*.db`, while leaving `.tack/config.yaml`, rules, and blueprints committable.
+
 Create `.tack/config.yaml` in your project root:
 
 ```yaml
@@ -70,6 +74,12 @@ agents:
   pi:
     provider: anthropic
     thinking_level: medium
+
+runtime_auth:
+  mode: native         # native or tack
+  runtime: pi
+  provider: anthropic
+  # credential_ref: anthropic   # only needed when mode=tack
   timeouts:
     default:
       max_duration_minutes: 30
@@ -81,8 +91,9 @@ agents:
 
 models:
   default: claude-opus-4-1
+  agent: claude-opus-4-1
   planner: claude-opus-4-1
-  small_tasks: claude-sonnet-4
+  small_tasks: claude-sonnet-4-6
 
 quality_gates:
   - "bun test"

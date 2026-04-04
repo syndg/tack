@@ -28,3 +28,10 @@ vendor/
 *.db
 *.db-wal
 *.db-shm
+
+# Tack local runtime artifacts
+/.tack/project-id
+/.tack/*.db
+/.tack/*.db-wal
+/.tack/*.db-shm
+/.tack/data/

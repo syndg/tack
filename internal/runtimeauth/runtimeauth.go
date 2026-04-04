@@ -293,7 +293,7 @@ func newClaudeAdapter(execRunner execFunc) Adapter {
 }
 
 func defaultExec(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).Output()
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
 func commandAvailable(name string) bool {
@@ -365,10 +365,18 @@ func loadPIModelCatalog(ctx context.Context, execRunner execFunc) ([]ProviderOpt
 		}
 		providerID := fields[0]
 		modelID := fields[1]
+		label := modelID
+		if len(fields) >= 5 {
+			parts := []string{fields[2] + " ctx", fields[4] + " thinking"}
+			if len(fields) >= 6 {
+				parts = append(parts, fields[5]+" images")
+			}
+			label = fmt.Sprintf("%s (%s)", modelID, strings.Join(parts, ", "))
+		}
 		if _, ok := providers[providerID]; !ok {
 			providers[providerID] = ProviderOption{ID: providerID, Label: providerLabel(providerID)}
 		}
-		models[providerID] = append(models[providerID], ModelOption{ID: modelID, Label: modelID})
+		models[providerID] = append(models[providerID], ModelOption{ID: modelID, Label: label})
 	}
 	providerList := make([]ProviderOption, 0, len(providers))
 	for _, provider := range providers {
