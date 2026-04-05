@@ -97,101 +97,117 @@ func matchesWatchFilter(event domain.Event) bool {
 func formatWatchEvent(event domain.Event) string {
 	ts := event.CreatedAt.Format("15:04:05")
 	stream := shortID(event.Stream)
-	agent := shortID(event.Agent)
+	payload := watchPayload(event)
+	role := stringPayload(payload, "role")
+	if role == "" {
+		role = shortID(event.Agent)
+	}
 
 	switch event.Type {
 	case domain.EventAgentActivity:
 		if watchSummary {
 			return "" // skip activity in summary mode
 		}
-		var payload struct {
-			Kind    string `json:"kind"`
-			Tool    string `json:"tool"`
-			Content string `json:"content"`
-			IsError bool   `json:"is_error"`
-		}
-		_ = json.Unmarshal([]byte(event.Payload), &payload)
 
-		switch payload.Kind {
-		case "tool_start":
-			summary := toolSummary(payload.Tool, payload.Content)
+		switch stringPayload(payload, "kind") {
+		case "agent.tool_start":
+			summary := stringPayload(payload, "summary")
 			if watchVerbose {
-				content := payload.Content
+				content := stringPayload(payload, "content")
 				if len(content) > 200 {
 					content = content[:200] + "..."
 				}
-				return fmt.Sprintf("%s [%s] %s: %s %s", ts, stream, agent, summary, content)
+				return fmt.Sprintf("%s [%s] %s: %s %s", ts, stream, role, summary, content)
 			}
-			return fmt.Sprintf("%s [%s] %s: %s", ts, stream, agent, summary)
-		case "tool_end":
-			if payload.IsError {
-				summary := toolSummary(payload.Tool, payload.Content)
-				return fmt.Sprintf("%s [%s] %s: %s (failed)", ts, stream, agent, summary)
+			return fmt.Sprintf("%s [%s] %s: %s", ts, stream, role, summary)
+		case "agent.tool_end":
+			summary := stringPayload(payload, "summary")
+			if boolPayload(payload, "is_error") {
+				return fmt.Sprintf("%s [%s] %s: %s", ts, stream, role, summary)
 			}
 			if !watchVerbose {
 				return ""
 			}
-			return fmt.Sprintf("%s [%s] %s: %s done", ts, stream, agent, payload.Tool)
-		case "message":
+			return fmt.Sprintf("%s [%s] %s: %s", ts, stream, role, summary)
+		case "agent.message":
 			if !watchVerbose {
 				return ""
 			}
-			content := payload.Content
+			content := stringPayload(payload, "summary")
 			if len(content) > 100 {
 				content = content[:100] + "..."
 			}
-			return fmt.Sprintf("%s [%s] %s: %s", ts, stream, agent, content)
-		case "error":
-			return fmt.Sprintf("%s [%s] %s: ERROR %s", ts, stream, agent, payload.Content)
+			return fmt.Sprintf("%s [%s] %s: %s", ts, stream, role, content)
+		case "agent.error":
+			return fmt.Sprintf("%s [%s] %s: ERROR %s", ts, stream, role, stringPayload(payload, "summary"))
 		}
 		return ""
 
 	case domain.EventAgentSpawned:
-		return fmt.Sprintf("%s [%s] %s spawned", ts, stream, agent)
+		return fmt.Sprintf("%s [%s] %s spawned", ts, stream, role)
 	case domain.EventAgentCompleted:
-		return fmt.Sprintf("%s [%s] %s completed", ts, stream, agent)
+		return fmt.Sprintf("%s [%s] %s completed", ts, stream, role)
 	case domain.EventAgentFailed:
-		return fmt.Sprintf("%s [%s] %s failed", ts, stream, agent)
+		return fmt.Sprintf("%s [%s] %s failed", ts, stream, role)
 
 	case domain.EventObjectiveCreated:
-		return fmt.Sprintf("%s objective created: %s", ts, shortID(event.Objective))
+		return fmt.Sprintf("%s %s", ts, stringPayload(payload, "summary"))
 	case domain.EventObjectiveUpdated:
-		return fmt.Sprintf("%s objective updated: %s %s", ts, shortID(event.Objective), event.Payload)
+		return fmt.Sprintf("%s %s", ts, stringPayload(payload, "summary"))
 
 	case domain.EventPlanCreated:
 		if watchSummary {
 			return fmt.Sprintf("%s plan ready for approval", ts)
 		}
-		return fmt.Sprintf("%s plan created: %s", ts, event.Payload)
+		return fmt.Sprintf("%s %s", ts, stringPayload(payload, "summary"))
 	case domain.EventPlanApproved:
-		return fmt.Sprintf("%s plan approved", ts)
+		return fmt.Sprintf("%s %s", ts, stringPayload(payload, "summary"))
 
 	case domain.EventStreamReady:
-		return fmt.Sprintf("%s [%s] stream ready", ts, stream)
+		return fmt.Sprintf("%s [%s] %s", ts, stream, stringPayload(payload, "summary"))
 	case domain.EventMergeQueued:
-		return fmt.Sprintf("%s [%s] → merge_ready", ts, stream)
+		return fmt.Sprintf("%s [%s] %s", ts, stream, stringPayload(payload, "summary"))
 	case domain.EventMergeCompleted:
-		return fmt.Sprintf("%s [%s] merged ✓", ts, stream)
+		return fmt.Sprintf("%s [%s] %s ✓", ts, stream, stringPayload(payload, "summary"))
 	case domain.EventMergeFailed:
-		return fmt.Sprintf("%s [%s] merge failed", ts, stream)
+		return fmt.Sprintf("%s [%s] %s", ts, stream, stringPayload(payload, "summary"))
 
 	case domain.EventEscalation:
-		return fmt.Sprintf("%s [%s] ESCALATION: %s", ts, stream, truncate(event.Payload, 100))
+		return fmt.Sprintf("%s [%s] ESCALATION: %s", ts, stream, truncate(stringPayload(payload, "summary"), 100))
 
 	case domain.EventExecutionStarted:
 		if watchSummary {
 			return fmt.Sprintf("%s execution started", ts)
 		}
-		return fmt.Sprintf("%s execution started: %s", ts, event.Payload)
+		return fmt.Sprintf("%s %s", ts, stringPayload(payload, "summary"))
 
 	case domain.EventMailSent:
 		if watchSummary || !watchVerbose {
 			return ""
 		}
-		return fmt.Sprintf("%s [%s] mail sent: %s", ts, stream, event.Payload)
+		return fmt.Sprintf("%s [%s] %s", ts, stream, stringPayload(payload, "summary"))
 	}
 
 	return ""
+}
+
+func watchPayload(event domain.Event) map[string]any {
+	var payload map[string]any
+	_ = json.Unmarshal([]byte(event.Payload), &payload)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	return payload
+}
+
+func stringPayload(payload map[string]any, key string) string {
+	v, _ := payload[key].(string)
+	return v
+}
+
+func boolPayload(payload map[string]any, key string) bool {
+	v, _ := payload[key].(bool)
+	return v
 }
 
 // toolSummary extracts a human-readable summary from tool name + args JSON.

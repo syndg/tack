@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/syndg/tack/internal/services/agents"
+	"github.com/syndg/tack/internal/observability"
 )
 
 var logsVerbose bool
@@ -29,48 +29,50 @@ var logsCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		agentID := args[0]
 
-		cfg, err := loadConfig()
+		cfg, err := loadUserConfigOnly()
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
 		}
+		c, err := newDaemonClient(cmd, false)
+		if err != nil {
+			return err
+		}
+		pid, err := resolveTargetProjectID(cmd, c)
+		if err != nil {
+			return err
+		}
 
 		logDir := filepath.Join(cfg.Daemon.DataDir, "activity")
-
-		// Find the log file — support prefix matching
-		logFile := filepath.Join(logDir, agentID+".jsonl")
-		if _, err := os.Stat(logFile); os.IsNotExist(err) {
-			// Try prefix match
-			entries, _ := os.ReadDir(logDir)
-			for _, e := range entries {
-				if strings.HasPrefix(e.Name(), agentID) && strings.HasSuffix(e.Name(), ".jsonl") {
-					logFile = filepath.Join(logDir, e.Name())
-					break
-				}
-			}
-		}
+		logFile := observability.ProjectLogPath(logDir, pid)
 
 		f, err := os.Open(logFile)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return fmt.Errorf("no activity log found for agent %s", agentID)
+				return fmt.Errorf("no activity log found for project %s", pid)
 			}
 			return fmt.Errorf("opening log: %w", err)
 		}
 		defer f.Close()
 
+		matched := false
 		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if line == "" {
 				continue
 			}
-			formatted := formatLogEntry(line)
+			formatted, ok := formatLogEntry(line, agentID)
+			matched = matched || ok
 			if formatted != "" {
 				fmt.Println(formatted)
 			}
 		}
 		if err := scanner.Err(); err != nil {
 			return fmt.Errorf("reading log: %w", err)
+		}
+
+		if !logsFollow && !matched {
+			return fmt.Errorf("no canonical records found for agent %s in project %s", agentID, pid)
 		}
 
 		if logsFollow {
@@ -85,7 +87,8 @@ var logsCmd = &cobra.Command{
 				if scanner.Scan() {
 					line := scanner.Text()
 					if line != "" {
-						formatted := formatLogEntry(line)
+						formatted, ok := formatLogEntry(line, agentID)
+						matched = matched || ok
 						if formatted != "" {
 							fmt.Println(formatted)
 						}
@@ -102,40 +105,80 @@ var logsCmd = &cobra.Command{
 	},
 }
 
-func formatLogEntry(line string) string {
-	var event agents.ActivityEvent
-	if err := json.Unmarshal([]byte(line), &event); err != nil {
-		return ""
+func formatLogEntry(line string, agentPrefix string) (string, bool) {
+	var record observability.Record
+	if err := json.Unmarshal([]byte(line), &record); err != nil {
+		return "", false
+	}
+	if record.AgentID == "" || !strings.HasPrefix(record.AgentID, agentPrefix) {
+		return "", false
 	}
 
-	ts := event.Timestamp.Format("15:04:05")
+	ts := record.Timestamp.Format("15:04:05")
 
-	switch event.Kind {
-	case "tool_start":
+	switch record.Kind {
+	case "agent.tool_start":
 		if logsVerbose {
-			return fmt.Sprintf("%s %s: %s", ts, event.Tool, event.Content)
+			return fmt.Sprintf("%s %s: %s", ts, record.Summary, stringDetail(record.Details["content"])), true
 		}
-		return fmt.Sprintf("%s %s", ts, event.Tool)
-	case "tool_end":
-		if event.IsError {
-			return fmt.Sprintf("%s %s (failed, %dms)", ts, event.Tool, event.Duration)
+		return fmt.Sprintf("%s %s", ts, record.Summary), true
+	case "agent.tool_end":
+		duration := intDetail(record.Details["duration"])
+		if boolDetail(record.Details["is_error"]) {
+			return fmt.Sprintf("%s %s (%s)", ts, record.Summary, formatDuration(duration)), true
 		}
 		if logsVerbose {
-			return fmt.Sprintf("%s %s done (%dms)", ts, event.Tool, event.Duration)
+			return fmt.Sprintf("%s %s (%s)", ts, record.Summary, formatDuration(duration)), true
 		}
-		return ""
-	case "message":
+		return "", true
+	case "agent.message":
 		if logsVerbose {
-			content := event.Content
-			if len(content) > 200 {
-				content = content[:200] + "..."
-			}
-			return fmt.Sprintf("%s message: %s", ts, content)
+			return fmt.Sprintf("%s message: %s", ts, truncateText(record.Summary, 200)), true
 		}
-		return ""
-	case "error":
-		return fmt.Sprintf("%s ERROR: %s", ts, event.Content)
+		return "", true
+	case "agent.error":
+		return fmt.Sprintf("%s ERROR: %s", ts, record.Summary), true
 	}
 
-	return ""
+	return "", true
+}
+
+func stringDetail(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func boolDetail(v any) bool {
+	b, _ := v.(bool)
+	return b
+}
+
+func intDetail(v any) int64 {
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	default:
+		return 0
+	}
+}
+
+func formatDuration(ms int64) string {
+	if ms <= 0 {
+		return "0ms"
+	}
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	return fmt.Sprintf("%.1fs", float64(ms)/1000)
+}
+
+func truncateText(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
