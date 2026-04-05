@@ -90,16 +90,19 @@ func (j *Janitor) prune(ctx context.Context) error {
 	}
 
 	terminalByPrefix := make(map[string]domain.ObjectiveStatus)
+	activePrefixes := make(map[string]struct{})
 	mergeBranches := make(map[string]struct{})
 	for _, obj := range objectives {
+		prefix := naming.ObjectiveShort(obj.ID)
 		switch obj.Status {
 		case domain.ObjectiveStatusCompleted, domain.ObjectiveStatusFailed:
-			prefix := naming.ObjectiveShort(obj.ID)
 			terminalByPrefix[prefix] = obj.Status
 			mergeBranches[naming.MergeBranch(obj.ID)] = struct{}{}
+		default:
+			activePrefixes[prefix] = struct{}{}
 		}
 	}
-	if len(terminalByPrefix) == 0 {
+	if len(terminalByPrefix) == 0 && len(activePrefixes) == 0 {
 		return nil
 	}
 
@@ -138,6 +141,9 @@ func (j *Janitor) prune(ctx context.Context) error {
 		status, terminal := terminalByPrefix[prefix]
 
 		if isMerge {
+			if _, active := activePrefixes[prefix]; active {
+				continue
+			}
 			// Only delete merge branches when we can prove no open PR is using them.
 			open, known := openPRByMergeBranch[branch]
 			if terminal {

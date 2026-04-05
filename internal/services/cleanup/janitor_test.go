@@ -148,3 +148,52 @@ func TestJanitorDeletesMergeBranchWhenNoOpenPR(t *testing.T) {
 		t.Fatalf("expected local merge branch cleanup\n%s", joined)
 	}
 }
+
+func TestJanitorKeepsMergeBranchForExecutingObjective(t *testing.T) {
+	database, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := db.NewProjectStore(database.Conn()).Upsert(context.Background(), &domain.Project{ID: "test-project", Name: "test", RootPath: "/repo", ConfigPath: "/repo/.tack/config.yaml"}); err != nil {
+		t.Fatalf("register test project: %v", err)
+	}
+
+	store := db.NewObjectiveStore(database.Conn())
+	ctx := context.Background()
+	obj := &domain.Objective{ID: "12345678-aaaa-bbbb-cccc-123456789abc", ProjectID: "test-project", Description: "running", Status: domain.ObjectiveStatusExecuting}
+	if err := store.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+
+	calls := []string{}
+	j := NewJanitor(store, "test-project", "/repo", slog.Default())
+	j.exec = func(_ context.Context, _ string, name string, args ...string) ([]byte, error) {
+		cmd := strings.TrimSpace(name + " " + strings.Join(args, " "))
+		calls = append(calls, cmd)
+		switch cmd {
+		case "git worktree prune":
+			return []byte(""), nil
+		case "git worktree list --porcelain":
+			return []byte(""), nil
+		case "git ls-remote --heads origin tack/*":
+			return []byte("aaa refs/heads/tack/12345678/merge\n"), nil
+		case "git for-each-ref --format=%(refname:short) refs/heads/tack":
+			return []byte("tack/12345678/merge\n"), nil
+		default:
+			return nil, fmt.Errorf("unexpected command: %s", cmd)
+		}
+	}
+
+	if err := j.prune(ctx); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+
+	joined := strings.Join(calls, "\n")
+	if strings.Contains(joined, "git push origin --delete tack/12345678/merge") {
+		t.Fatalf("merge branch should be kept for executing objective\n%s", joined)
+	}
+}
