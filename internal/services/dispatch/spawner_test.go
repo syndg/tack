@@ -13,6 +13,7 @@ import (
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/rules"
 	"github.com/syndg/tack/internal/harness/tools"
+	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/sandbox"
 	events "github.com/syndg/tack/internal/services/events"
@@ -114,8 +115,12 @@ func setupSpawnerTest(t *testing.T) (*Spawner, *mockRuntime, *mockSandboxProvide
 	sp := newMockSandboxProvider()
 	rulesEng := rules.NewEngine(slog.Default())
 	toolCurator := tools.NewCurator(slog.Default())
+	recorder, err := observability.New(t.TempDir(), bus, slog.Default())
+	if err != nil {
+		t.Fatalf("New recorder: %v", err)
+	}
 
-	spawner := NewSpawner(agentStore, rt, sp, rulesEng, toolCurator, bus, nil, config.RuntimeAuthConfig{}, slog.Default(), "http://localhost:8080", "Tack", "tack@local")
+	spawner := NewSpawner(agentStore, rt, sp, rulesEng, toolCurator, bus, recorder, nil, config.RuntimeAuthConfig{}, slog.Default(), "http://localhost:8080", "Tack", "tack@local")
 	return spawner, rt, sp, agentStore, bus
 }
 

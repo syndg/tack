@@ -18,6 +18,7 @@ import (
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/harness/gates"
 	"github.com/syndg/tack/internal/naming"
+	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/sandbox"
 	"github.com/syndg/tack/internal/services/agents"
@@ -48,6 +49,7 @@ type Handlers struct {
 	agents          *db.AgentStore
 	sandboxProvider sandbox.SandboxProvider
 	eventBus        *events.PersistentBus
+	obs             *observability.Recorder
 	baseBranch      string
 	creds           *credentials.Store
 	runtimeAuth     config.RuntimeAuthConfig
@@ -70,6 +72,7 @@ func NewHandlers(
 	agents *db.AgentStore,
 	sandboxProvider sandbox.SandboxProvider,
 	eventBus *events.PersistentBus,
+	obs *observability.Recorder,
 	baseBranch string,
 	creds *credentials.Store,
 	runtimeAuth config.RuntimeAuthConfig,
@@ -92,6 +95,7 @@ func NewHandlers(
 		agents:          agents,
 		sandboxProvider: sandboxProvider,
 		eventBus:        eventBus,
+		obs:             obs,
 		baseBranch:      baseBranch,
 		creds:           creds,
 		runtimeAuth:     runtimeAuth,
@@ -377,11 +381,24 @@ func (h *Handlers) signalStreamMergeReady(ctx context.Context, streamID, planID,
 			}, nil
 		}
 	} else {
-		h.eventBus.Emit(domain.EventMergeQueued, objectiveID, streamID, "",
-			"stream_id", streamID,
-			"plan_id", planID,
-			"objective_id", objectiveID,
-		)
+		stream, err := h.streams.Get(ctx, streamID)
+		if err != nil {
+			return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: fmt.Sprintf("loading stream %s for observability: %s", streamID, err)}, nil
+		}
+		if h.obs != nil {
+			h.obs.RecordMilestone(observability.Milestone{
+				EventType:   domain.EventMergeQueued,
+				ProjectID:   stream.ProjectID,
+				ObjectiveID: objectiveID,
+				StreamID:    streamID,
+				Status:      "queued",
+				Details: map[string]any{
+					"stream_id":    streamID,
+					"plan_id":      planID,
+					"objective_id": objectiveID,
+				},
+			})
+		}
 	}
 
 	h.logger.Info("stream signaled for merge",

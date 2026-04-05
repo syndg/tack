@@ -14,7 +14,7 @@ import (
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
 	"github.com/syndg/tack/internal/db"
-	"github.com/syndg/tack/internal/services/agents"
+	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/services/events"
 	mailservice "github.com/syndg/tack/internal/services/mail"
 	"github.com/syndg/tack/internal/services/merge"
@@ -40,11 +40,11 @@ type Daemon struct {
 	mergeQueue      *db.MergeQueueStore
 	mergeQueueStore *db.MergeQueueStore
 
-	eventBus     *events.PersistentBus
-	mailBroker   *mailservice.Broker
-	projectCtxs  *ProjectContextManager
-	creds        *credentials.Store
-	activityLogs *agents.ActivityLogger
+	eventBus      *events.PersistentBus
+	mailBroker    *mailservice.Broker
+	projectCtxs   *ProjectContextManager
+	creds         *credentials.Store
+	observability *observability.Recorder
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -81,7 +81,6 @@ func New(cfg *config.Config) (*Daemon, error) {
 	runStore := db.NewRunStore(conn)
 	mergeQueueStore := db.NewMergeQueueStore(conn)
 	eventBus := events.NewPersistentBus(eventStore, logger)
-	mailBroker := mailservice.New(mailStore, agentStore, eventBus, logger)
 
 	home, _ := os.UserHomeDir()
 	credsPath := filepath.Join(home, ".config", "tack", "credentials.yaml")
@@ -92,11 +91,12 @@ func New(cfg *config.Config) (*Daemon, error) {
 	}
 
 	activityDir := filepath.Join(cfg.Daemon.DataDir, "activity")
-	activityLogs, err := agents.NewActivityLogger(activityDir, logger)
+	recorder, err := observability.New(activityDir, eventBus, logger)
 	if err != nil {
 		_ = database.Close()
-		return nil, fmt.Errorf("creating activity logger: %w", err)
+		return nil, fmt.Errorf("creating observability recorder: %w", err)
 	}
+	mailBroker := mailservice.New(mailStore, agentStore, eventBus, recorder, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	mux := http.NewServeMux()
@@ -115,7 +115,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 		eventBus,
 		mailBroker,
 		creds,
-		activityLogs,
+		recorder,
 		daemonURL,
 		logger,
 	)
@@ -138,7 +138,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 		mailBroker:      mailBroker,
 		projectCtxs:     projectCtxs,
 		creds:           creds,
-		activityLogs:    activityLogs,
+		observability:   recorder,
 		ctx:             ctx,
 		cancel:          cancel,
 		mux:             mux,
@@ -193,6 +193,9 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 	}
 	if d.projectCtxs != nil {
 		d.projectCtxs.Stop()
+	}
+	if d.observability != nil {
+		d.observability.Close()
 	}
 	if err := d.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("shutting down server: %w", err)

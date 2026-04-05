@@ -112,7 +112,7 @@ func setupTestCoordinator(t *testing.T) *testEnv {
 	eventBus := events.NewPersistentBus(nil, slog.Default())
 	logger := slog.Default()
 
-	lm := lifecycle.New(objectives, plans, streams, agents, eventBus, logger)
+	lm := lifecycle.New(objectives, plans, streams, agents, eventBus, nil, logger)
 
 	reg := blueprint.NewRegistry()
 	if err := reg.LoadDefaults(); err != nil {
@@ -120,7 +120,7 @@ func setupTestCoordinator(t *testing.T) *testEnv {
 	}
 	engine := blueprint.NewEngine(reg, logger)
 
-	scheduler := NewScheduler(streams, plans, 10, eventBus, logger)
+	scheduler := NewScheduler(streams, plans, 10, eventBus, nil, logger)
 	tracker := newMockTracker()
 
 	c := &Coordinator{

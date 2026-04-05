@@ -14,6 +14,7 @@ import (
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/gates"
 	"github.com/syndg/tack/internal/naming"
+	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/sandbox"
 	events "github.com/syndg/tack/internal/services/events"
 )
@@ -30,6 +31,7 @@ type Processor struct {
 	mergerPool  *MergerPool
 	sandboxProv sandbox.SandboxProvider
 	eventBus    *events.PersistentBus
+	obs         *observability.Recorder
 	logger      *slog.Logger
 
 	mu         sync.Mutex
@@ -48,6 +50,7 @@ func NewProcessor(
 	gateRunner *gates.Runner,
 	sandboxProv sandbox.SandboxProvider,
 	eventBus *events.PersistentBus,
+	obs *observability.Recorder,
 	baseBranch string,
 	logger *slog.Logger,
 ) *Processor {
@@ -66,6 +69,7 @@ func NewProcessor(
 		mergerPool:  NewMergerPool(sandboxProv, queue, baseBranch, procLogger),
 		sandboxProv: sandboxProv,
 		eventBus:    eventBus,
+		obs:         obs,
 		logger:      procLogger,
 	}
 }
@@ -192,6 +196,7 @@ func (p *Processor) EnqueueStream(ctx context.Context, streamID string) error {
 
 	// 4. Create MergeEntry with status "pending" and enqueue.
 	entry := &domain.MergeEntry{
+		ProjectID:   stream.ProjectID,
 		StreamID:    streamID,
 		PlanID:      stream.PlanID,
 		ObjectiveID: plan.ObjectiveID,
@@ -203,13 +208,22 @@ func (p *Processor) EnqueueStream(ctx context.Context, streamID string) error {
 	}
 
 	// 5. Publish EventMergeQueued.
-	p.eventBus.Emit(domain.EventMergeQueued, plan.ObjectiveID, streamID, "",
-		"entry_id", entry.ID,
-		"stream_id", streamID,
-		"plan_id", stream.PlanID,
-		"objective_id", plan.ObjectiveID,
-		"branch", branch,
-	)
+	if p.obs != nil {
+		p.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventMergeQueued,
+			ProjectID:   entry.ProjectID,
+			ObjectiveID: plan.ObjectiveID,
+			StreamID:    streamID,
+			Status:      "queued",
+			Details: map[string]any{
+				"entry_id":     entry.ID,
+				"stream_id":    streamID,
+				"plan_id":      stream.PlanID,
+				"objective_id": plan.ObjectiveID,
+				"branch":       branch,
+			},
+		})
+	}
 
 	p.logger.Info("stream enqueued for merge",
 		"stream_id", streamID,
@@ -562,25 +576,43 @@ func (p *Processor) checkObjectiveComplete(ctx context.Context, objectiveID stri
 
 // publishMergeCompleted publishes an EventMergeCompleted event.
 func (p *Processor) publishMergeCompleted(entry *domain.MergeEntry, result *MergeResult) {
-	p.eventBus.Emit(domain.EventMergeCompleted, entry.ObjectiveID, entry.StreamID, "",
-		"entry_id", entry.ID,
-		"stream_id", entry.StreamID,
-		"branch", entry.Branch,
-		"tier", result.Tier,
-		"files_changed", result.FilesChanged,
-		"insertions", result.Insertions,
-		"deletions", result.Deletions,
-	)
+	if p.obs != nil {
+		p.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventMergeCompleted,
+			ProjectID:   entry.ProjectID,
+			ObjectiveID: entry.ObjectiveID,
+			StreamID:    entry.StreamID,
+			Status:      "merged",
+			Details: map[string]any{
+				"entry_id":      entry.ID,
+				"stream_id":     entry.StreamID,
+				"branch":        entry.Branch,
+				"tier":          result.Tier,
+				"files_changed": result.FilesChanged,
+				"insertions":    result.Insertions,
+				"deletions":     result.Deletions,
+			},
+		})
+	}
 }
 
 // publishMergeFailed publishes an EventMergeFailed event.
 func (p *Processor) publishMergeFailed(entry *domain.MergeEntry, errMsg string) {
-	p.eventBus.Emit(domain.EventMergeFailed, entry.ObjectiveID, entry.StreamID, "",
-		"entry_id", entry.ID,
-		"stream_id", entry.StreamID,
-		"branch", entry.Branch,
-		"error", errMsg,
-	)
+	if p.obs != nil {
+		p.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventMergeFailed,
+			ProjectID:   entry.ProjectID,
+			ObjectiveID: entry.ObjectiveID,
+			StreamID:    entry.StreamID,
+			Status:      "failed",
+			Details: map[string]any{
+				"entry_id":  entry.ID,
+				"stream_id": entry.StreamID,
+				"branch":    entry.Branch,
+				"error":     errMsg,
+			},
+		})
+	}
 }
 
 func (p *Processor) publishNewlyReadyStreams(ctx context.Context, planID string) {
@@ -590,10 +622,18 @@ func (p *Processor) publishNewlyReadyStreams(ctx context.Context, planID string)
 		return
 	}
 	for _, st := range ready {
-		p.eventBus.Emit(domain.EventStreamReady, "", st.ID, "",
-			"stream_id", st.ID,
-			"plan_id", planID,
-		)
+		if p.obs != nil {
+			p.obs.RecordMilestone(observability.Milestone{
+				EventType: domain.EventStreamReady,
+				ProjectID: st.ProjectID,
+				StreamID:  st.ID,
+				Status:    "ready",
+				Details: map[string]any{
+					"stream_id": st.ID,
+					"plan_id":   planID,
+				},
+			})
+		}
 		p.logger.Info("stream ready after dependency merge", "stream_id", st.ID, "plan_id", planID)
 	}
 }

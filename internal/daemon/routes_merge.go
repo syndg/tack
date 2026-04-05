@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/observability"
 )
 
 // handleListMergeQueue returns merge queue entries as a JSON array.
@@ -90,13 +91,22 @@ func (d *Daemon) handleRetryMerge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	d.eventBus.Emit(domain.EventMergeQueued, entry.ObjectiveID, entry.StreamID, "",
-		"entry_id", entry.ID,
-		"stream_id", entry.StreamID,
-		"plan_id", entry.PlanID,
-		"objective_id", entry.ObjectiveID,
-		"branch", entry.Branch,
-	)
+	if d.observability != nil {
+		d.observability.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventMergeQueued,
+			ProjectID:   entry.ProjectID,
+			ObjectiveID: entry.ObjectiveID,
+			StreamID:    entry.StreamID,
+			Status:      "queued",
+			Details: map[string]any{
+				"entry_id":     entry.ID,
+				"stream_id":    entry.StreamID,
+				"plan_id":      entry.PlanID,
+				"objective_id": entry.ObjectiveID,
+				"branch":       entry.Branch,
+			},
+		})
+	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

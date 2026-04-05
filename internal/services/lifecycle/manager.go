@@ -7,6 +7,7 @@ import (
 
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/observability"
 	events "github.com/syndg/tack/internal/services/events"
 )
 
@@ -27,6 +28,7 @@ type Manager struct {
 	streams    *db.StreamStore
 	agents     *db.AgentStore
 	eventBus   *events.PersistentBus
+	obs        *observability.Recorder
 	logger     *slog.Logger
 }
 
@@ -37,6 +39,7 @@ func New(
 	streams *db.StreamStore,
 	agents *db.AgentStore,
 	eventBus *events.PersistentBus,
+	obs *observability.Recorder,
 	logger *slog.Logger,
 ) *Manager {
 	return &Manager{
@@ -45,6 +48,7 @@ func New(
 		streams:    streams,
 		agents:     agents,
 		eventBus:   eventBus,
+		obs:        obs,
 		logger:     logger,
 	}
 }
@@ -88,10 +92,18 @@ func (m *Manager) Transition(ctx context.Context, objectiveID string, to domain.
 		return fmt.Errorf("updating objective status: %w", err)
 	}
 
-	m.eventBus.Emit(domain.EventObjectiveUpdated, objectiveID, "", "",
-		"from", string(from),
-		"to", string(to),
-	)
+	if m.obs != nil {
+		m.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventObjectiveUpdated,
+			ProjectID:   obj.ProjectID,
+			ObjectiveID: objectiveID,
+			Status:      string(to),
+			Details: map[string]any{
+				"from": string(from),
+				"to":   string(to),
+			},
+		})
+	}
 
 	m.logger.Info("objective transitioned", "id", objectiveID, "from", from, "to", to)
 	return nil
@@ -120,6 +132,17 @@ func (m *Manager) ApprovePlan(ctx context.Context, planID string) error {
 		if err := m.Transition(ctx, plan.ObjectiveID, domain.ObjectiveStatusApproved); err != nil {
 			return fmt.Errorf("transitioning objective to approved: %w", err)
 		}
+	}
+	if m.obs != nil {
+		m.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventPlanApproved,
+			ProjectID:   plan.ProjectID,
+			ObjectiveID: plan.ObjectiveID,
+			Status:      string(domain.PlanStatusApproved),
+			Details: map[string]any{
+				"plan_id": planID,
+			},
+		})
 	}
 
 	m.logger.Info("plan approved", "plan_id", planID, "objective_id", plan.ObjectiveID)
@@ -154,10 +177,18 @@ func (m *Manager) MarkPlanReady(ctx context.Context, planID string) error {
 		return fmt.Errorf("updating plan status to pending_approval: %w", err)
 	}
 
-	m.eventBus.Emit(domain.EventObjectiveUpdated, plan.ObjectiveID, "", "",
-		"plan_id", planID,
-		"plan_status", string(domain.PlanStatusPendingApproval),
-	)
+	if m.obs != nil {
+		m.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventObjectiveUpdated,
+			ProjectID:   plan.ProjectID,
+			ObjectiveID: plan.ObjectiveID,
+			Status:      string(domain.PlanStatusPendingApproval),
+			Details: map[string]any{
+				"plan_id":     planID,
+				"plan_status": string(domain.PlanStatusPendingApproval),
+			},
+		})
+	}
 
 	m.logger.Info("plan ready for approval", "plan_id", planID, "objective_id", plan.ObjectiveID)
 	return nil

@@ -12,7 +12,7 @@ import (
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
-	"github.com/syndg/tack/internal/services/agents"
+	"github.com/syndg/tack/internal/observability"
 	events "github.com/syndg/tack/internal/services/events"
 	"github.com/syndg/tack/internal/services/lifecycle"
 )
@@ -55,24 +55,24 @@ type MailSender interface {
 
 // Config holds all dependencies for constructing a Coordinator.
 type Config struct {
-	ProjectID      string                 // owning project for recovery filtering
-	Engine         *blueprint.Engine      // blueprint execution engine
-	Scheduler      *Scheduler             // stream scheduling
-	Spawner        *Spawner               // agent process spawning
-	AgentModel     string                 // default model for non-planner agent steps
-	PlannerModel   string                 // default model for planner agent steps
-	Lifecycle      *lifecycle.Manager     // objective state transitions
-	MergeEnqueuer  MergeEnqueuer          // merge queue integration
-	PlanCreator    PlanCreator            // plan creation from planner output
-	MailSender     MailSender             // optional: nil disables mail escalation
-	Executions     *db.ExecutionStore     // execution persistence
-	Objectives     *db.ObjectiveStore     // objective persistence
-	Plans          *db.PlanStore          // plan persistence
-	Streams        *db.StreamStore        // stream persistence
-	EventBus       *events.PersistentBus  // event pub/sub
-	ActivityLogger *agents.ActivityLogger // optional: nil disables activity logging
-	Timeouts       config.TimeoutConfig   // per-role timeout configuration
-	Logger         *slog.Logger           // structured logger
+	ProjectID     string                  // owning project for recovery filtering
+	Engine        *blueprint.Engine       // blueprint execution engine
+	Scheduler     *Scheduler              // stream scheduling
+	Spawner       *Spawner                // agent process spawning
+	AgentModel    string                  // default model for non-planner agent steps
+	PlannerModel  string                  // default model for planner agent steps
+	Lifecycle     *lifecycle.Manager      // objective state transitions
+	MergeEnqueuer MergeEnqueuer           // merge queue integration
+	PlanCreator   PlanCreator             // plan creation from planner output
+	MailSender    MailSender              // optional: nil disables mail escalation
+	Executions    *db.ExecutionStore      // execution persistence
+	Objectives    *db.ObjectiveStore      // objective persistence
+	Plans         *db.PlanStore           // plan persistence
+	Streams       *db.StreamStore         // stream persistence
+	EventBus      *events.PersistentBus   // event pub/sub
+	Observability *observability.Recorder // optional: nil disables canonical operator logging
+	Timeouts      config.TimeoutConfig    // per-role timeout configuration
+	Logger        *slog.Logger            // structured logger
 }
 
 // Validate checks that all required Config fields are set.
@@ -136,6 +136,7 @@ type Coordinator struct {
 	plans         *db.PlanStore
 	streams       *db.StreamStore
 	eventBus      *events.PersistentBus
+	obs           *observability.Recorder
 	tracker       AgentTracker
 	logger        *slog.Logger
 	projectID     string
@@ -167,7 +168,8 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		plans:         cfg.Plans,
 		streams:       cfg.Streams,
 		eventBus:      cfg.EventBus,
-		tracker:       newAgentTracker(cfg.Spawner, cfg.ActivityLogger, cfg.EventBus, cfg.Timeouts, cfg.Logger),
+		obs:           cfg.Observability,
+		tracker:       newAgentTracker(cfg.Spawner, cfg.Observability, cfg.EventBus, cfg.Timeouts, cfg.Logger),
 		logger:        cfg.Logger,
 		projectID:     cfg.ProjectID,
 		agentModel:    cfg.AgentModel,
@@ -384,10 +386,18 @@ func (c *Coordinator) Execute(ctx context.Context, objectiveID string) error {
 		_ = c.plans.UpdateStatus(ctx, plan.ID, domain.PlanStatusExecuting)
 	}
 
-	c.eventBus.Emit(domain.EventExecutionStarted, objectiveID, "", "",
-		"execution_id", exec.ID,
-		"blueprint_id", blueprintID,
-	)
+	if c.obs != nil {
+		c.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventExecutionStarted,
+			ProjectID:   obj.ProjectID,
+			ObjectiveID: objectiveID,
+			Status:      "started",
+			Details: map[string]any{
+				"execution_id": exec.ID,
+				"blueprint_id": blueprintID,
+			},
+		})
+	}
 
 	baseCtx := c.ctx
 	if baseCtx == nil {

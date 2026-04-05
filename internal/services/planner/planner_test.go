@@ -60,8 +60,8 @@ func setupService(t *testing.T) (*Service, *db.ObjectiveStore, *db.PlanStore, *d
 	bus := events.NewPersistentBus(eventStore, slog.Default())
 	logger := slog.Default()
 
-	lcm := lifecycle.New(objStore, planStore, streamStore, agentStore, bus, logger)
-	svc := New(planStore, streamStore, objStore, agentStore, lcm, bus, logger, []string{"go test ./...", "go vet ./..."})
+	lcm := lifecycle.New(objStore, planStore, streamStore, agentStore, bus, nil, logger)
+	svc := New(planStore, streamStore, objStore, agentStore, lcm, bus, nil, logger, []string{"go test ./...", "go vet ./..."})
 	return svc, objStore, planStore, streamStore, runStore
 }
 

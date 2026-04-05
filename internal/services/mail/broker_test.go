@@ -7,6 +7,7 @@ import (
 
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/observability"
 	events "github.com/syndg/tack/internal/services/events"
 )
 
@@ -34,7 +35,11 @@ func setupBroker(t *testing.T) *brokerFixture {
 	agentStore := db.NewAgentStore(d.Conn())
 	eventStore := db.NewEventStore(d.Conn())
 	bus := events.NewPersistentBus(eventStore, slog.Default())
-	broker := New(mailStore, agentStore, bus, slog.Default())
+	recorder, err := observability.New(t.TempDir(), bus, slog.Default())
+	if err != nil {
+		t.Fatalf("New recorder: %v", err)
+	}
+	broker := New(mailStore, agentStore, bus, recorder, slog.Default())
 
 	return &brokerFixture{broker: broker, agentStore: agentStore, bus: bus}
 }

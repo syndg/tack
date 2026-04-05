@@ -8,6 +8,7 @@ import (
 
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/observability"
 	events "github.com/syndg/tack/internal/services/events"
 )
 
@@ -20,6 +21,7 @@ import (
 type Broker struct {
 	mail     *db.MailStore
 	eventBus *events.PersistentBus
+	obs      *observability.Recorder
 	logger   *slog.Logger
 }
 
@@ -27,11 +29,13 @@ func New(
 	mail *db.MailStore,
 	agents *db.AgentStore,
 	eventBus *events.PersistentBus,
+	obs *observability.Recorder,
 	logger *slog.Logger,
 ) *Broker {
 	return &Broker{
 		mail:     mail,
 		eventBus: eventBus,
+		obs:      obs,
 		logger:   logger,
 	}
 }
@@ -65,14 +69,21 @@ func (b *Broker) Send(ctx context.Context, msg *domain.MailMessage) error {
 			return fmt.Errorf("storing escalation: %w", err)
 		}
 
-		b.eventBus.Publish(domain.Event{
-			ProjectID: msg.ProjectID,
-			Type:      domain.EventEscalation,
-			Objective: msg.Objective,
-			Stream:    msg.Stream,
-			Agent:     msg.From,
-			Payload:   msg.Body,
-		})
+		if b.obs != nil {
+			b.obs.RecordMilestone(observability.Milestone{
+				EventType:   domain.EventEscalation,
+				ProjectID:   msg.ProjectID,
+				ObjectiveID: msg.Objective,
+				StreamID:    msg.Stream,
+				AgentID:     msg.From,
+				Status:      "escalated",
+				Details: map[string]any{
+					"subject": msg.Subject,
+					"body":    msg.Body,
+					"payload": msg.Payload,
+				},
+			})
+		}
 		return nil
 	}
 
@@ -81,14 +92,21 @@ func (b *Broker) Send(ctx context.Context, msg *domain.MailMessage) error {
 		return fmt.Errorf("sending mail: %w", err)
 	}
 
-	b.eventBus.Publish(domain.Event{
-		ProjectID: msg.ProjectID,
-		Type:      domain.EventMailSent,
-		Objective: msg.Objective,
-		Stream:    msg.Stream,
-		Agent:     msg.From,
-		Payload:   fmt.Sprintf(`{"to":%q,"type":%q}`, msg.To, msg.Type),
-	})
+	if b.obs != nil {
+		b.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventMailSent,
+			ProjectID:   msg.ProjectID,
+			ObjectiveID: msg.Objective,
+			StreamID:    msg.Stream,
+			AgentID:     msg.From,
+			Status:      "sent",
+			Details: map[string]any{
+				"to":      msg.To,
+				"type":    msg.Type,
+				"subject": msg.Subject,
+			},
+		})
+	}
 
 	return nil
 }

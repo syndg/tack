@@ -15,6 +15,7 @@ import (
 	"github.com/syndg/tack/internal/harness/rules"
 	"github.com/syndg/tack/internal/harness/tools"
 	"github.com/syndg/tack/internal/naming"
+	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/sandbox"
 	"github.com/syndg/tack/internal/services/agents"
@@ -59,6 +60,7 @@ type Spawner struct {
 	rulesEngine    *rules.Engine
 	toolCurator    *tools.Curator
 	eventBus       *events.PersistentBus
+	obs            *observability.Recorder
 	creds          *credentials.Store
 	runtimeAuth    config.RuntimeAuthConfig
 	logger         *slog.Logger
@@ -75,6 +77,7 @@ func NewSpawner(
 	rulesEngine *rules.Engine,
 	toolCurator *tools.Curator,
 	eventBus *events.PersistentBus,
+	obs *observability.Recorder,
 	creds *credentials.Store,
 	runtimeAuth config.RuntimeAuthConfig,
 	logger *slog.Logger,
@@ -89,6 +92,7 @@ func NewSpawner(
 		rulesEngine:    rulesEngine,
 		toolCurator:    toolCurator,
 		eventBus:       eventBus,
+		obs:            obs,
 		creds:          creds,
 		runtimeAuth:    runtimeAuth,
 		logger:         logger,
@@ -288,11 +292,21 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	}
 
 	// 9. Publish EventAgentSpawned.
-	s.eventBus.Emit(domain.EventAgentSpawned, req.Objective.ID, streamID, agentName,
-		"session_id", session.ID,
-		"role", req.Role,
-		"sandbox_id", sb.ID(),
-	)
+	if s.obs != nil {
+		s.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventAgentSpawned,
+			ProjectID:   session.ProjectID,
+			ObjectiveID: session.ObjectiveID,
+			StreamID:    session.StreamID,
+			AgentID:     session.ID,
+			Role:        req.Role,
+			Status:      "spawned",
+			Details: map[string]any{
+				"session_id": session.ID,
+				"sandbox_id": sb.ID(),
+			},
+		})
+	}
 
 	s.logger.Info("agent spawned",
 		"session_id", session.ID,
@@ -343,10 +357,21 @@ func (s *Spawner) MarkCompleted(ctx context.Context, session *domain.AgentSessio
 	if err := s.agentStore.UpdateStatus(ctx, session.ID, "completed"); err != nil {
 		s.logger.Error("failed to update agent session to completed", "session_id", session.ID, "error", err)
 	}
-	s.eventBus.Emit(domain.EventAgentCompleted, session.ObjectiveID, session.StreamID, session.ID,
-		"session_id", session.ID,
-		"summary", summary,
-	)
+	if s.obs != nil {
+		s.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventAgentCompleted,
+			ProjectID:   session.ProjectID,
+			ObjectiveID: session.ObjectiveID,
+			StreamID:    session.StreamID,
+			AgentID:     session.ID,
+			Role:        string(session.Role),
+			Status:      "completed",
+			Details: map[string]any{
+				"session_id": session.ID,
+				"summary":    summary,
+			},
+		})
+	}
 	s.logger.Info("agent completed", "session_id", session.ID)
 }
 
@@ -355,10 +380,21 @@ func (s *Spawner) MarkFailed(ctx context.Context, session *domain.AgentSession, 
 	if err := s.agentStore.UpdateStatus(ctx, session.ID, "failed"); err != nil {
 		s.logger.Error("failed to update agent session to failed", "session_id", session.ID, "error", err)
 	}
-	s.eventBus.Emit(domain.EventAgentFailed, session.ObjectiveID, session.StreamID, session.ID,
-		"session_id", session.ID,
-		"reason", reason,
-	)
+	if s.obs != nil {
+		s.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventAgentFailed,
+			ProjectID:   session.ProjectID,
+			ObjectiveID: session.ObjectiveID,
+			StreamID:    session.StreamID,
+			AgentID:     session.ID,
+			Role:        string(session.Role),
+			Status:      "failed",
+			Details: map[string]any{
+				"session_id": session.ID,
+				"reason":     reason,
+			},
+		})
+	}
 	s.logger.Info("agent failed", "session_id", session.ID, "reason", reason)
 }
 
@@ -374,10 +410,21 @@ func (s *Spawner) Kill(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("marking session failed: %w", err)
 	}
 
-	s.eventBus.Emit(domain.EventAgentFailed, session.ObjectiveID, session.StreamID, sessionID,
-		"session_id", sessionID,
-		"reason", "killed",
-	)
+	if s.obs != nil {
+		s.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventAgentFailed,
+			ProjectID:   session.ProjectID,
+			ObjectiveID: session.ObjectiveID,
+			StreamID:    session.StreamID,
+			AgentID:     sessionID,
+			Role:        string(session.Role),
+			Status:      "failed",
+			Details: map[string]any{
+				"session_id": sessionID,
+				"reason":     "killed",
+			},
+		})
+	}
 
 	s.logger.Info("agent killed", "session_id", sessionID)
 	return nil

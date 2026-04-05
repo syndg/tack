@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/observability"
 )
 
 // SimpleOpts configures the legacy single-plan helper.
@@ -34,11 +35,19 @@ func (s *Service) StartSimple(ctx context.Context, description string, opts Simp
 		return nil, nil, fmt.Errorf("creating objective: %w", err)
 	}
 
-	s.eventBus.Emit(domain.EventObjectiveCreated, obj.ID, "", "",
-		"objective_id", obj.ID,
-		"description", description,
-		"mode", "simple",
-	)
+	if s.obs != nil {
+		s.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventObjectiveCreated,
+			ProjectID:   obj.ProjectID,
+			ObjectiveID: obj.ID,
+			Status:      "created",
+			Details: map[string]any{
+				"objective_id": obj.ID,
+				"description":  description,
+				"mode":         "simple",
+			},
+		})
+	}
 
 	s.logger.Info("simple objective created", "objective_id", obj.ID, "description", description)
 

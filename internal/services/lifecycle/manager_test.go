@@ -32,7 +32,7 @@ func setupManager(t *testing.T) (*Manager, *db.ObjectiveStore, *db.PlanStore) {
 	eventStore := db.NewEventStore(d.Conn())
 
 	bus := events.NewPersistentBus(eventStore, slog.Default())
-	mgr := New(objStore, planStore, streamStore, agentStore, bus, slog.Default())
+	mgr := New(objStore, planStore, streamStore, agentStore, bus, nil, slog.Default())
 	return mgr, objStore, planStore
 }
 

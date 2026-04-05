@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/observability"
 	events "github.com/syndg/tack/internal/services/events"
 	"github.com/syndg/tack/internal/services/lifecycle"
 )
@@ -23,6 +24,7 @@ type Service struct {
 	agentStore          *db.AgentStore
 	lifecycle           *lifecycle.Manager
 	eventBus            *events.PersistentBus
+	obs                 *observability.Recorder
 	logger              *slog.Logger
 	defaultQualityGates []string
 	runStore            *db.RunStore
@@ -37,6 +39,7 @@ func New(
 	agentStore *db.AgentStore,
 	lifecycle *lifecycle.Manager,
 	eventBus *events.PersistentBus,
+	obs *observability.Recorder,
 	logger *slog.Logger,
 	defaultQualityGates []string,
 ) *Service {
@@ -47,6 +50,7 @@ func New(
 		agentStore:          agentStore,
 		lifecycle:           lifecycle,
 		eventBus:            eventBus,
+		obs:                 obs,
 		logger:              logger,
 		defaultQualityGates: append([]string(nil), defaultQualityGates...),
 	}
@@ -81,10 +85,19 @@ func (s *Service) CreatePlan(ctx context.Context, objectiveID string, agentOutpu
 	}
 
 	// Publish EventPlanCreated before marking ready.
-	s.eventBus.Emit(domain.EventPlanCreated, objectiveID, "", "",
-		"plan_id", plan.ID,
-		"objective_id", objectiveID,
-	)
+	if s.obs != nil {
+		s.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventPlanCreated,
+			ProjectID:   plan.ProjectID,
+			ObjectiveID: objectiveID,
+			Status:      "created",
+			Details: map[string]any{
+				"plan_id":      plan.ID,
+				"objective_id": objectiveID,
+				"stream_count": len(streams),
+			},
+		})
+	}
 
 	// Mark plan ready — sets status to "pending_approval" and publishes EventObjectiveUpdated.
 	if err := s.lifecycle.MarkPlanReady(ctx, plan.ID); err != nil {
@@ -146,11 +159,20 @@ func (s *Service) CreateSimplePlan(ctx context.Context, objectiveID string) (*do
 		return nil, fmt.Errorf("storing simple stream: %w", err)
 	}
 
-	s.eventBus.Emit(domain.EventPlanCreated, objectiveID, "", "",
-		"plan_id", plan.ID,
-		"objective_id", objectiveID,
-		"mode", "simple",
-	)
+	if s.obs != nil {
+		s.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventPlanCreated,
+			ProjectID:   plan.ProjectID,
+			ObjectiveID: objectiveID,
+			Status:      "created",
+			Details: map[string]any{
+				"plan_id":      plan.ID,
+				"objective_id": objectiveID,
+				"mode":         "simple",
+				"stream_count": 1,
+			},
+		})
+	}
 
 	s.logger.Info("simple plan created", "plan_id", plan.ID, "objective_id", objectiveID)
 	return plan, nil

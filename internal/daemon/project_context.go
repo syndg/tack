@@ -19,6 +19,7 @@ import (
 	"github.com/syndg/tack/internal/harness/gates"
 	"github.com/syndg/tack/internal/harness/rules"
 	"github.com/syndg/tack/internal/harness/tools"
+	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/runtime/claudecode"
 	"github.com/syndg/tack/internal/runtime/pi"
@@ -26,7 +27,6 @@ import (
 	"github.com/syndg/tack/internal/sandbox"
 	"github.com/syndg/tack/internal/sandbox/daytona"
 	"github.com/syndg/tack/internal/sandbox/local"
-	"github.com/syndg/tack/internal/services/agents"
 	"github.com/syndg/tack/internal/services/cleanup"
 	"github.com/syndg/tack/internal/services/events"
 	"github.com/syndg/tack/internal/services/lifecycle"
@@ -70,7 +70,7 @@ type ProjectContextManager struct {
 	eventBus     *events.PersistentBus
 	mailBroker   *mailservice.Broker
 	creds        *credentials.Store
-	activityLog  *agents.ActivityLogger
+	obs          *observability.Recorder
 
 	mu        sync.Mutex
 	contexts  map[string]*ProjectContext
@@ -92,7 +92,7 @@ func newProjectContextManager(
 	eventBus *events.PersistentBus,
 	mailBroker *mailservice.Broker,
 	creds *credentials.Store,
-	activityLog *agents.ActivityLogger,
+	obs *observability.Recorder,
 	daemonURL string,
 	logger *slog.Logger,
 ) *ProjectContextManager {
@@ -117,7 +117,7 @@ func newProjectContextManager(
 		eventBus:       eventBus,
 		mailBroker:     mailBroker,
 		creds:          creds,
-		activityLog:    activityLog,
+		obs:            obs,
 		contexts:       make(map[string]*ProjectContext),
 	}
 }
@@ -292,11 +292,12 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 		gates.NewRunner(m.logger),
 		sandboxProv,
 		m.eventBus,
+		m.obs,
 		cfg.Daemon.BaseBranch,
 		m.logger,
 	)
-	lifecycleMgr := lifecycle.New(m.objectives, m.plans, m.streams, m.agents, m.eventBus, m.logger)
-	planningService := planner.New(m.plans, m.streams, m.objectives, m.agents, lifecycleMgr, m.eventBus, m.logger, cfg.QualityGates)
+	lifecycleMgr := lifecycle.New(m.objectives, m.plans, m.streams, m.agents, m.eventBus, m.obs, m.logger)
+	planningService := planner.New(m.plans, m.streams, m.objectives, m.agents, lifecycleMgr, m.eventBus, m.obs, m.logger, cfg.QualityGates)
 
 	toolCurator := tools.NewCurator(m.logger)
 	agentRuntime := newAgentRuntime(&cfg, m.logger)
@@ -318,7 +319,7 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 		PlanCreator:        planningService,
 		MailSender:         m.mailBroker,
 		GateRunner:         gates.NewRunner(m.logger),
-		ActivityLogger:     m.activityLog,
+		Observability:      m.obs,
 		Timeouts:           cfg.Agents.Timeouts,
 		MaxConcurrent:      cfg.Agents.MaxConcurrent,
 		BaseBranch:         cfg.Daemon.BaseBranch,

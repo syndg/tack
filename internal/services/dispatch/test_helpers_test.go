@@ -58,7 +58,7 @@ func setupDispatchEnv(t *testing.T) *dispatchTestEnv {
 	eventBus := events.NewPersistentBus(nil, slog.Default())
 	logger := slog.Default()
 
-	lm := lifecycle.New(objectiveStore, planStore, streamStore, agentStore, eventBus, logger)
+	lm := lifecycle.New(objectiveStore, planStore, streamStore, agentStore, eventBus, nil, logger)
 
 	reg := blueprint.NewRegistry()
 	if err := reg.LoadDefaults(); err != nil {
@@ -66,7 +66,7 @@ func setupDispatchEnv(t *testing.T) *dispatchTestEnv {
 	}
 	engine := blueprint.NewEngine(reg, logger)
 
-	scheduler := NewScheduler(streamStore, planStore, 10, eventBus, logger)
+	scheduler := NewScheduler(streamStore, planStore, 10, eventBus, nil, logger)
 	tracker := newMockTracker()
 
 	c := &Coordinator{

@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/sandbox"
 	"github.com/syndg/tack/internal/services/lifecycle"
 )
@@ -62,23 +62,34 @@ func (c *Coordinator) escalateStreamFailure(ctx context.Context, exec *blueprint
 		}
 		if err := c.mailSender.Send(ctx, msg); err != nil {
 			c.logger.Error("failed to send stream failure escalation via broker", "error", err)
-			// Fall back to direct event publish
-			c.eventBus.Publish(domain.Event{
-				Type:      domain.EventEscalation,
-				Objective: exec.ObjectiveID,
-				Stream:    streamID,
-				Payload:   string(payloadJSON),
-				CreatedAt: time.Now(),
-			})
+			if c.obs != nil {
+				c.obs.RecordMilestone(observability.Milestone{
+					EventType:   domain.EventEscalation,
+					ProjectID:   stream.ProjectID,
+					ObjectiveID: exec.ObjectiveID,
+					StreamID:    streamID,
+					Status:      "escalated",
+					Details: map[string]any{
+						"payload": string(payloadJSON),
+						"error":   errMsg,
+					},
+				})
+			}
 		}
 	} else {
-		c.eventBus.Publish(domain.Event{
-			Type:      domain.EventEscalation,
-			Objective: exec.ObjectiveID,
-			Stream:    streamID,
-			Payload:   string(payloadJSON),
-			CreatedAt: time.Now(),
-		})
+		if c.obs != nil {
+			c.obs.RecordMilestone(observability.Milestone{
+				EventType:   domain.EventEscalation,
+				ProjectID:   stream.ProjectID,
+				ObjectiveID: exec.ObjectiveID,
+				StreamID:    streamID,
+				Status:      "escalated",
+				Details: map[string]any{
+					"payload": string(payloadJSON),
+					"error":   errMsg,
+				},
+			})
+		}
 	}
 
 	c.logger.Info("stream failure escalated to human",

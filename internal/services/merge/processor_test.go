@@ -9,6 +9,7 @@ import (
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/gates"
+	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/sandbox"
 	events "github.com/syndg/tack/internal/services/events"
 )
@@ -100,6 +101,10 @@ func setupProcessor(t *testing.T) *processorFixture {
 
 	logger := slog.Default()
 	bus := events.NewPersistentBus(eventStore, logger)
+	recorder, err := observability.New(t.TempDir(), bus, logger)
+	if err != nil {
+		t.Fatalf("New recorder: %v", err)
+	}
 
 	sb := &mockSandbox{
 		id: "merger-sb",
@@ -120,7 +125,7 @@ func setupProcessor(t *testing.T) *processorFixture {
 		"test-project",
 		queueStore, streamStore, planStore,
 		merger, differ, gateRunner, sbProvider,
-		bus, "main", logger,
+		bus, recorder, "main", logger,
 	)
 
 	return &processorFixture{

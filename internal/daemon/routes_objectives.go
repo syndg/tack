@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/services/dispatch"
 	"github.com/syndg/tack/internal/services/runs"
 )
@@ -51,13 +51,18 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	d.eventBus.Publish(domain.Event{
-		ProjectID: projectCtx.Project.ID,
-		Type:      domain.EventObjectiveCreated,
-		Objective: obj.ID,
-		Payload:   obj.Description,
-		CreatedAt: time.Now(),
-	})
+	if d.observability != nil {
+		d.observability.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventObjectiveCreated,
+			ProjectID:   projectCtx.Project.ID,
+			ObjectiveID: obj.ID,
+			Status:      "created",
+			Details: map[string]any{
+				"description": obj.Description,
+				"blueprint":   obj.Blueprint,
+			},
+		})
+	}
 
 	// Start execution through the run-centric boundary. The event above
 	// is informational (SSE); execution is driven by runsService.Start().

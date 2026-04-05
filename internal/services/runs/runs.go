@@ -80,9 +80,9 @@ import (
 	"github.com/syndg/tack/internal/harness/gates"
 	"github.com/syndg/tack/internal/harness/rules"
 	"github.com/syndg/tack/internal/harness/tools"
+	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/sandbox"
-	"github.com/syndg/tack/internal/services/agents"
 	"github.com/syndg/tack/internal/services/dispatch"
 	"github.com/syndg/tack/internal/services/events"
 	"github.com/syndg/tack/internal/services/lifecycle"
@@ -173,8 +173,8 @@ type Config struct {
 	// DaemonURL is the URL agents use to call back to the daemon.
 	DaemonURL string
 
-	// ActivityLogger logs agent activity events. Optional: nil disables.
-	ActivityLogger *agents.ActivityLogger
+	// Observability records canonical operator-facing timeline data. Optional: nil disables.
+	Observability *observability.Recorder
 
 	// Timeouts configures per-role agent timeout behavior.
 	Timeouts config.TimeoutConfig
@@ -265,7 +265,7 @@ func New(cfg Config) (*Service, error) {
 		// Created here as an internal implementation detail of the runs boundary.
 		spawner := dispatch.NewSpawner(
 			cfg.Agents, cfg.AgentRuntime, cfg.SandboxProvider,
-			cfg.RulesEngine, cfg.ToolCurator, cfg.EventBus,
+			cfg.RulesEngine, cfg.ToolCurator, cfg.EventBus, cfg.Observability,
 			cfg.Credentials, cfg.RuntimeAuth, logger, cfg.DaemonURL,
 			cfg.GitAuthorName, cfg.GitAuthorEmail,
 		)
@@ -276,14 +276,14 @@ func New(cfg Config) (*Service, error) {
 		if maxConcurrent <= 0 {
 			maxConcurrent = 5
 		}
-		scheduler := dispatch.NewScheduler(cfg.Streams, cfg.Plans, maxConcurrent, cfg.EventBus, logger)
+		scheduler := dispatch.NewScheduler(cfg.Streams, cfg.Plans, maxConcurrent, cfg.EventBus, cfg.Observability, logger)
 
 		// Step handlers for deterministic and human blueprint steps.
 		handlers := dispatch.NewHandlers(
 			scheduler, cfg.GateRunner, cfg.Lifecycle, cfg.MergeProcessor,
 			cfg.AgentRuntime,
 			cfg.Plans, cfg.Streams, cfg.Objectives, cfg.Executions, cfg.Agents,
-			cfg.SandboxProvider, cfg.EventBus, cfg.BaseBranch, cfg.Credentials, cfg.RuntimeAuth, cfg.DeterministicModel, logger,
+			cfg.SandboxProvider, cfg.EventBus, cfg.Observability, cfg.BaseBranch, cfg.Credentials, cfg.RuntimeAuth, cfg.DeterministicModel, logger,
 		)
 		cfg.Engine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
 		cfg.Engine.RegisterHandler(blueprint.StepTypeHuman, handlers.HandleHuman)
@@ -292,24 +292,24 @@ func New(cfg Config) (*Service, error) {
 		// Agent and blueprint_ref step handlers are registered inside NewCoordinator.
 		var err error
 		coordinator, err = dispatch.NewCoordinator(dispatch.Config{
-			ProjectID:      cfg.ProjectID,
-			Engine:         cfg.Engine,
-			Scheduler:      scheduler,
-			Spawner:        spawner,
-			AgentModel:     cfg.AgentModel,
-			PlannerModel:   cfg.PlannerModel,
-			Lifecycle:      cfg.Lifecycle,
-			MergeEnqueuer:  cfg.MergeProcessor,
-			PlanCreator:    cfg.PlanCreator,
-			MailSender:     cfg.MailSender,
-			Executions:     cfg.Executions,
-			Objectives:     cfg.Objectives,
-			Plans:          cfg.Plans,
-			Streams:        cfg.Streams,
-			EventBus:       cfg.EventBus,
-			ActivityLogger: cfg.ActivityLogger,
-			Timeouts:       cfg.Timeouts,
-			Logger:         logger,
+			ProjectID:     cfg.ProjectID,
+			Engine:        cfg.Engine,
+			Scheduler:     scheduler,
+			Spawner:       spawner,
+			AgentModel:    cfg.AgentModel,
+			PlannerModel:  cfg.PlannerModel,
+			Lifecycle:     cfg.Lifecycle,
+			MergeEnqueuer: cfg.MergeProcessor,
+			PlanCreator:   cfg.PlanCreator,
+			MailSender:    cfg.MailSender,
+			Executions:    cfg.Executions,
+			Objectives:    cfg.Objectives,
+			Plans:         cfg.Plans,
+			Streams:       cfg.Streams,
+			EventBus:      cfg.EventBus,
+			Observability: cfg.Observability,
+			Timeouts:      cfg.Timeouts,
+			Logger:        logger,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("constructing coordinator: %w", err)
