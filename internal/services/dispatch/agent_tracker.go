@@ -10,8 +10,8 @@ import (
 
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/runtime"
-	"github.com/syndg/tack/internal/services/agents"
 	events "github.com/syndg/tack/internal/services/events"
 )
 
@@ -27,17 +27,17 @@ type AgentTracker interface {
 
 // agentTracker is the concrete implementation of AgentTracker.
 type agentTracker struct {
-	spawner        *Spawner
-	activityLogger *agents.ActivityLogger
-	eventBus       *events.PersistentBus
-	timeouts       config.TimeoutConfig
-	logger         *slog.Logger
-	timeScale      time.Duration // unit for timeout values; defaults to time.Minute
+	spawner   *Spawner
+	obs       *observability.Recorder
+	eventBus  *events.PersistentBus
+	timeouts  config.TimeoutConfig
+	logger    *slog.Logger
+	timeScale time.Duration // unit for timeout values; defaults to time.Minute
 
 	mu         sync.Mutex
-	agentMap   map[string]*SpawnResult  // sessionID → spawn result
-	terminated map[string]bool          // sessionID → explicitly killed
-	idleTimers map[string]*time.Timer   // sessionID → idle timeout timer
+	agentMap   map[string]*SpawnResult // sessionID → spawn result
+	terminated map[string]bool         // sessionID → explicitly killed
+	idleTimers map[string]*time.Timer  // sessionID → idle timeout timer
 }
 
 // Compile-time check that *agentTracker satisfies AgentTracker.
@@ -46,21 +46,21 @@ var _ AgentTracker = (*agentTracker)(nil)
 // newAgentTracker creates a new AgentTracker.
 func newAgentTracker(
 	spawner *Spawner,
-	activityLogger *agents.ActivityLogger,
+	obs *observability.Recorder,
 	eventBus *events.PersistentBus,
 	timeouts config.TimeoutConfig,
 	logger *slog.Logger,
 ) *agentTracker {
 	return &agentTracker{
-		spawner:        spawner,
-		activityLogger: activityLogger,
-		eventBus:       eventBus,
-		timeouts:       timeouts,
-		logger:         logger,
-		timeScale:      time.Minute,
-		agentMap:       make(map[string]*SpawnResult),
-		terminated:     make(map[string]bool),
-		idleTimers:     make(map[string]*time.Timer),
+		spawner:    spawner,
+		obs:        obs,
+		eventBus:   eventBus,
+		timeouts:   timeouts,
+		logger:     logger,
+		timeScale:  time.Minute,
+		agentMap:   make(map[string]*SpawnResult),
+		terminated: make(map[string]bool),
+		idleTimers: make(map[string]*time.Timer),
 	}
 }
 
@@ -216,14 +216,17 @@ func (t *agentTracker) drainAgentActivity(session *domain.AgentSession, process 
 				kind = "error"
 			}
 
-			if t.activityLogger != nil {
-				t.activityLogger.Log(agents.ActivityEvent{
-					Timestamp: time.Now(),
-					AgentID:   session.ID,
-					Kind:      kind,
-					Tool:      tool,
-					Content:   event.Content,
-					IsError:   event.IsError,
+			if t.obs != nil {
+				t.obs.RecordActivity(observability.Activity{
+					ProjectID:   session.ProjectID,
+					ObjectiveID: session.ObjectiveID,
+					StreamID:    session.StreamID,
+					AgentID:     session.ID,
+					Role:        string(session.Role),
+					Kind:        kind,
+					Tool:        tool,
+					Content:     event.Content,
+					IsError:     event.IsError,
 				})
 			}
 
@@ -241,9 +244,6 @@ func (t *agentTracker) drainAgentActivity(session *domain.AgentSession, process 
 			t.mu.Lock()
 			delete(t.idleTimers, session.ID)
 			t.mu.Unlock()
-		}
-		if t.activityLogger != nil {
-			t.activityLogger.CloseAgent(session.ID)
 		}
 	}()
 }

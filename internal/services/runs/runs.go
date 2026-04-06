@@ -276,7 +276,7 @@ func New(cfg Config) (*Service, error) {
 		if maxConcurrent <= 0 {
 			maxConcurrent = 5
 		}
-		scheduler := dispatch.NewScheduler(cfg.Streams, cfg.Plans, maxConcurrent, cfg.EventBus, cfg.Observability, logger)
+		scheduler := dispatch.NewScheduler(cfg.Streams, cfg.Plans, maxConcurrent, cfg.EventBus, logger)
 
 		// Step handlers for deterministic and human blueprint steps.
 		handlers := dispatch.NewHandlers(

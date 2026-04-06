@@ -120,7 +120,7 @@ func setupTestCoordinator(t *testing.T) *testEnv {
 	}
 	engine := blueprint.NewEngine(reg, logger)
 
-	scheduler := NewScheduler(streams, plans, 10, eventBus, nil, logger)
+	scheduler := NewScheduler(streams, plans, 10, eventBus, logger)
 	tracker := newMockTracker()
 
 	c := &Coordinator{

@@ -165,7 +165,7 @@ func TestSchedulerMarkCompletedPreservesMergeReady(t *testing.T) {
 	streams := env.createPlan(t, "plan-preserve-merge-ready", "obj-preserve-merge-ready", []string{"stream-1"})
 	advanceStreamForHandlersTest(t, env, streams[0].ID, domain.StreamStatusMergeReady)
 
-	scheduler := NewScheduler(env.streams, env.plans, 1, env.eventBus, nil, env.logger)
+	scheduler := NewScheduler(env.streams, env.plans, 1, env.eventBus, env.logger)
 	if err := scheduler.MarkCompleted(context.Background(), streams[0].ID, "plan-preserve-merge-ready"); err != nil {
 		t.Fatalf("MarkCompleted: %v", err)
 	}

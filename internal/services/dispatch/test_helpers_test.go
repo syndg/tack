@@ -66,7 +66,7 @@ func setupDispatchEnv(t *testing.T) *dispatchTestEnv {
 	}
 	engine := blueprint.NewEngine(reg, logger)
 
-	scheduler := NewScheduler(streamStore, planStore, 10, eventBus, nil, logger)
+	scheduler := NewScheduler(streamStore, planStore, 10, eventBus, logger)
 	tracker := newMockTracker()
 
 	c := &Coordinator{
