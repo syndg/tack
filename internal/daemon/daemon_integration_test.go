@@ -812,7 +812,7 @@ func setupGitRepo(t *testing.T) func() {
 		}
 	}
 
-	runCmd("git", "init", "-q")
+	runCmd("git", "init", "-q", "-b", config.DefaultBaseBranch)
 	runCmd("git", "config", "user.email", "test@example.com")
 	runCmd("git", "config", "user.name", "Test User")
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# test repo\n"), 0o644); err != nil {
