@@ -14,13 +14,25 @@ Daytona provides VM-level sandbox isolation. Each agent gets its own remote deve
 
 ## Configuration
 
-Add Daytona credentials to `~/.config/tack/credentials.yaml`:
+The easiest path is:
+
+```bash
+tack auth add daytona
+tack auth add git
+```
+
+If you manage the credentials file manually, the current structure is:
 
 ```yaml
-daytona:
-  api_key: "your-daytona-api-key"
-github:
-  pat: "ghp_your_github_pat"
+sandbox:
+  daytona:
+    type: api_key
+    api_key: DAYTONA_API_KEY
+
+git:
+  type: pat
+  host: github.com
+  token: GITHUB_TOKEN
 ```
 
 Configure your project to use Daytona:
@@ -29,11 +41,15 @@ Configure your project to use Daytona:
 # .tack/config.yaml
 sandbox:
   provider: daytona
-  post_create:
+  daytona:
+    snapshot: "snap_123"   # optional but recommended
+
+project_setup:
+  commands:
     - "bun install"
 
 daemon:
-  external_url: "http://your-machine:9800"  # required for agent callbacks
+  external_url: "http://your-machine:9800"  # required for remote callbacks
 ```
 
 ## How It Works
@@ -43,6 +59,18 @@ daemon:
 3. Git credentials are embedded for push/pull within the sandbox
 4. Agents execute inside the sandbox via Daytona's API
 5. After completion, branches are pushed to origin for merging
+
+## Snapshot Workflow
+
+Tack includes helper commands for managing Daytona snapshots:
+
+```bash
+tack snapshot create
+tack snapshot check
+tack snapshot update
+```
+
+These commands help you create and refresh snapshots from the current repo state and `project_setup.commands`.
 
 ## Sandbox Reuse
 

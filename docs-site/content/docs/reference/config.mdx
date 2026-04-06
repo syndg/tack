@@ -3,77 +3,216 @@ title: Configuration Reference
 description: Full reference for .tack/config.yaml options.
 ---
 
-## Complete Config
+## Config Model
+
+Tack merges config in this order:
+
+1. built-in defaults
+2. user config at `~/.config/tack/config.yaml`
+3. project config at `<repo>/.tack/config.yaml`
+
+`tack daemon` reads the user layer. Project-scoped commands read the merged result.
+
+## Complete Example
 
 ```yaml
 daemon:
-  listen: "127.0.0.1:9800"       # HTTP listen address
-  external_url: ""                # Public URL for agent callbacks (required for Daytona)
-  data_dir: ".tack/data"          # SQLite database and activity logs
-  base_branch: "main"             # Branch to merge into
+  listen: "0.0.0.0:9800"          # default machine-wide listen address
+  external_url: ""                # required for remote callback flows
+  data_dir: "~/.config/tack/data" # default runtime state directory
+  base_branch: "main"
 
 sandbox:
-  provider: "local"               # "local" or "daytona"
-  worktree_dir: ""                # Override worktree directory (default: $TMPDIR/tack-worktrees)
-  post_create:                    # Commands to run after sandbox creation
-    - "bun install"
+  provider: "daytona"             # default is daytona; local is also supported
+  worktree_dir: ""
   default_resources:
     cpu: 2
-    memory: "4Gi"
-    disk: "20Gi"
-  auto_stop_interval: 30          # Minutes before idle sandbox auto-stops (Daytona)
-  auto_delete_interval: 60        # Minutes before stopped sandbox auto-deletes (Daytona)
+    memory: 2048
+    disk: 10
+  auto_stop_interval: 30
+  auto_delete_interval: 1440
+  daytona:
+    api_url: ""
+    snapshot: ""
+
+project_setup:
+  commands:
+    - "bun install"
+  verify:
+    - "bun --version"
 
 agents:
-  runtime: "pi"                   # "pi" or "claude-code"
-  max_concurrent: 4               # Max parallel agents
-  stagger_delay_ms: 1000          # Delay between agent spawns
+  runtime: "claude-code"
+  max_concurrent: 8
+  max_depth: 2
+  stagger_delay_ms: 500
+  idle_timeout_minutes: 15
   pi:
-    provider: "anthropic"         # Model provider
-    model: "claude-opus-4-6"    # Model name
-    thinking_level: "medium"      # "low", "medium", "high"
+    provider: "anthropic"
+    model: ""
+    thinking_level: "medium"
+    extension_path: ""
   timeouts:
     default:
-      max_duration_minutes: 30    # Max wall-clock time per agent
-      idle_minutes: 10            # Kill agent after N minutes of no output
+      max_duration_minutes: 30
+      idle_minutes: 10
+    planner:
+      max_duration_minutes: 20
     builder:
       max_duration_minutes: 45
     reviewer:
       max_duration_minutes: 15
-    planner:
-      max_duration_minutes: 20
+
+runtime_auth:
+  mode: tack
+  runtime: pi
+  provider: openai-codex
+  method: oauth
+  credential_ref: openai-codex
+
+models:
+  default: gpt-5.4
+  agent: gpt-5.4
+  planner: gpt-5.4
+  small_tasks: gpt-5.4-mini
+  deterministic: gpt-5.4-mini
 
 planning:
-  max_streams: 8                  # Cap on parallel streams per plan
+  default_mode: collaborative
+  model: ""
+
+watchdog:
+  check_interval_seconds: 30
+  nudge_after_minutes: 10
+  escalate_after_nudges: 3
 
 tools:
-  max_per_agent: 15               # Tool cap per agent
-  always_include: []              # Tools always available
-  always_exclude: []              # Tools never available
+  max_per_agent: 20
+  always_include: []
+  always_exclude: []
 
-quality_gates:                    # Shell commands run after each agent change
+git:
+  author_name: Tack
+  author_email: tack@local
+
+quality_gates:
   - "bun test"
   - "bunx tsc --noEmit"
   - "bun run lint"
 ```
+
+## Key Fields
+
+### `daemon`
+
+- `listen` - HTTP bind address for the daemon
+- `external_url` - public callback URL for remote sandboxes
+- `data_dir` - machine-wide runtime state, including activity logs
+- `base_branch` - base branch used for worktrees and merge
+
+### `sandbox`
+
+- `provider` - `local` or `daytona`
+- `worktree_dir` - override local worktree root
+- `default_resources` - integer CPU, memory, and disk values
+- `auto_stop_interval` - idle shutdown for Daytona sandboxes
+- `auto_delete_interval` - Daytona cleanup window
+- `daytona.snapshot` - snapshot ID to reuse for remote startup speed
+
+`sandbox.post_create` still exists as a deprecated compatibility input, but new configs should use `project_setup.commands`.
+
+### `project_setup`
+
+- `commands` - setup commands to run after sandbox creation
+- `verify` - lightweight checks for the setup stage
+
+### `agents`
+
+- `runtime` - currently `pi` or `claude-code`
+- `max_concurrent` - max worker sessions at once
+- `max_depth` - nested depth limit for agent spawning
+- `stagger_delay_ms` - delay between spawns
+- `idle_timeout_minutes` - coarse watchdog timeout
+- `timeouts.*` - per-role max duration and idle limits
+
+### `runtime_auth`
+
+Controls how the selected runtime authenticates to the chosen provider.
+
+- `mode` - `native` or `tack`
+- `runtime` - runtime name
+- `provider` - provider used by that runtime
+- `method` - `api_key` or `oauth`
+- `credential_ref` - provider key in the credentials store
+
+### `models`
+
+Model selection is now split by purpose:
+
+- `default`
+- `agent`
+- `planner`
+- `small_tasks`
+- `deterministic`
+
+### `planning`
+
+- `default_mode` - planning mode, currently `collaborative` by default
+- `model` - legacy/shared planning model override
+
+### `watchdog`
+
+- `check_interval_seconds`
+- `nudge_after_minutes`
+- `escalate_after_nudges`
+
+### `tools`
+
+- `max_per_agent`
+- `always_include`
+- `always_exclude`
+
+### `git`
+
+- `author_name`
+- `author_email`
 
 ## Credentials
 
 Stored in `~/.config/tack/credentials.yaml`:
 
 ```yaml
-anthropic:
-  setup_token: "sk-ant-..."
-github:
-  pat: "ghp_..."
-daytona:
-  api_key: "..."
+providers:
+  openai-codex:
+    type: oauth
+    access_token: "..."
+    refresh_token: "..."
+    expires_at: 0
+
+git:
+  type: pat
+  host: github.com
+  token: GITHUB_TOKEN
+
+sandbox:
+  daytona:
+    type: api_key
+    api_key: DAYTONA_API_KEY
 ```
+
+Credential values can be:
+
+- literal secrets
+- environment variable names like `GITHUB_TOKEN`
+- shell lookups like `!op read op://...`
 
 ## Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | Anthropic API key (alternative to credentials file) |
-| `GITHUB_TOKEN` | GitHub token (alternative to credentials file) |
-| `DAYTONA_API_KEY` | Daytona API key (alternative to credentials file) |
+There are no hardcoded environment variable field names in the config schema itself. Instead, credentials file values can point at environment variables by name.
+
+Common examples:
+
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GITHUB_TOKEN`
+- `DAYTONA_API_KEY`

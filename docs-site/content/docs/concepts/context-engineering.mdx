@@ -1,0 +1,85 @@
+---
+title: Context Engineering
+description: Why Tack is shifting from orchestration alone toward better context, dossiers, and bounded execution packets.
+---
+
+## Harness Engineering First
+
+Tack's current orchestration core is already strong: daemon-first execution, blueprints, isolated sandboxes, deterministic quality gates, merge queue, approvals, and escalations.
+
+The next bottleneck is not "more agent roles". It is **context quality**.
+
+Tack's working product thesis is:
+
+> The worker is replaceable. The harness around the worker is the product.
+
+That harness includes:
+
+- which files and symbols an agent sees
+- which rules and conventions apply
+- which tools are allowed
+- which deterministic checks run
+- how work gets sliced and retried
+- how failures become future guardrails
+
+## Current Primitives
+
+Today Tack already gives you several context-shaping primitives:
+
+- **path-scoped rules** in `.tack/rules/`
+- **blueprints** for deterministic workflow structure
+- **file scopes** and dependencies on plan streams
+- **isolated sandboxes** so agents work in bounded environments
+- **quality gates** that keep failures local and deterministic
+
+## Planned Additions
+
+The next major additions described in `docs/plans/2026-04-02-context-engineering-and-harness-hardening-design.md` are:
+
+- **Discovery before planning** so the planner does not start from raw objective text alone
+- **Context dossiers** that capture objective-local research, risks, rules, precedents, and citations
+- **Execution contracts** that turn each work item into a bounded worker packet
+- **Codification loops** that turn repeated corrections into docs, rules, lints, and blueprint defaults
+
+## Context Dossiers
+
+A future dossier is intended to hold compact, cited research for one objective:
+
+- impacted files and modules
+- relevant symbols and interfaces
+- similar implementations
+- applicable rules and conventions
+- risks and unknowns
+- suggested work-item boundaries
+- citations to files, docs, and commands
+
+The planner should eventually consume the dossier, not just the raw objective.
+
+## Execution Contracts
+
+Workers should eventually receive a tighter packet than a plain stream description. An execution contract is expected to include:
+
+- exact scope
+- context excerpts
+- acceptance criteria
+- touched interfaces
+- risks and watchouts
+- required deterministic checks
+- escalation conditions
+
+This keeps worker context small, explicit, and high-signal.
+
+## Repo Legibility
+
+Tack increasingly treats repository legibility as a product feature.
+
+That means preferring versioned, inspectable artifacts over hidden memory:
+
+- architecture docs
+- scoped rules
+- stable docs structure
+- execution plans and decision logs
+- generated references
+- codified conventions
+
+The goal is to make the repository itself easier for both humans and agents to navigate.

@@ -5,16 +5,17 @@ description: How Tack decomposes objectives into parallel work streams.
 
 ## Objectives
 
-An objective is a high-level description of what you want built. Tack takes the objective and runs it through a planning → approval → execution → merge pipeline.
+An objective is the top-level unit of work in Tack. You describe what you want built, optionally choose a blueprint, and Tack starts the workflow for the current project.
 
 ```bash
 tack plan "Add pagination to all list endpoints"
+tack plan "Add pagination to all list endpoints" --blueprint standard
 ```
 
-Objectives have a lifecycle:
+The default workflow is:
 
-```
-planning → approved → executing → completed | partial | failed
+```text
+objective created -> planner runs -> plan ready -> human approval -> execution -> merge/pr
 ```
 
 ## The Planner
@@ -28,6 +29,8 @@ When you submit an objective, Tack spawns a planner agent. The planner:
 
 The planner outputs a structured plan that Tack validates and presents for your review.
 
+Tack's roadmap pushes this further: discovery and a context dossier are expected to become planner inputs so planning starts from researched, cited context instead of raw objective text alone.
+
 ## Plan Approval
 
 Plans require human approval before execution begins:
@@ -38,12 +41,18 @@ tack approve <plan-id> # Start execution
 tack reject <plan-id>  # Return to planning
 ```
 
-## Simple Mode
+## Work Items And Streams
 
-For tasks that don't need decomposition — bug fixes, small changes:
+Plans are made of streams: parallel work items with file scopes, dependency ordering, and isolated execution.
+
+Public docs and CLI still talk about **streams** because they are the execution unit you see in plans, watch output, and merge state.
+
+In blueprint YAML, nested execution now uses `foreach: work_item` to describe per-item fanout without baking old starter blueprint names into the public model.
+
+## Blueprint Selection
 
 ```bash
-tack plan "Fix the typo in README.md" --simple
+tack plan "Fix the typo in README.md" --blueprint standard
 ```
 
-Simple mode creates a single-stream plan and auto-approves it. No planner agent, no approval step.
+If you omit `--blueprint`, Tack resolves the default blueprint from the blueprints loaded for the targeted project.

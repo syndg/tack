@@ -2,9 +2,13 @@
 
 **One objective in. Reviewed, tested, merged code out.**
 
-Tack is an open-source orchestrator that runs AI coding agents at scale. You describe what you want built. Tack decomposes it into parallel work streams, assigns each to an isolated agent, enforces quality gates, reviews the output, merges everything, and opens a PR.
+Tack is an open-source harness for deterministic, repository-aware agentic code execution.
+
+It is not just another agent orchestrator. You describe what you want built. Tack turns that objective into a bounded, deterministic workflow: planning, isolated execution, quality gates, review, merge, and PR creation.
 
 You go from being the developer to being the team lead.
+
+The agents are workers. Tack is the programmable harness around them.
 
 ```
 $ tack plan "Add pagination to all list endpoints and a PATCH /expenses/:id endpoint"
@@ -28,8 +32,21 @@ Objective completed. PR created: github.com/you/project/pull/42
 
 Everything in Tack that isn't an LLM decision is deterministic infrastructure: the blueprint engine, quality gates, merge queue, scoped rules, file scope enforcement, timeout management. The LLM is the horse. Tack is the equipment.
 
+Tack's product surface is not "more agents talking to each other." It is:
+
+- turning vague objectives into explicit workflows
+- shaping what context each worker receives
+- keeping packets bounded and deterministic
+- preserving repo legibility through rules, docs, and codified defaults
+- letting teams control autonomy with infrastructure instead of prompt folklore
+
+Today that harness is mostly blueprints, rules, isolation, gates, merge, and observability.
+
+Next, Tack is moving deeper into context engineering: discovery before planning, context dossiers, bounded execution contracts, and codification loops that turn repeated corrections into better defaults.
+
 **What Tack solves:**
 
+- **Raw objectives are underspecified** — Tack adds workflow structure, scoped rules, and deterministic control around them
 - **Planning is serial** — Tack's planner decomposes objectives into parallel streams automatically
 - **Execution is uncoordinated** — Tack manages agent lifecycle, scheduling, and isolation
 - **You must be present** — Tack runs as a daemon. Agents work while you're away
@@ -106,7 +123,7 @@ quality_gates:
 
 ```bash
 # Start the daemon
-tack daemon --config .tack/config.yaml
+tack daemon
 
 # Submit an objective
 tack plan "Refactor the auth module to use JWT"
@@ -125,6 +142,10 @@ tack logs <agent-id>
 ---
 
 ## How It Works
+
+Tack already has the orchestration substrate: daemon-first execution, deterministic blueprints, isolated workers, approvals, merge, and observability.
+
+The next focus is making the context layer stronger so planning and execution consume smaller, higher-signal packets.
 
 ### The Pipeline
 
@@ -326,7 +347,7 @@ tools:
 
 | Command | Description |
 |---------|-------------|
-| `tack daemon` | Start the orchestrator daemon |
+| `tack daemon` | Start the machine-wide Tack daemon |
 | `tack plan <description>` | Create an objective and generate a plan |
 | `tack plan <desc> --blueprint <id>` | Create an objective with a specific blueprint |
 | `tack plans` | List all plans |
@@ -405,7 +426,8 @@ agents:
 
 ## What Tack Is Not
 
-- **Not an agent framework.** Tack doesn't implement agents. Pi and Claude Code do the thinking. Tack orchestrates them.
+- **Not just another agent orchestrator.** The point is not spawning agents for its own sake. The point is building a better harness around software work.
+- **Not an agent framework.** Tack doesn't implement agents. Pi and Claude Code do the thinking. Tack shapes the workflow around them.
 - **Not a sandbox provider.** Local worktrees, Daytona, Docker provide isolation. Tack manages their lifecycle.
 - **Not an IDE.** Tack doesn't edit code. Agents edit code. You review their work.
 - **Not a CI system.** Tack runs quality gates locally in sandboxes. CI is your existing pipeline.

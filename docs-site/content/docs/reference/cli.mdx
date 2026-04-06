@@ -3,49 +3,106 @@ title: CLI Reference
 description: Complete reference for all Tack CLI commands.
 ---
 
-## Commands
+## Global Flags
+
+- `--config` - override the project config path
+- `--daemon-url` - target a non-default daemon address
+- `--project` - target a registered project by ID or path
+
+## Core Commands
 
 | Command | Description |
 |---------|-------------|
-| `tack daemon` | Start the orchestrator daemon |
-| `tack plan <description>` | Create an objective and generate a plan |
-| `tack plan <desc> --simple` | Single-agent mode (no decomposition) |
+| `tack daemon` | Start the machine-wide daemon |
+| `tack init` | Initialize the current repo for Tack |
+| `tack auth ...` | Manage provider, git, and sandbox credentials |
+| `tack project ...` | Manage registered projects |
+| `tack config ...` | Read or edit config values |
+| `tack plan <description>` | Create an objective |
 | `tack plans` | List all plans |
 | `tack show <plan-id>` | Show plan details with streams |
 | `tack approve <plan-id>` | Approve a plan for execution |
 | `tack reject <plan-id>` | Reject a plan |
 | `tack exec <objective-id>` | Manually trigger execution |
-| `tack status` | Show daemon status |
 | `tack agents` | List active agent sessions |
+| `tack agents kill <agent-id>` | Terminate an active agent |
+| `tack mail <agent-name>` | View unread mail for an agent |
+| `tack mail send <to> <subject> <body> --objective <id>` | Send mail to an agent or group |
+| `tack merge` | View merge queue status |
+| `tack merge retry <entry-id>` | Retry a failed merge |
+| `tack merge diff <stream-id>` | Show the diff summary for a merged stream |
+| `tack snapshot ...` | Manage Daytona snapshot helpers |
+| `tack status` | Show daemon status |
 | `tack watch` | Live stream of agent activity |
 | `tack logs <agent-id>` | Replay agent activity log |
-| `tack mail` | View escalation and message history |
-| `tack merge` | View merge queue status |
 | `tack version` | Print version |
 
 ## tack daemon
 
-Start the orchestrator daemon. Runs in the foreground.
+Start the machine-wide daemon. Runs in the foreground.
 
 ```bash
-tack daemon --config .tack/config.yaml
+tack daemon
 ```
 
-**Flags:**
-- `--config` — path to config file (default: `.tack/config.yaml`)
+The daemon loads the **user config layer** from `~/.config/tack/config.yaml` by default.
+
+## tack init
+
+Bootstrap a repo with `.tack/config.yaml`, credentials, `.tack/project-id`, and project registration.
+
+```bash
+tack init
+```
+
+## tack auth
+
+Manage credentials in `~/.config/tack/credentials.yaml`.
+
+```bash
+tack auth add openai-codex
+tack auth add git
+tack auth add daytona
+tack auth list
+tack auth test openai-codex
+```
+
+## tack project
+
+Manage registered projects in the daemon.
+
+```bash
+tack project add .
+tack project list
+tack project inspect
+tack project relink <project-id> <path>
+tack project remove <project-id>
+```
+
+By default, project-scoped commands resolve the current repo from your working directory.
+
+## tack config
+
+Inspect or edit user/project config.
+
+```bash
+tack config list
+tack config get models.default
+tack config set sandbox.daytona.snapshot snap_123
+tack config remove sandbox.daytona.snapshot
+```
 
 ## tack plan
 
-Create an objective and generate a plan.
+Create an objective for the targeted project.
 
 ```bash
 tack plan "Add pagination to all list endpoints"
-tack plan "Fix the typo" --simple
+tack plan "Add pagination to all list endpoints" --blueprint standard
 ```
 
 **Flags:**
-- `--simple` — single-agent mode, skip planning and auto-approve
-- `--blueprint` — override the blueprint name
+- `--blueprint` - override the blueprint `id`
 
 ## tack show
 
@@ -70,8 +127,11 @@ Live stream of agent activity with filtering.
 
 ```bash
 tack watch
-tack watch --verbose    # Full tool arguments and diffs
-tack watch --summary    # Objective-level status only
+tack watch --verbose
+tack watch --summary
+tack watch --objective <objective-id>
+tack watch --stream <stream-id>
+tack watch --agent <agent-id>
 ```
 
 ## tack logs
@@ -81,4 +141,26 @@ Replay agent activity from JSONL logs.
 ```bash
 tack logs <agent-id>
 tack logs <agent-id> --follow
+tack logs <agent-id> --verbose
+```
+
+## tack merge
+
+Inspect merge queue state and per-stream diffs.
+
+```bash
+tack merge
+tack merge --objective <objective-id>
+tack merge retry <entry-id>
+tack merge diff <stream-id>
+```
+
+## tack snapshot
+
+Daytona snapshot helpers.
+
+```bash
+tack snapshot create
+tack snapshot check
+tack snapshot update
 ```

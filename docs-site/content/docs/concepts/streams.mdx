@@ -12,6 +12,8 @@ A stream is a unit of parallel work within a plan. Each stream has:
 - **File scope** — glob patterns defining which files the stream can modify
 - **Dependencies** — other streams that must complete before this one starts
 
+Today streams are the operator-facing execution unit. Over time, Tack's context-engineering work is expected to enrich each stream with a tighter execution contract derived from discovery and dossier findings.
+
 ## Parallel Execution
 
 Streams without dependencies run in parallel. Tack schedules streams based on:

@@ -3,7 +3,40 @@ title: HTTP API
 description: REST API reference for the Tack daemon.
 ---
 
-The daemon exposes a REST API on the configured listen address (default `127.0.0.1:9800`).
+The daemon exposes a REST API on the configured listen address (default `0.0.0.0:9800`).
+
+## Project Targeting
+
+Most workflow endpoints are project-scoped.
+
+Target a project by sending either:
+
+- `X-Tack-Project-ID: <project-id>`
+- `?project_id=<project-id>`
+
+If exactly one project is registered, Tack can infer the target. Otherwise the request must specify one.
+
+## Projects
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/projects/register` | Register or refresh a project |
+| `GET` | `/projects` | List registered projects |
+| `GET` | `/projects/resolve?path=...` | Resolve a project from a filesystem path |
+| `GET` | `/projects/:id` | Get one project |
+| `POST` | `/projects/:id/relink` | Move an existing project registration |
+| `DELETE` | `/projects/:id` | Remove a project |
+
+### POST /projects/register
+
+```json
+{
+  "project_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+  "name": "tack",
+  "root_path": "/path/to/repo",
+  "config_path": "/path/to/repo/.tack/config.yaml"
+}
+```
 
 ## Objectives
 
@@ -14,16 +47,18 @@ The daemon exposes a REST API on the configured listen address (default `127.0.0
 | `GET` | `/objectives/:id` | Get objective by ID |
 | `GET` | `/objectives/:id/plan` | Get plan for objective |
 | `POST` | `/objectives/:id/execute` | Trigger execution |
+| `GET` | `/objectives/:id/run` | Get the latest run snapshot for the objective |
 
 ### POST /objectives
 
 ```json
 {
   "description": "Add pagination to list endpoints",
-  "blueprint": "Feature Implementation",
-  "simple": false
+  "blueprint": "standard"
 }
 ```
+
+The `blueprint` field is optional. If omitted, Tack resolves the default blueprint for the targeted project.
 
 ## Plans
 
@@ -41,16 +76,37 @@ The daemon exposes a REST API on the configured listen address (default `127.0.0
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/streams/:id` | Get stream by ID |
-| `GET` | `/streams/:id/diff` | Get merge diff for stream |
+| `GET` | `/streams/:id/diff` | Get merge diff summary for a merged stream |
+
+## Runs
+
+Run snapshots are the run-centric control boundary for execution state and interventions.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/runs/:id/snapshot` | Get the current run snapshot |
+| `POST` | `/runs/:id/command` | Send an intervention command to a run |
+
+### POST /runs/:id/command
+
+```json
+{
+  "kind": "retry",
+  "stream_id": "stream_123",
+  "guidance": "Reuse the shared helper instead of duplicating logic"
+}
+```
+
+Supported command kinds are `approve`, `retry`, `abort`, and `kill`.
 
 ## Executions
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/executions` | List all executions |
+| `GET` | `/executions` | List blueprint executions |
 | `GET` | `/executions/:id` | Get execution by ID |
-| `POST` | `/executions/:id/approve` | Approve human gate |
-| `POST` | `/executions/:id/retry` | Retry failed stream |
+| `POST` | `/executions/:id/approve` | Approve a human gate |
+| `POST` | `/executions/:id/retry` | Retry a failed stream |
 
 ### POST /executions/:id/retry
 
@@ -74,9 +130,9 @@ The daemon exposes a REST API on the configured listen address (default `127.0.0
 |--------|------|-------------|
 | `POST` | `/mail` | Send a message |
 | `GET` | `/mail` | List messages (filterable) |
-| `GET` | `/mail/:agent/unread` | Get unread messages |
+| `GET` | `/mail/:agentName/unread` | Get unread messages |
 | `POST` | `/mail/:id/read` | Mark message read |
-| `POST` | `/mail/:agent/read-all` | Mark all read |
+| `POST` | `/mail/:agentName/read-all` | Mark all read |
 
 ## Merge Queue
 
@@ -86,12 +142,19 @@ The daemon exposes a REST API on the configured listen address (default `127.0.0
 | `GET` | `/merge-queue/:id` | Get merge entry |
 | `POST` | `/merge-queue/:id/retry` | Retry failed merge |
 
+## Blueprints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/blueprints` | List available blueprints for the targeted project |
+| `GET` | `/blueprints/:id` | Get a blueprint by `id` |
+
+Blueprint identity is the `id`, not the filename.
+
 ## System
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
 | `GET` | `/status` | Daemon status with uptime |
-| `GET` | `/blueprints` | List available blueprints |
-| `GET` | `/blueprints/:name` | Get blueprint by name |
 | `GET` | `/events` | SSE event stream |

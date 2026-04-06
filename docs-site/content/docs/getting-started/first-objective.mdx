@@ -6,10 +6,10 @@ description: Submit your first objective and watch Tack work.
 ## Start the Daemon
 
 ```bash
-tack daemon --config .tack/config.yaml
+tack daemon
 ```
 
-The daemon runs in the foreground. Open a new terminal for CLI commands.
+The daemon is machine-wide and reads the user config layer. Open a new terminal for project-scoped CLI commands.
 
 ## Submit an Objective
 
@@ -17,11 +17,12 @@ The daemon runs in the foreground. Open a new terminal for CLI commands.
 tack plan "Refactor the auth module to use JWT"
 ```
 
-Tack creates an objective and spawns a planner agent. The planner explores your codebase and decomposes the objective into parallel streams with file scopes and dependencies.
+Tack creates an objective for the current registered project and starts the run. Under the default `standard` blueprint, the planner explores the codebase and decomposes the objective into streams with file scopes and dependencies.
 
 ## Review the Plan
 
 ```bash
+tack watch --summary
 tack plans
 tack show <plan-id>
 ```
@@ -40,6 +41,8 @@ Execution begins. Tack schedules streams based on dependencies and concurrency l
 
 ```bash
 tack watch
+tack watch --stream <stream-id>
+tack watch --agent <agent-id>
 ```
 
 Live stream of agent activity — tool calls, file edits, test results, and status changes.
@@ -57,17 +60,18 @@ Live stream of agent activity — tool calls, file edits, test results, and stat
 
 ```bash
 tack status
-tack merge
+tack merge --objective <objective-id>
+tack merge diff <stream-id>
 ```
 
 When all streams complete, Tack merges everything and creates a PR.
 
-## Simple Mode
+## Choose A Blueprint Explicitly
 
-For smaller tasks that don't need decomposition:
+If you want a non-default workflow, pick a blueprint by `id`:
 
 ```bash
-tack plan "Fix the typo in the README" --simple
+tack plan "Fix the typo in the README" --blueprint standard
 ```
 
-Simple mode creates a single-stream plan and auto-approves it. One agent, no planning overhead.
+Blueprint IDs are project-scoped and resolved from the current registry.

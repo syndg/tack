@@ -3,16 +3,23 @@ title: Custom Blueprints
 description: Design your own agent workflows with YAML state machines.
 ---
 
-## Override Default Blueprints
+## How Blueprint Overrides Work
 
-Place custom blueprints in `.tack/blueprints/`. Files with the same name as a default blueprint override it.
+Place custom blueprints in one of these locations:
+
+- `~/.config/tack/blueprints/`
+- `<repo>/.tack/blueprints/`
+
+Blueprints override each other by **`id`**, not by filename. Filenames are organizational only.
 
 ## Example: Skip Review
 
 Remove the reviewer step for faster iteration:
 
 ```yaml
-# .tack/blueprints/stream.yaml
+# .tack/blueprints/review-lite.yaml
+id: build-review
+name: Review lite
 steps:
   - id: build
     type: agent
@@ -33,16 +40,21 @@ steps:
     action: signal_merge_ready
 ```
 
+Because the blueprint `id` is still `build-review`, this definition replaces the shipped nested workflow for the current project.
+
 ## Example: Add Scout Step
 
 Add a reconnaissance step before building:
 
 ```yaml
-# .tack/blueprints/stream.yaml
+# .tack/blueprints/build-review-with-scout.yaml
+id: build-review
+name: Build and review with scout
 steps:
   - id: scout
     type: agent
     role: scout
+    commit: none
     optional: true
     next: build
 
@@ -64,6 +76,40 @@ steps:
     type: deterministic
     action: signal_merge_ready
 ```
+
+## Example: Replace The Top-Level Workflow
+
+You can also replace the shipped `standard` blueprint by reusing its `id`:
+
+```yaml
+# .tack/blueprints/team-standard.yaml
+id: standard
+name: Team standard workflow
+default: true
+steps:
+  - id: plan
+    type: agent
+    role: planner
+    commit: none
+    next: approve
+
+  - id: approve
+    type: human
+    next: execute
+
+  - id: execute
+    type: blueprint_ref
+    ref: build-review
+    foreach: work_item
+    on_work_item_failure: escalate
+    next: merge
+
+  - id: merge
+    type: deterministic
+    action: merge_queue
+```
+
+Nested blueprint references now use `ref: <blueprint-id>`. Do not reference filenames or file paths.
 
 ## Step Reference
 

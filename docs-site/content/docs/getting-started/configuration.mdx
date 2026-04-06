@@ -3,27 +3,24 @@ title: Configuration
 description: Configure Tack for your project with .tack/config.yaml
 ---
 
-Create `.tack/config.yaml` in your project root:
+Recommended path: run `tack init` and let Tack generate `.tack/config.yaml` for the current repo.
+
+If you want to author the file directly, start with something like this:
 
 ```yaml
-daemon:
-  listen: "127.0.0.1:9800"
-  data_dir: ".tack/data"
-  base_branch: "main"
-
 sandbox:
   provider: local
-  # post_create:              # optional setup commands
-  #   - "bun install"
+
+project_setup:
+  commands:
+    - "bun install"
 
 agents:
   runtime: pi
   max_concurrent: 4
   stagger_delay_ms: 1000
   pi:
-    provider: anthropic
-    model: claude-opus-4-6
-    thinking_level: medium
+    provider: openai-codex
   timeouts:
     default:
       max_duration_minutes: 30
@@ -33,6 +30,34 @@ agents:
     reviewer:
       max_duration_minutes: 15
 
+runtime_auth:
+  mode: tack
+  runtime: pi
+  provider: openai-codex
+  method: oauth
+  credential_ref: openai-codex
+
+models:
+  default: gpt-5.4
+  agent: gpt-5.4
+  planner: gpt-5.4
+  small_tasks: gpt-5.4-mini
+
+watchdog:
+  check_interval_seconds: 30
+  nudge_after_minutes: 10
+  escalate_after_nudges: 3
+
+tools:
+  max_per_agent: 20
+
+git:
+  author_name: Tack
+  author_email: tack@local
+
+planning:
+  default_mode: collaborative
+
 quality_gates:
   - "bun test"
   - "bunx tsc --noEmit"
@@ -41,28 +66,48 @@ quality_gates:
 
 ## Credentials
 
-Store API keys in `~/.config/tack/credentials.yaml`:
+Credentials live in `~/.config/tack/credentials.yaml` and are usually managed through `tack init` or `tack auth`.
+
+Current file shape:
 
 ```yaml
-anthropic:
-  setup_token: "sk-ant-..."
-github:
-  pat: "ghp_..."
+providers:
+  openai-codex:
+    type: oauth
+    access_token: "..."
+    refresh_token: "..."
+
+git:
+  type: pat
+  host: github.com
+  token: GITHUB_TOKEN
+
+sandbox:
+  daytona:
+    type: api_key
+    api_key: DAYTONA_API_KEY
 ```
+
+Provider and sandbox secrets can be stored as literal values, environment variable names, or `!command` lookups.
 
 ## Project Layout
 
 ```
 .tack/
-  config.yaml          # Runtime config
-  blueprints/          # Workflow definitions (ships with defaults)
-    stream.yaml
-  rules/               # Project-specific agent guidance
-    project.yaml
-  data/                # Managed by Tack: SQLite, activity logs
-    tack.db
-    activity/
+  config.yaml          # Project-layer config
+  project-id           # Stable project identity used by the daemon
+  blueprints/          # Optional project overrides or custom workflows
+    standard.yaml
+    build-review.yaml
+  rules/               # Project-specific prompt/rule files
+    payments.md
 ```
+
+Defaults also exist at the user layer under `~/.config/tack/`. Tack merges config as:
+
+1. built-in defaults
+2. user config
+3. project config
 
 ## Configuration Reference
 

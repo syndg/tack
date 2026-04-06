@@ -3,9 +3,11 @@ title: Introduction
 description: One objective in. Reviewed, tested, merged code out.
 ---
 
-Tack is an open-source orchestrator that runs AI coding agents at scale. You describe what you want built. Tack decomposes it into parallel work streams, assigns each to an isolated agent, enforces quality gates, reviews the output, merges everything, and opens a PR.
+Tack is an open-source harness for deterministic, repository-aware agentic code execution. It is not just another agent orchestrator. You describe what you want built, and Tack turns that objective into a bounded workflow: planning, isolated execution, deterministic checks, merge, and PR creation.
 
 You go from being the developer to being the team lead.
+
+The agents are workers. Tack is the programmable harness around them.
 
 ```bash
 $ tack plan "Add pagination to all list endpoints and a PATCH /expenses/:id endpoint"
@@ -23,13 +25,30 @@ Objective completed. PR created: github.com/you/project/pull/42
 
 ## Why Tack
 
-**The harness matters more than the model.** LangChain improved from 52.8% to 66.5% on Terminal Bench 2.0 by modifying only the harness, not the model. Tack is that harness — open source and configurable.
+**The harness matters more than the model.** Tack treats the model as a worker and the harness as the product: blueprints, scoped rules, quality gates, merge policy, isolation, escalation, and observability are deterministic infrastructure you control.
 
 Everything in Tack that isn't an LLM decision is deterministic infrastructure: the blueprint engine, quality gates, merge queue, scoped rules, file scope enforcement, timeout management. The LLM is the horse. Tack is the equipment.
 
+Tack is trying to make repositories legible to agents and make agent execution reliable through infrastructure, not vibes.
+
+## Current Shape
+
+- **Daemon-first.** `tack daemon` is a machine-wide service.
+- **Project-scoped.** Each repo gets a stable `project_id`, local `.tack/` config, rules, and blueprints.
+- **Blueprint-driven.** Workflow steps are explicit YAML state machines, not hidden prompts.
+- **Isolation-first.** Agents run in separate worktrees or remote sandboxes.
+- **Deterministic where it matters.** Quality gates, merge ordering, scoped rules, and retries are infrastructure concerns.
+
+## Where Tack Is Going
+
+Tack's next focus is **context engineering** and **harness hardening**.
+
+That means improving the step before planning: discovery, compact context dossiers, bounded execution contracts, and better repo legibility. The goal is not just "run more agents". The goal is to give each worker the smallest, highest-signal packet possible.
+
 ## What Tack Is Not
 
-- **Not an agent framework.** Pi and Claude Code do the thinking. Tack orchestrates them.
+- **Not just another agent orchestrator.** Spawning workers is table stakes. The differentiator is the harness around them.
+- **Not an agent framework.** Pi and Claude Code do the thinking. Tack shapes the workflow around them.
 - **Not a sandbox provider.** Local worktrees, Daytona, Docker provide isolation. Tack manages their lifecycle.
 - **Not an IDE.** Agents edit code. You review their work.
 - **Not a CI system.** Tack runs quality gates locally in sandboxes. CI is your existing pipeline.

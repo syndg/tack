@@ -9,6 +9,11 @@ Live stream of all agent activity:
 
 ```bash
 tack watch
+tack watch --summary
+tack watch --verbose
+tack watch --objective <objective-id>
+tack watch --stream <stream-id>
+tack watch --agent <agent-id>
 ```
 
 ```
@@ -29,22 +34,36 @@ tack watch --summary   # Objective-level status changes only
 
 ## Agent Logs
 
-Replay what a specific agent did from JSONL activity logs:
+Replay what a specific agent did from project-scoped JSONL activity logs:
 
 ```bash
 tack logs <agent-id>
 tack logs <agent-id> --follow  # Live tail
+tack logs <agent-id> --verbose
 ```
+
+`tack logs` reads the canonical activity log for the targeted project and filters it down to one agent.
 
 ## Escalations
 
 When an agent hits a blocker, Tack sends an escalation:
 
 ```bash
-tack mail   # View escalation and message history
+tack mail <agent-name>
+tack mail send <agent-name> "Need clarification" "Please use the shared helper" --objective <objective-id>
 ```
 
 Escalation dedup ensures you get one notification per unique blocker, not 50 copies of the same error across fix-loop iterations.
+
+## Timeline Model
+
+Today `watch` gives you the projected live operator timeline and `logs` gives you full-fidelity replay.
+
+Tack's observability direction is to keep both surfaces aligned around the same canonical operator record model:
+
+- `watch` for notable live events
+- `logs` for detailed replay
+- shared correlation by `project_id`, `objective_id`, `stream_id`, and `agent_id`
 
 ## Timeouts
 
@@ -69,5 +88,7 @@ The daemon exposes a Server-Sent Events endpoint for real-time integration:
 ```
 GET /events
 ```
+
+Project-aware clients should also send `X-Tack-Project-ID` when targeting a specific registered repo.
 
 Events include agent activity, status changes, merge completions, and escalations.

@@ -3,10 +3,13 @@ title: How It Works
 description: The Tack pipeline from objective to PR.
 ---
 
-## The Pipeline
+## Current Pipeline
 
 ```
 Objective
+    │
+    ▼
+ Run starts automatically
     │
     ▼
  Planner ──► Plan (streams, file scopes, dependencies)
@@ -17,9 +20,9 @@ Objective
     ▼
  Dispatch ──► Parallel Agents in Isolated Worktrees
     │
-    ├── Stream 1: Build ──► Quality Gates ──► Merge Ready
-    ├── Stream 2: Build ──► Quality Gates ──► Merge Ready
-    └── Stream 3: Build ──► Quality Gates ──► Merge Ready
+    ├── Work item 1: Scout? ──► Build ──► Quality Gates ──► Review ──► Merge Ready
+    ├── Work item 2: Scout? ──► Build ──► Quality Gates ──► Review ──► Merge Ready
+    └── Work item 3: Scout? ──► Build ──► Quality Gates ──► Review ──► Merge Ready
     │
     ▼
  Merge Queue ──► Post-Merge Gates ──► PR Created
@@ -30,13 +33,32 @@ Objective
 
 Each step is either **deterministic** (quality gates, merge, scheduling) or **agentic** (planning, building, reviewing). The blueprint YAML defines which is which. You control the workflow.
 
+## Next Direction
+
+The next phase of Tack adds a stronger context layer ahead of planning:
+
+```text
+Objective
+  -> Discovery / research
+  -> Context dossier
+  -> Planning / decomposition
+  -> Execution contracts
+  -> Workers
+  -> Review / merge
+  -> Codification back into docs, rules, and defaults
+```
+
+That work is intentionally about better context, smaller packets, and more legible repositories, not about adding more surface area first.
+
 ## Agent Roles
 
 | Role | What it does |
 |------|-------------|
 | **Planner** | Explores the codebase, decomposes the objective into parallel streams with file scopes and dependencies |
+| **Scout** | Optional pre-build research inside a bounded scope |
 | **Builder** | Implements the stream's task in an isolated worktree, commits changes |
 | **Reviewer** | Reviews the implementation for correctness and quality |
+| **Merger** | Integrates ready streams and runs post-merge checks |
 
 ## Key Principles
 
@@ -44,3 +66,4 @@ Each step is either **deterministic** (quality gates, merge, scheduling) or **ag
 - **Isolation by default.** Each agent works in its own sandbox. Agents never see each other's changes during execution.
 - **Human in the loop.** You approve the plan before execution begins. Escalations pause for your input.
 - **Partial completion.** When some streams fail, Tack merges what succeeded. You can retry failures without re-running everything.
+- **Harness over hype.** Tack's product surface is the workflow, context shaping, and control loops around the model.

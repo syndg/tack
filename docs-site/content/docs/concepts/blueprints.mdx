@@ -5,33 +5,39 @@ description: YAML state machines that define agent workflows.
 
 ## What is a Blueprint?
 
-A blueprint is a YAML file that defines the step-by-step workflow for an objective or stream. Steps can be:
+A blueprint is a YAML state machine that defines a Tack workflow. Filenames are arbitrary. The public identity is the blueprint `id`.
+
+Steps can be:
 
 | Type | Description |
 |------|-------------|
-| `agent` | Spawns an AI agent (planner, builder, reviewer) |
-| `deterministic` | Runs infrastructure logic (gates, merge, PR creation) |
+| `agent` | Spawns an AI agent such as planner, scout, builder, or reviewer |
+| `deterministic` | Runs infrastructure logic such as dispatch, gates, merge, or PR creation |
 | `human` | Pauses for human approval |
-| `blueprint_ref` | Runs another blueprint (nesting) |
+| `blueprint_ref` | Runs another blueprint by `id` |
 
 ## Default Blueprints
 
 Tack ships two default blueprints:
 
-### Feature Implementation (top-level)
+### `standard`
 
-Runs the full pipeline: plan → approve → execute streams → merge → PR.
+The default top-level workflow. It plans, waits for approval, dispatches work, runs the nested build-review workflow for each work item, merges, and opens a PR.
 
-### Stream (per-stream)
+### `build-review`
 
-Runs the agent workflow within a stream:
+The nested per-work-item workflow.
 
 ```yaml
+id: build-review
+name: Build and review
 steps:
   - id: build
     type: agent
     role: builder
     commit: auto
+    messages:
+      commit: true
     next: lint
 
   - id: lint
@@ -45,6 +51,7 @@ steps:
   - id: review
     type: agent
     role: reviewer
+    commit: none
     next: merge_ready
 
   - id: merge_ready
@@ -52,12 +59,35 @@ steps:
     action: signal_merge_ready
 ```
 
-## Customizing Blueprints
-
-Override defaults by placing your own in `.tack/blueprints/`:
+The shipped top-level blueprint references the nested one by `id`:
 
 ```yaml
-# .tack/blueprints/stream.yaml
+id: standard
+default: true
+steps:
+  - id: execute
+    type: blueprint_ref
+    ref: build-review
+    foreach: work_item
+    on_work_item_failure: escalate
+```
+
+## Customizing Blueprints
+
+Blueprints are loaded per project with this precedence:
+
+1. embedded defaults
+2. `~/.config/tack/blueprints/`
+3. `<repo>/.tack/blueprints/`
+
+Later definitions win **by blueprint `id`**, not by filename.
+
+Override the default `build-review` workflow by defining your own blueprint with `id: build-review`:
+
+```yaml
+# .tack/blueprints/review-lite.yaml
+id: build-review
+name: Review lite
 steps:
   - id: build
     type: agent
@@ -78,7 +108,17 @@ steps:
     action: signal_merge_ready
 ```
 
-This example removes the reviewer step and increases fix-loop iterations.
+This example keeps the public workflow identity the same while changing the implementation for the current project.
+
+## Default Resolution
+
+When an objective starts, Tack resolves the blueprint like this:
+
+1. If the objective explicitly requested a blueprint, use that `id`.
+2. Otherwise, if exactly one blueprint is loaded, use it.
+3. Otherwise, exactly one loaded blueprint must set `default: true`.
+
+If no default exists, or more than one blueprint is marked default, Tack returns an error until you fix the registry or choose a blueprint explicitly.
 
 ## Step Options
 
@@ -86,7 +126,11 @@ This example removes the reviewer step and increases fix-loop iterations.
 
 - `role` — agent role (planner, builder, reviewer)
 - `commit` — commit mode: `auto` (default), `agent`, or `none`
-- `messages` — structured outputs the agent should generate (PR title, commit message)
+- `model` — optional model override for that step
+- `messages` — structured outputs the agent should generate such as commit or PR text
+- `message_source` — where structured messages should be derived from
+- `tools` — optional tool scope restrictions
+- `optional` — allow the step to be skipped without failing the run
 
 ### Deterministic Steps
 
@@ -98,3 +142,11 @@ This example removes the reviewer step and increases fix-loop iterations.
 ### Human Steps
 
 Pause execution until a human approves via `tack approve` or the API.
+
+### Blueprint Reference Steps
+
+- `ref` — nested blueprint `id`
+- `foreach` — currently `work_item`
+- `on_work_item_failure` — `escalate` or `fail`
+- `escalation.context` — `full`, `minimal`, or `error_only`
+- `escalation.include_agent_history` — include worker history in the escalation payload

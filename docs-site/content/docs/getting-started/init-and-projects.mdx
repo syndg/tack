@@ -1,0 +1,70 @@
+---
+title: Init & Projects
+description: "Bootstrap Tack the current way: initialize a repo, register it with the daemon, and understand project targeting."
+---
+
+## The Current Model
+
+Tack now runs as a **machine-wide daemon** with **project-scoped execution**.
+
+That means:
+
+- user-level defaults live in `~/.config/tack/`
+- repo-local config lives in `<repo>/.tack/`
+- each registered repo gets a stable `.tack/project-id`
+- CLI commands usually resolve the current project from your working directory
+
+## Recommended Bootstrap Path
+
+Run `tack init` inside your repository:
+
+```bash
+tack init
+```
+
+The init flow:
+
+- creates or updates `.tack/config.yaml`
+- helps you choose runtime, provider, auth mode, models, and sandbox provider
+- stores credentials in `~/.config/tack/credentials.yaml`
+- writes `.tack/project-id`
+- appends local runtime artifacts to `.gitignore`
+- registers the repo with the daemon when the daemon is reachable
+
+## Start The Daemon
+
+`tack daemon` reads the user config layer, not a per-project config file:
+
+```bash
+tack daemon
+```
+
+Use `--daemon-url` on CLI commands when you are talking to a non-default daemon address.
+
+## Project Commands
+
+You can manage registrations explicitly:
+
+```bash
+tack project add .
+tack project list
+tack project inspect
+tack project relink <project-id> <new-path>
+tack project remove <project-id>
+```
+
+Most project-scoped commands resolve the current repo automatically. If you need to target another repo, pass `--project <project-id>` or `--project <path>`.
+
+## Auth Commands
+
+You can also manage credentials directly:
+
+```bash
+tack auth add openai-codex
+tack auth add git
+tack auth add daytona
+tack auth list
+tack auth test openai-codex
+```
+
+`tack init` is still the best starting point because it validates the runtime/provider/auth combination together.
