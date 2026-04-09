@@ -4,7 +4,7 @@
 
 Tack is an open-source harness for deterministic, repository-aware agentic code execution.
 
-It is not just another agent orchestrator. You describe what you want built. Tack turns that objective into a bounded, deterministic workflow: planning, isolated execution, quality gates, review, merge, and PR creation.
+It is not just another agent orchestrator. You describe what you want built. Tack turns that objective into a bounded, deterministic workflow: planning, isolated execution, quality gates, review, recovery, merge, and PR creation.
 
 You go from being the developer to being the team lead.
 
@@ -40,7 +40,7 @@ Tack's product surface is not "more agents talking to each other." It is:
 - preserving repo legibility through rules, docs, and codified defaults
 - letting teams control autonomy with infrastructure instead of prompt folklore
 
-Today that harness is mostly blueprints, rules, isolation, gates, merge, and observability.
+Today that harness is mostly blueprints, rules, isolation, gates, recovery, merge, and observability.
 
 Next, Tack is moving deeper into context engineering: discovery before planning, context dossiers, bounded execution contracts, and codification loops that turn repeated corrections into better defaults.
 
@@ -50,6 +50,7 @@ Next, Tack is moving deeper into context engineering: discovery before planning,
 - **Planning is serial** — Tack's planner decomposes objectives into parallel streams automatically
 - **Execution is uncoordinated** — Tack manages agent lifecycle, scheduling, and isolation
 - **You must be present** — Tack runs as a daemon. Agents work while you're away
+- **Failures stall progress** — Tack can rerun builders after gate or review failures, block for human guidance when needed, and resume after restart
 - **Merging is manual** — Tack's merge processor integrates branches with tiered conflict resolution
 - **Quality is inconsistent** — Deterministic gates enforce lint, typecheck, and tests on every change
 
@@ -83,6 +84,9 @@ sandbox:
   provider: local
   # post_create:              # optional project setup commands only
   #   - "bun install"
+
+  # For remote sandboxes:
+  # provider: daytona
 
 agents:
   runtime: pi
@@ -161,18 +165,20 @@ Objective
     ▼
  Dispatch ──► Parallel Agents in Isolated Worktrees
     │
-    ├── Stream 1: Scout ──► Build ──► Quality Gates ──► Review ──► Merge Ready
-    ├── Stream 2: Scout ──► Build ──► Quality Gates ──► Review ──► Merge Ready
-    └── Stream 3: Scout ──► Build ──► Quality Gates ──► Review ──► Merge Ready
+    ├── Stream 1: Build ──► Quality Gates ──► Review ──► Merge Ready
+    ├── Stream 2: Build ──► Quality Gates ──► Review ──► Merge Ready
+    └── Stream 3: Build ──► Quality Gates ──► Review ──► Merge Ready
     │
     ▼
- Merge Queue ──► Post-Merge Gates ──► PR Created
+  Merge Queue ──► Post-Merge Gates ──► PR Created
     │
     ▼
  Objective Complete
 ```
 
 Each step is either **deterministic** (quality gates, merge, scheduling) or **agentic** (planning, building, reviewing). The blueprint YAML defines which is which. You control the workflow.
+
+When a stream fails, Tack does not immediately give up. Quality-gate failures rerun the builder, reviewer rejection reruns the builder with reviewer feedback, transient runtime failures retry in place, and exhausted retry budgets can block for human guidance and resume later.
 
 ### Agent Roles
 
@@ -203,6 +209,18 @@ Stream 1 (backend routes):     bunx tsc --noEmit → fails on frontend error →
 Stream 2 (frontend components): bunx tsc --noEmit → fails on frontend error → FAIL (in scope, fix-loop)
 ```
 
+### Recovery Loops
+
+Tack has a durable recovery ledger for stream failures. Recovery attempts are persisted, visible in `tack watch`, and survive daemon restarts.
+
+- Quality gate failures rerun the responsible builder with retry context
+- Reviewer rejection reruns the builder with reviewer feedback attached
+- Transient runtime failures retry the same step in place
+- Exhausted retries block the run for human guidance instead of hot-looping forever
+- Human-guided retries resume from the correct recovery point after restart
+
+The default `build-review` workflow is self-healing by default, while top-level workflows use a more conservative balanced profile.
+
 ### Blueprints
 
 Blueprints are defined as YAML state machines. Steps can be `agent`, `deterministic`, `human`, or `blueprint_ref` (nested).
@@ -214,6 +232,9 @@ Blueprint filenames are arbitrary. The public identity is the blueprint `id`, no
 id: build-review
 name: Build and review
 
+retry:
+  profile: self_healing
+
 description: "Execute one work item: build, validate, review, and mark ready for merge"
 steps:
   - id: build
@@ -224,7 +245,8 @@ steps:
   - id: lint
     type: deterministic
     action: run_quality_gates
-    retry: 2
+    retry:
+      max_attempts: 2
     on_fail: build
     max_fix_iterations: 3
     next: review
@@ -232,6 +254,8 @@ steps:
   - id: review
     type: agent
     role: reviewer
+    on_fail: build
+    max_fix_iterations: 3
     next: merge_ready
 
   - id: merge_ready
@@ -267,6 +291,9 @@ rules:
 18:16:23 [stream-1] builder: done: Added PATCH endpoint with Zod validation
 18:16:25 [stream-1] lint passed
 18:16:30 [stream-1] reviewer spawned
+18:16:38 [stream-1] quality_gate_failure -> rerun_previous_agent (1/4)
+18:16:52 [stream-1] recovery blocked: retry budget exhausted; awaiting human guidance
+18:20:04 [stream-1] recovery resumed: guidance applied
 18:47:35 [stream-1] merged ✓
 ```
 
@@ -283,6 +310,8 @@ When an agent hits the same blocker across fix-loop iterations, Tack sends one e
 ### Partial Completion
 
 When some streams fail, Tack merges what succeeded and marks the objective `partial`. You can retry failed streams or accept the partial result. The pipeline doesn't stall waiting for streams that will never complete.
+
+When retries are exhausted, Tack can also mark the run `blocked` for recovery instead of forcing a permanent failure. That preserves the failed stream, the full recovery context, and any human guidance needed to resume.
 
 ### Configurable Timeouts
 
@@ -362,6 +391,8 @@ tools:
 | `tack mail` | View escalation and message history |
 | `tack merge` | View merge queue status |
 | `tack version` | Print version |
+
+Today, human-guided resume is daemon-backed and visible in `watch`, `mail`, and objective state. The CLI surface for interactive recovery control is still evolving.
 
 ---
 
