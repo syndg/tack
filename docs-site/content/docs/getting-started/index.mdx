@@ -3,7 +3,25 @@ title: Installation
 description: Install Tack from source and set up your first project.
 ---
 
-## Install
+## Prerequisites
+
+Before installing Tack, make sure you have:
+
+| Requirement | Minimum Version | Why |
+|-------------|----------------|-----|
+| **Go** | 1.22+ | Tack uses Go 1.22+ standard library features |
+| **Git** | 2.5+ | Worktree support, branch management |
+| **LLM API key** | — | At least one provider key (Anthropic, OpenAI, etc.) |
+
+Optional:
+
+| Requirement | Why |
+|-------------|-----|
+| **Node.js / npm** | Required if using the Pi runtime (Tack installs Pi via npm in sandboxes) |
+| **Daytona account** | Required only for remote sandboxes |
+| **GitHub PAT** | Required for automatic PR creation |
+
+## Install from Source
 
 ```bash
 git clone https://github.com/syndg/tack.git
@@ -23,8 +41,26 @@ mv tack /usr/local/bin/
 tack version
 ```
 
+## What Gets Installed
+
+Tack is a single binary. It does not install system services, background agents, or daemons automatically. You start the daemon explicitly when you want to use it:
+
+```bash
+tack daemon
+```
+
+Runtime state lives in two places:
+
+| Location | Contents |
+|----------|----------|
+| `~/.config/tack/` | User-level config, credentials, activity logs, data directory |
+| `<repo>/.tack/` | Per-project config, blueprints, rules, SQLite database |
+
+The `.tack/` directory is created by `tack init`. Sensitive files like `tack.db` and `project-id` are gitignored. Config, blueprints, and rules are intentionally committable so your team shares them.
+
 ## Next Steps
 
 - [Initialize Tack for a repo](/docs/getting-started/init-and-projects)
+- [Choose an agent runtime](/docs/getting-started/agent-runtimes)
 - [Review the project config model](/docs/getting-started/configuration)
 - [Submit your first objective](/docs/getting-started/first-objective)

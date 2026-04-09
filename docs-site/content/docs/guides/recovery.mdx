@@ -1,0 +1,154 @@
+---
+title: Recovery & Retries
+description: How Tack handles failures, retries, and human-guided recovery.
+---
+
+Failures happen. Agents produce code that does not compile, tests fail, reviewers reject implementations, and sandboxes crash. Tack's recovery system handles all of these automatically — and when it cannot, it pauses for your input instead of silently failing or looping forever.
+
+## How Recovery Works
+
+When a step fails, Tack records a **recovery attempt** in a durable ledger. Each attempt captures what went wrong, what action to take, and whether it succeeded. This ledger survives daemon restarts.
+
+The recovery flow:
+
+```
+Step fails
+  → Tack records the failure (kind, context, attempt number)
+  → Tack decides what to do based on the failure kind and retry policy
+  → If retries remain: automatic recovery (rerun builder, retry step, etc.)
+  → If retries exhausted: run blocks for human guidance
+```
+
+## Failure Kinds and Actions
+
+Not all failures are treated the same. Tack categorizes failures and picks the appropriate response:
+
+| Failure Kind | What Happened | Recovery Action |
+|-------------|---------------|-----------------|
+| `quality_gate_failure` | Lint, typecheck, or tests failed | Rerun the builder with gate output attached |
+| `review_rejection` | Reviewer agent found problems | Rerun the builder with reviewer feedback |
+| `agent_runtime_transient` | Agent process crashed or timed out | Retry the same step |
+| `sandbox_failure` | Sandbox environment issue | Retry the same step |
+| `provider_rate_limit` | LLM provider rate limit hit | Retry the same step (with backoff) |
+| `merge_conflict` | Git merge conflicts during integration | Retry the merge |
+| `post_merge_gate_failure` | Quality gates failed after merging | Restart the stream |
+
+## Retry Profiles
+
+Blueprints define a retry profile that controls how aggressive automatic recovery is:
+
+| Profile | Max Attempts | Behavior |
+|---------|-------------|----------|
+| `strict` | 2 | Fails fast, escalates quickly |
+| `balanced` | 4 | Default for top-level workflows |
+| `self_healing` | 6 | Default for build-review loops, keeps trying |
+
+The shipped `build-review` blueprint uses `self_healing` because gate failures and reviewer rejections are expected and fixable. The top-level `standard` workflow uses `balanced` because failures at that level are more serious.
+
+You can override the profile in custom blueprints:
+
+```yaml
+id: build-review
+retry:
+  profile: strict
+```
+
+Or set per-step overrides:
+
+```yaml
+- id: lint
+  type: deterministic
+  action: run_quality_gates
+  retry:
+    max_attempts: 3
+    on_exhausted: ask_human
+  on_fail: build
+  max_fix_iterations: 5
+```
+
+## What You See
+
+### In `tack watch`
+
+Recovery events appear in the live stream:
+
+```
+18:16:38 [stream-1] quality_gate_failure -> rerun_previous_agent (1/4)
+18:16:45 [stream-1] recovery attempt: builder rerun with gate context
+18:16:52 [stream-1] lint passed ✓
+```
+
+When retries exhaust:
+
+```
+18:16:52 [stream-1] recovery blocked: retry budget exhausted; awaiting human guidance
+```
+
+### In `tack mail`
+
+Blocked recovery sends an escalation to your mailbox:
+
+```bash
+tack mail builder-stream-1
+```
+
+This shows the failure details, the recovery attempts that were tried, and space for your guidance.
+
+### Sending Guidance
+
+When a run is blocked, you can send guidance to unblock it:
+
+```bash
+tack mail send builder-stream-1 "Guidance" "Check the import paths — the module moved to src/lib/" --objective <id>
+```
+
+Tack attaches your guidance to the next recovery attempt and resumes the run.
+
+## Fix Loops vs Recovery
+
+There are two related but distinct mechanisms:
+
+**Fix loops** are blueprint-level cycles. When a quality gate fails, the `on_fail: build` directive sends the agent back to the builder step with the failure context. The `max_fix_iterations` field caps how many times this cycle runs.
+
+**Recovery** is the durable ledger that records every attempt and can escalate to humans when automatic fixes are not working. Recovery wraps around fix loops — if the fix loop exhausts its iterations, recovery takes over and may block for human input.
+
+In practice:
+
+1. Gate fails → fix loop sends agent back to builder (attempt 1)
+2. Gate fails again → fix loop sends agent back to builder (attempt 2)
+3. Fix loop exhausted → recovery ledger records the failure
+4. Recovery may retry the whole step or block for human guidance
+
+## Exhaustion Modes
+
+When all automatic recovery is exhausted, the blueprint defines what happens next:
+
+| Mode | Behavior |
+|------|----------|
+| `ask_human` | Run blocks. You receive an escalation and can send guidance to resume. |
+| `escalate` | Run is marked as needing attention but continues trying other streams. |
+| `fail` | Stream is marked as permanently failed. |
+
+## Recovery After Daemon Restart
+
+Recovery state is persisted to the database, not held in memory. If the daemon restarts:
+
+1. Active runs are reconciled against their last known state
+2. In-flight agent executions are requeued
+3. Blocked runs remain blocked with their full context intact
+4. You can resume by sending guidance via `tack mail send`
+
+No recovery context is lost on restart.
+
+## Objective-Level Outcomes
+
+When recovery plays out across all streams, the objective ends in one of these states:
+
+| State | Meaning |
+|-------|---------|
+| `completed` | All streams succeeded and merged |
+| `partial` | Some streams succeeded, some failed. Merged streams are preserved. |
+| `failed` | All streams failed or the run could not proceed |
+| `blocked` | One or more streams are blocked waiting for human guidance |
+
+For `partial` objectives, you can retry just the failed streams without re-running everything. For `blocked` objectives, send guidance to unblock.

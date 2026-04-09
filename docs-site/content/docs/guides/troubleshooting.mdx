@@ -1,0 +1,287 @@
+---
+title: Troubleshooting
+description: Common issues and how to resolve them.
+---
+
+## The Daemon
+
+### Daemon won't start
+
+Check the port is not already in use:
+
+```bash
+lsof -i :9800
+```
+
+Use a different port in your config:
+
+```yaml
+daemon:
+  listen: "127.0.0.1:9801"
+```
+
+Then target it with `--daemon-url`:
+
+```bash
+tack --daemon-url http://127.0.0.1:9801 status
+```
+
+### "daemon not reachable"
+
+The daemon must be running before CLI commands work. Start it in a dedicated terminal:
+
+```bash
+tack daemon
+```
+
+If the daemon is running but CLI cannot connect, check the listen address matches. The default is `0.0.0.0:9800`.
+
+### Database locked errors
+
+Tack uses SQLite. Concurrent writes should not cause locks under normal operation. If you see "database is locked":
+
+1. Make sure only one daemon instance is running
+2. Check that the data directory is writable
+3. Restart the daemon
+
+```bash
+pkill -f "tack daemon"
+tack daemon
+```
+
+## Objectives
+
+### Objective stuck in `planning`
+
+The planner agent is either still running or failed silently. Check:
+
+```bash
+tack agents          # Is the planner still active?
+tack watch --summary # Any status changes?
+```
+
+If the planner agent died, kill it and retry:
+
+```bash
+tack agents kill <planner-agent-id>
+tack exec <objective-id>
+```
+
+### Plan looks wrong
+
+Reject it and submit a clearer objective:
+
+```bash
+tack reject <plan-id>
+tack plan "More specific description pointing to the right files"
+```
+
+See [Writing Good Objectives](/docs/guides/writing-objectives) for patterns.
+
+### Objective is `blocked`
+
+A stream ran out of retry attempts and is waiting for human guidance.
+
+1. Check what happened:
+
+```bash
+tack watch --stream <stream-id>
+tack mail <agent-name>
+```
+
+2. Send guidance:
+
+```bash
+tack mail send <agent-name> "Fix hint" "The import path changed to src/lib/..." --objective <objective-id>
+```
+
+3. The run resumes automatically after guidance is received.
+
+### Objective is `partial`
+
+Some streams completed and merged, but others failed. The merged changes are preserved.
+
+Options:
+- Accept the partial result and handle the remaining work manually
+- Retry the failed streams by creating a new objective for the remaining work
+
+You cannot retry individual streams directly today. Create a follow-up objective for the incomplete parts.
+
+## Quality Gates
+
+### Gates fail but the code looks correct
+
+Gate failures are attributed by file scope. If the error is in a file outside the stream's scope, the gate passes. If the error is in scope, the builder gets a fix loop.
+
+Check which files the gate error is in:
+
+```bash
+tack watch --verbose --stream <stream-id>
+```
+
+Look for the gate output to see which file and line the error is on.
+
+### Fix loops keep repeating
+
+The builder has a limited number of fix iterations (`max_fix_iterations` in the blueprint). If it keeps hitting the same error:
+
+1. Check `tack logs <builder-agent-id>` to see what the agent is doing
+2. The agent may not have enough context — consider adding a [scoped rule](/docs/guides/rules) for the relevant files
+3. If the error is in project setup (missing dependency, wrong config), fix it outside Tack and retry
+
+### Pre-existing errors blocking progress
+
+Tack's file-attribution system means pre-existing errors in files outside the stream's scope should not block it. If you see unexpected blocking:
+
+- The error might actually be in the stream's scope (check the file paths carefully)
+- The stream's file scope may be too broad — the planner assigned it files that have existing errors
+
+### Post-merge gates fail
+
+Post-merge gates run after streams are merged into the base branch. A failure means the combined changes broke something that individual streams could not detect.
+
+Tack reverts the merge and marks the stream as failed. Check:
+
+```bash
+tack merge
+tack merge diff <stream-id>
+```
+
+Look at what changed in the merge. Common causes:
+- Two streams modified the same interface from different directions
+- The merge introduced a dependency ordering issue
+
+## Merge Queue
+
+### Merge stuck at `pending`
+
+The merge queue processes entries FIFO. If a stream has dependencies, it waits until those dependencies are merged first.
+
+```bash
+tack merge
+```
+
+Look at the dependency column. The stream will not merge until its dependency streams are merged.
+
+### Merge `conflict`
+
+The merge hit conflicts that automatic resolution could not handle.
+
+```bash
+tack merge retry <entry-id>
+```
+
+If retry also conflicts, the stream needs human intervention. Check the conflicting files and consider:
+
+1. Creating a manual branch that resolves the conflict
+2. Adjusting the objective to avoid the overlapping changes
+
+### All merges show `failed`
+
+This usually means post-merge quality gates are failing on the integrated result. Check the gate output in `tack watch` and look for integration-level issues.
+
+## Agents
+
+### Agent timeout
+
+Agents have configurable timeouts. If an agent exceeds its timeout, it is killed with a clear error.
+
+```yaml
+agents:
+  timeouts:
+    builder:
+      max_duration_minutes: 45
+      idle_minutes: 10
+```
+
+- `max_duration_minutes` — total wall clock time
+- `idle_minutes` — time since last output
+
+If agents keep timing out:
+
+- Increase the timeout for the role
+- Check if the objective is too large (break it into smaller objectives)
+- Check `tack logs <agent-id>` to see where the agent got stuck
+
+### Agent killed unexpectedly
+
+Check the agent log for the last actions before death:
+
+```bash
+tack logs <agent-id>
+```
+
+Common causes:
+- Out of memory in the sandbox
+- Provider rate limit hit
+- Network issue between daemon and sandbox
+
+### Agent not producing useful changes
+
+The agent may not have enough context. Check:
+
+1. Are the right [scoped rules](/docs/guides/rules) in place?
+2. Is the stream's file scope correct? (`tack show <plan-id>`)
+3. Does the agent have access to the right tools? (Check `tools` config)
+
+## Sandboxes
+
+### Worktree creation fails
+
+Local sandboxes use git worktrees. Common issues:
+
+- **Not in a git repo** — `tack` commands must run inside a git repository
+- **Uncommitted changes on base branch** — stash or commit before running objectives
+- **Branch name collision** — a previous run left a stale branch. Clean up with `tack cleanup` or manually
+
+### Daytona sandbox won't start
+
+1. Check credentials: `tack auth test daytona`
+2. Check the Daytona API is reachable
+3. If using a snapshot, verify it exists: `tack snapshot check`
+
+### Sandbox out of disk
+
+Build artifacts, node_modules, and large dependencies can fill sandbox storage. Daytona sandboxes have configurable disk:
+
+```yaml
+sandbox:
+  default_resources:
+    disk: 20
+```
+
+For local sandboxes, check available disk on the host.
+
+## Configuration
+
+### Config changes not taking effect
+
+Most config changes require a daemon restart:
+
+```bash
+# Restart the daemon
+pkill -f "tack daemon"
+tack daemon
+```
+
+Some changes (like quality gates and model selection) are read per-objective, so new objectives will use the updated config without a restart.
+
+### "no default blueprint" error
+
+Tack requires exactly one loaded blueprint with `default: true`, or exactly one blueprint total. If you have custom blueprints, make sure one of them sets `default: true`.
+
+```yaml
+id: my-workflow
+default: true
+steps:
+  ...
+```
+
+### Credentials not working
+
+```bash
+tack auth list       # Are credentials configured?
+tack auth test anthropic  # Do they work?
+```
+
+For remote sandboxes, make sure you are using `mode: tack` (not `native`) so Tack injects credentials into the sandbox.

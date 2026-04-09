@@ -1,0 +1,127 @@
+---
+title: Agent Runtimes
+description: Choose and configure the agent runtime that executes code changes.
+---
+
+Tack does not implement its own AI agent. It orchestrates existing agent runtimes — the programs that actually read code, reason about it, and write changes. The runtime you choose determines which LLM provider you can use and how the agent communicates with Tack.
+
+## Supported Runtimes
+
+| Runtime | Status | RPC | File Scope | Best For |
+|---------|--------|-----|------------|----------|
+| **Pi** | Supported | Yes (bidirectional JSON over stdin/stdout) | Enforced via tool_call hooks | Production use, maximum control |
+| **Claude Code** | Supported | No (fire-and-forget) | Prompt-level guidance | Quick setup, Claude-native workflows |
+
+## Choosing a Runtime
+
+### Pi
+
+Pi is an open-source agent runtime maintained by Anthropic. It supports bidirectional JSON-RPC communication, which lets Tack enforce file scope boundaries at the tool level and exchange structured messages in real time.
+
+**Use Pi when:**
+- You want deterministic file scope enforcement (agents physically cannot edit files outside their scope)
+- You want real-time RPC communication for status updates and message exchange
+- You need per-step model control via Pi's provider system
+- You are running multiple streams and want tight isolation guarantees
+
+**Pi supports these providers:**
+- `anthropic` — Claude models (Opus, Sonnet, Haiku)
+- `openai` — GPT models
+- `openai-codex` — Codex models with OAuth support
+- `gemini` — Google Gemini models
+- `groq`, `mistral`, `xai` — other compatible providers
+
+**Configuration:**
+
+```yaml
+agents:
+  runtime: pi
+  pi:
+    provider: anthropic
+    model: claude-opus-4-1
+    thinking_level: medium
+```
+
+Pi installs automatically inside sandboxes via npm when it is not already present. Tack uploads a custom extension that provides tool-call hooks for file scope enforcement and structured message output.
+
+### Claude Code
+
+Claude Code is Anthropic's CLI agent. Tack invokes it with a prompt and waits for it to finish. There is no bidirectional communication — Tack receives the final output and works with that.
+
+**Use Claude Code when:**
+- You want the simplest possible setup
+- You are already using Claude Code interactively and want to add Tack orchestration on top
+- You do not need tool-level file scope enforcement (Claude Code receives scope as prompt guidance instead)
+
+**Configuration:**
+
+```yaml
+agents:
+  runtime: claude-code
+```
+
+Claude Code uses its own authentication. Set `runtime_auth.mode: native` so Tack does not try to inject credentials:
+
+```yaml
+runtime_auth:
+  mode: native
+  runtime: claude-code
+```
+
+## Authentication Modes
+
+Every runtime needs to authenticate with an LLM provider. Tack supports two modes:
+
+### Native Mode
+
+The runtime uses its own built-in authentication. You configure credentials directly with the runtime (e.g., `ANTHROPIC_API_KEY` in your environment). Tack does not manage or inject credentials.
+
+```yaml
+runtime_auth:
+  mode: native
+```
+
+Native mode works best with local sandboxes where the runtime can read your environment directly. It does not work with remote sandboxes like Daytona because the sandbox does not have access to your local environment.
+
+### Tack Mode
+
+Tack manages credentials and injects them into the sandbox before the agent starts. This is required for remote sandboxes and useful when you want Tack to be the single source of truth for all credentials.
+
+```yaml
+runtime_auth:
+  mode: tack
+  runtime: pi
+  provider: anthropic
+  method: api_key
+  credential_ref: anthropic
+```
+
+With Tack mode, credentials are stored in `~/.config/tack/credentials.yaml` and managed through `tack auth`. See the [Credentials & Auth guide](/docs/guides/credentials) for details.
+
+## Setting Up During Init
+
+`tack init` walks you through runtime selection. It asks:
+
+1. Which runtime to use (Pi or Claude Code)
+2. Which provider to use (depends on runtime)
+3. Which authentication method (API key, OAuth)
+4. Whether to validate the combination
+
+The wizard rejects incompatible combinations (e.g., native auth with Daytona sandboxes) before you start.
+
+## Switching Runtimes
+
+Change the runtime in your project config:
+
+```yaml
+agents:
+  runtime: pi
+```
+
+Then restart the daemon:
+
+```bash
+tack daemon
+```
+
+Existing objectives continue running with the runtime they started with. Only new objectives use the updated config.

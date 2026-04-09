@@ -1,4 +1,4 @@
 {
   "title": "Getting Started",
-  "pages": ["index", "init-and-projects", "configuration", "first-objective"]
+  "pages": ["index", "init-and-projects", "agent-runtimes", "configuration", "first-objective"]
 }

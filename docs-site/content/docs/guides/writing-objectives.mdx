@@ -1,0 +1,189 @@
+---
+title: Writing Good Objectives
+description: Patterns, anti-patterns, and examples for writing effective Tack objectives.
+---
+
+An objective is the starting point for everything Tack does. The clearer your objective, the better the planner can decompose it, and the better the agents can execute it. This guide covers what makes a good objective and common mistakes to avoid.
+
+## What Makes a Good Objective
+
+A good objective is:
+
+- **Specific** about what should change and where
+- **Scoped** to a coherent set of changes
+- **Grounded** in terms the planner can find in your codebase
+- **Testable** — there is a clear definition of done
+
+You do not need to describe how to implement it. The planner explores the codebase and figures that out. Your job is to describe what the end state looks like.
+
+## Patterns
+
+### Describe the Goal, Not the Steps
+
+Good:
+
+```
+tack plan "Add pagination to all list endpoints. Each endpoint should accept page and per_page query parameters, default to page=1 per_page=20, and return a paginated response with total_count."
+```
+
+The planner will find all list endpoints, figure out the existing response format, and plan streams for each one.
+
+Bad:
+
+```
+tack plan "Edit src/routes/users.ts to add page and per_page params, then edit src/routes/expenses.ts, then update the schema..."
+```
+
+This reads like a manual to-do list. It limits the planner's ability to discover the right decomposition.
+
+### Point to Files and Modules
+
+If your objective touches a specific area of the codebase, name it:
+
+```
+tack plan "Refactor the authentication module (src/auth/) to use JWT tokens instead of session cookies"
+```
+
+This helps the planner scope its exploration and assign better file scopes to streams.
+
+### Include Acceptance Criteria
+
+Mention what "done" looks like:
+
+```
+tack plan "Add a PATCH /expenses/:id endpoint. It should accept partial updates, validate with the existing Zod schema, and return the updated expense. Tests should cover validation errors and partial updates."
+```
+
+This gives the builder clear targets and the reviewer something concrete to check against.
+
+### Separate Independent Concerns
+
+If you have two unrelated changes, make them separate objectives:
+
+```
+tack plan "Add pagination to all list endpoints"
+tack plan "Add email notification when expense exceeds budget"
+```
+
+Each objective gets its own plan, its own streams, and its own PR. This is cleaner than bundling them.
+
+### Bundle Related Changes
+
+Conversely, if changes are tightly coupled, keep them in one objective:
+
+```
+tack plan "Add a PATCH /expenses/:id endpoint and update the frontend expense form to use it for inline editing"
+```
+
+The planner will create streams with the right dependencies: backend first, then frontend.
+
+## Anti-Patterns
+
+### Vague Objectives
+
+```
+tack plan "Make the app better"
+```
+
+The planner cannot decompose this. There is no way to determine scope, file boundaries, or done criteria.
+
+### Too Broad
+
+```
+tack plan "Rewrite the entire frontend in React"
+```
+
+This is a project, not an objective. Break it into smaller objectives: one for the routing layer, one for the component library, one for state management, etc.
+
+### Implementation Details
+
+```
+tack plan "Add a new file src/utils/pagination.ts with a paginate() function that takes an array and returns a paginated result"
+```
+
+You are prescribing the implementation. Let the planner decide the structure. Describe the behavior instead:
+
+```
+tack plan "Add reusable pagination utilities that all list endpoints can use"
+```
+
+### Mixed Concerns
+
+```
+tack plan "Add pagination to list endpoints and also fix the CSS bug in the settings page and update the README"
+```
+
+These are three unrelated changes. The planner will struggle to assign coherent file scopes. Use three separate objectives.
+
+## Examples
+
+### API Changes
+
+```
+tack plan "Add a PATCH /expenses/:id endpoint that accepts partial updates with Zod validation, and add a DELETE /expenses/:id endpoint with soft delete. Update the OpenAPI spec and add tests for both."
+```
+
+This works well because:
+- Specific about what endpoints to add
+- Mentions validation approach (Zod — gives the planner a hint about the codebase pattern)
+- Includes documentation and testing requirements
+
+### Refactoring
+
+```
+tack plan "Extract the shared validation logic from src/routes/expenses.ts and src/routes/users.ts into a common module. Both routes should continue to work identically after the refactor."
+```
+
+This works well because:
+- Identifies the files to change
+- Describes the structural change
+- Specifies the acceptance criterion (existing behavior preserved)
+
+### Bug Fix
+
+```
+tack plan "Fix the race condition in src/services/websocket.ts where concurrent connections can corrupt the session state. The fix should be covered by a test that reproduces the concurrent access scenario."
+```
+
+This works well because:
+- Points to the specific file
+- Describes the problem clearly
+- Requires a regression test
+
+### Feature Addition
+
+```
+tack plan "Add a budget alerts feature. When a user's spending in a category exceeds 80% of their monthly budget, send an email notification. Use the existing email service at src/services/email.ts. Add a new table for alert preferences."
+```
+
+This works well because:
+- Describes the feature behavior
+- Points to existing infrastructure to reuse
+- Mentions database changes
+
+## How the Planner Uses Your Objective
+
+When you submit an objective, the planner:
+
+1. Reads your objective text
+2. Explores the codebase to understand structure, conventions, and relevant files
+3. Decomposes the objective into parallel streams with file scopes and dependencies
+4. Outputs a structured plan for your review
+
+The more context you give in the objective, the less exploration the planner needs to do, and the more accurate the decomposition will be.
+
+## When Plans Come Back Wrong
+
+If the plan does not look right:
+
+```bash
+tack reject <plan-id>
+```
+
+Then resubmit with a clearer objective. Common reasons plans go wrong:
+
+- The objective was too vague for the planner to find the right scope
+- The objective mixed concerns that should be separate streams
+- The objective referenced modules the planner did not discover during exploration
+
+You can also try a more specific objective that points the planner at the right files and modules.

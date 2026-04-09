@@ -3,17 +3,17 @@ title: Scoped Rules
 description: Inject project conventions into agent prompts based on file scope.
 ---
 
-## What are Rules?
+## What Are Rules?
 
-Rules are markdown files with YAML frontmatter that inject project-specific guidance into agent prompts. Every rule you add makes all future agents smarter about your codebase.
+Rules are markdown files with YAML frontmatter that inject project-specific guidance into agent prompts. Every rule you add makes all future agents smarter about your codebase — they carry knowledge that would otherwise need to be in every objective description.
 
-Rules are scoped by file patterns — an agent working on `src/payments/**` gets payment-specific rules, while an agent on `src/ui/**` gets UI rules.
+Rules are scoped by file patterns. An agent working on `src/payments/**` gets payment-specific rules, while an agent on `src/ui/**` gets UI rules. This means agents only see the conventions relevant to their work.
 
 ## Creating Rules
 
-Place rule files in `.tack/rules/`:
+Place rule files in `.tack/rules/` (project-level) or `~/.config/tack/rules/` (user-level):
 
-```yaml
+```markdown
 ---
 scope: "src/payments/**"
 priority: high
@@ -24,19 +24,128 @@ priority: high
 - Use integer cents for all monetary amounts, never floating point
 - All payment mutations must be wrapped in a database transaction
 - Log every payment state change to the audit table
+- Never store raw card numbers — use the tokenization service
 ```
+
+The YAML frontmatter defines the scope and priority. The body is markdown that gets injected into agent prompts.
 
 ## Rule Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `scope` | glob | File pattern this rule applies to (e.g., `src/**`, `*.ts`) |
-| `priority` | string | `high` or `normal` (default). High-priority rules are injected first. |
-| `tools` | object | Optional tool restrictions (`include`/`exclude` lists) |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `scope` | glob | required | File pattern this rule applies to (e.g., `src/**`, `*.ts`, `src/payments/**`) |
+| `priority` | string | `normal` | `high` or `normal`. High-priority rules are injected first and prefixed with "IMPORTANT CONSTRAINT:" |
+| `tools` | object | none | Optional tool restrictions with `include` and `exclude` lists |
+
+## How Rules Are Applied
+
+When an agent spawns:
+
+1. Tack collects all rules whose `scope` matches the stream's file scope
+2. Rules are sorted by priority (high first), then by source path
+3. Rule bodies are injected into the agent's system prompt
+4. Tool restrictions are applied to the agent's available tool set
+
+The matching uses glob patterns with `**` support:
+- `src/**` matches all files under `src/`
+- `*.ts` matches all TypeScript files
+- `src/api/routes/**` matches files in a specific subdirectory
+
+A rule matches if any of the stream's file scope patterns overlap with the rule's scope.
+
+## Real-World Examples
+
+### API Conventions
+
+```markdown
+---
+scope: "src/api/**"
+priority: high
+---
+
+## API Conventions
+
+- All endpoints use Zod for request/response validation
+- Error responses follow the RFC 7807 Problem Details format
+- Use the shared `requireAuth` middleware from `src/api/middleware/auth.ts`
+- Rate limiting is applied per-user, not per-IP
+- All new endpoints must have corresponding integration tests in `tests/api/`
+```
+
+### Database Rules
+
+```markdown
+---
+scope: "src/db/**"
+priority: high
+---
+
+## Database Rules
+
+- All queries must use the query builder, never raw SQL
+- Migrations go in `src/db/migrations/` with timestamp prefixes
+- Use the `withTransaction` helper for multi-statement operations
+- Never delete columns in a single migration — add a deprecation migration first
+- Index names follow the pattern `idx_{table}_{columns}`
+```
+
+### UI Component Patterns
+
+```markdown
+---
+scope: "src/components/**"
+priority: normal
+---
+
+## Component Patterns
+
+- Use the project's design tokens from `src/styles/tokens.ts`
+- Every component that fetches data uses the `useQuery` hook from `src/hooks/useQuery.ts`
+- Forms use `react-hook-form` with Zod schemas for validation
+- Prefer compound components over prop drilling for complex UI
+- All interactive elements must have proper ARIA labels
+```
+
+### Testing Standards
+
+```markdown
+---
+scope: "tests/**"
+priority: normal
+---
+
+## Testing Standards
+
+- Use `describe`/`it` blocks with descriptive names
+- Each test file mirrors the source file path: `src/x/y.ts` → `tests/x/y.test.ts`
+- Use the `createTestContext` helper for tests that need database access
+- Mock external services using the shared mock factories in `tests/mocks/`
+- Never test implementation details — test behavior and outputs
+```
+
+### Security-Sensitive Code
+
+```markdown
+---
+scope: "src/auth/**"
+priority: high
+tools:
+  exclude:
+    - "mcp:filesystem:write"
+---
+
+## Security Rules
+
+- Never log or expose JWT tokens in error messages
+- All password hashing uses bcrypt with cost factor 12
+- Session tokens are rotated on privilege escalation
+- CSRF tokens are required for all state-changing operations
+- Use constant-time comparison for token validation
+```
 
 ## Tool Restrictions
 
-Rules can restrict which tools agents have access to:
+Rules can restrict which tools agents have access to when working in the scoped files:
 
 ```yaml
 ---
@@ -51,9 +160,28 @@ tools:
 Database modules should use the Postgres MCP tools.
 ```
 
-## How Rules Are Applied
+Tool restrictions from multiple rules are combined. The effective tool set for an agent is:
 
-1. When an agent spawns, Tack collects all rules whose `scope` matches the stream's file scope
-2. Rules are sorted by priority (high first), then by source path
-3. Rule bodies are injected into the agent's system prompt
-4. Tool restrictions are applied to the agent's available tool set
+1. Start with all available tools
+2. Apply config-level `always_exclude`
+3. Apply config-level `always_include`
+4. Apply blueprint step `include`/`exclude`
+5. Apply rule `include`/`exclude` from all matching rules
+6. Deduplicate and cap at `max_per_agent`
+
+## Rule Loading Order
+
+Rules load from two locations:
+
+1. `~/.config/tack/rules/` — user-level rules (apply to all projects)
+2. `<repo>/.tack/rules/` — project-level rules (specific to this repo)
+
+Both are loaded and matched. Project rules and user rules can coexist — if they have overlapping scopes, both are injected.
+
+## Tips for Effective Rules
+
+- **Be specific and actionable** — "Use integer cents for monetary amounts" is better than "Be careful with money"
+- **Point to existing files** — "Use the shared helper from `src/lib/format.ts`" gives the agent a concrete reference
+- **Use high priority for hard constraints** — things that must never be violated (security rules, data integrity rules)
+- **Keep rules focused** — one rule per concern area, not one giant rule for everything
+- **Rules are cumulative** — every rule you add improves all future agent runs, not just the current one

@@ -1,37 +1,43 @@
 ---
 title: Init & Projects
-description: "Bootstrap Tack the current way: initialize a repo, register it with the daemon, and understand project targeting."
+description: "Bootstrap Tack: initialize a repo, register it with the daemon, and understand project targeting."
 ---
 
 ## The Current Model
 
-Tack now runs as a **machine-wide daemon** with **project-scoped execution**.
+Tack runs as a **machine-wide daemon** with **project-scoped execution**.
 
-That means:
-
-- user-level defaults live in `~/.config/tack/`
-- repo-local config lives in `<repo>/.tack/`
-- each registered repo gets a stable `.tack/project-id`
-- CLI commands usually resolve the current project from your working directory
+- User-level defaults live in `~/.config/tack/`
+- Repo-local config lives in `<repo>/.tack/`
+- Each registered repo gets a stable `.tack/project-id`
+- CLI commands resolve the current project from your working directory
 
 ## Recommended Bootstrap Path
 
 Run `tack init` inside your repository:
 
 ```bash
+cd your-project
 tack init
 ```
 
-The init flow:
+### What `tack init` Does
 
-- creates or updates `.tack/config.yaml`
-- helps you choose runtime, provider, auth mode, models, and sandbox provider
-- stores credentials in `~/.config/tack/credentials.yaml`
-- writes `.tack/project-id`
-- appends local runtime artifacts to `.gitignore`
-- registers the repo with the daemon when the daemon is reachable
+The init command is an interactive wizard that sets up everything Tack needs for your project:
 
-## Start The Daemon
+1. **Creates `.tack/config.yaml`** — project-specific configuration
+2. **Agent runtime selection** — asks which runtime to use (Pi or Claude Code)
+3. **LLM provider selection** — asks which provider (Anthropic, OpenAI, etc.) and validates the choice against your selected runtime
+4. **Authentication setup** — asks for API keys or initiates OAuth flows, stores them in `~/.config/tack/credentials.yaml`
+5. **Sandbox provider selection** — local (git worktrees) or Daytona (remote VMs)
+6. **Model selection** — default model, planner model, agent model, small tasks model
+7. **Writes `.tack/project-id`** — a stable UUID that the daemon uses to identify this project
+8. **Updates `.gitignore`** — appends local runtime artifacts (`.tack/project-id`, `.tack/*.db`) while keeping config, blueprints, and rules committable
+9. **Registers with the daemon** — if the daemon is reachable, registers the project immediately
+
+Every choice the wizard makes is validated. If you pick an incompatible combination (e.g., native auth with Daytona sandboxes), the wizard will tell you before proceeding.
+
+## Start the Daemon
 
 `tack daemon` reads the user config layer, not a per-project config file:
 
@@ -39,32 +45,50 @@ The init flow:
 tack daemon
 ```
 
-Use `--daemon-url` on CLI commands when you are talking to a non-default daemon address.
+The daemon starts in the foreground. Open a new terminal for CLI commands.
 
 ## Project Commands
 
 You can manage registrations explicitly:
 
 ```bash
-tack project add .
-tack project list
-tack project inspect
-tack project relink <project-id> <new-path>
-tack project remove <project-id>
+tack project add .                    # Register the current repo
+tack project list                     # List all registered projects
+tack project inspect                  # Show current project details
+tack project relink <id> <new-path>   # Move an existing registration
+tack project remove <id>              # Unregister a project
 ```
 
-Most project-scoped commands resolve the current repo automatically. If you need to target another repo, pass `--project <project-id>` or `--project <path>`.
+Most project-scoped commands resolve the current repo automatically from your working directory. If you need to target another repo:
+
+```bash
+tack plan "description" --project <project-id>
+tack plan "description" --project /path/to/other/repo
+```
+
+## Multiple Projects
+
+The daemon supports multiple registered projects. Each project has its own:
+
+- Config (`.tack/config.yaml`)
+- Blueprints (`.tack/blueprints/`)
+- Rules (`.tack/rules/`)
+- Database (`.tack/tack.db`)
+- Activity logs
+
+When you run a CLI command, Tack resolves the project from your current working directory. This means you can have two repos registered and use Tack in both without switching contexts.
 
 ## Auth Commands
 
-You can also manage credentials directly:
+You can also manage credentials directly (outside of `tack init`):
 
 ```bash
-tack auth add openai-codex
-tack auth add git
-tack auth add daytona
-tack auth list
-tack auth test openai-codex
+tack auth add anthropic       # Add Anthropic API key
+tack auth add openai-codex    # Add OpenAI Codex OAuth
+tack auth add git             # Add GitHub PAT for PR creation
+tack auth add daytona         # Add Daytona API key
+tack auth list                # Show all configured providers
+tack auth test anthropic      # Validate a credential works
 ```
 
-`tack init` is still the best starting point because it validates the runtime/provider/auth combination together.
+See the [Credentials & Auth guide](/docs/guides/credentials) for full details on credential formats, multi-provider setup, and security.

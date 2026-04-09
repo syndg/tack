@@ -5,25 +5,30 @@ description: Full reference for .tack/config.yaml options.
 
 ## Config Model
 
-Tack merges config in this order:
+Tack merges config from three sources. Later layers override earlier ones:
 
-1. built-in defaults
-2. user config at `~/.config/tack/config.yaml`
-3. project config at `<repo>/.tack/config.yaml`
+1. **Built-in defaults** — embedded in the binary
+2. **User config** — `~/.config/tack/config.yaml`
+3. **Project config** — `<repo>/.tack/config.yaml`
 
-`tack daemon` reads the user layer. Project-scoped commands read the merged result.
+The daemon reads the user layer on startup. Project-scoped CLI commands read the merged result.
+
+```bash
+tack config list              # Show all merged values
+tack config get models.default # Show a specific value
+```
 
 ## Complete Example
 
 ```yaml
 daemon:
-  listen: "0.0.0.0:9800"          # default machine-wide listen address
-  external_url: ""                # required for remote callback flows
-  data_dir: "~/.config/tack/data" # default runtime state directory
+  listen: "0.0.0.0:9800"
+  external_url: ""
+  data_dir: "~/.config/tack/data"
   base_branch: "main"
 
 sandbox:
-  provider: "daytona"             # default is daytona; switch to local for faster dev loops
+  provider: "daytona"
   worktree_dir: ""
   default_resources:
     cpu: 2
@@ -101,90 +106,145 @@ quality_gates:
   - "bun run lint"
 ```
 
-## Key Fields
+## Field Reference
 
 ### `daemon`
 
-- `listen` - HTTP bind address for the daemon
-- `external_url` - public callback URL for remote sandboxes
-- `data_dir` - machine-wide runtime state, including activity logs
-- `base_branch` - base branch used for worktrees and merge
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `listen` | string | `"0.0.0.0:9800"` | HTTP bind address for the daemon API and SSE events |
+| `external_url` | string | `""` | Public URL for remote sandbox callbacks. Required when using Daytona sandboxes. |
+| `data_dir` | string | `"~/.config/tack/data"` | Machine-wide runtime state directory. Stores SQLite databases and activity logs. |
+| `base_branch` | string | `"main"` | Git branch used as the base for worktrees and merge target |
 
 ### `sandbox`
 
-- `provider` - `local` or `daytona`
-- `worktree_dir` - override local worktree root
-- `default_resources` - integer CPU, memory, and disk values
-- `auto_stop_interval` - idle shutdown for Daytona sandboxes
-- `auto_delete_interval` - Daytona cleanup window
-- `daytona.snapshot` - snapshot ID to reuse for remote startup speed
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider` | string | `"daytona"` | Sandbox provider: `local` (git worktrees) or `daytona` (remote VMs) |
+| `worktree_dir` | string | `""` | Override the directory where local worktrees are created. Empty uses the default location inside the repo. |
+| `default_resources.cpu` | int | `2` | CPU cores allocated per Daytona sandbox |
+| `default_resources.memory` | int | `2048` | Memory in MB allocated per Daytona sandbox |
+| `default_resources.disk` | int | `10` | Disk in GB allocated per Daytona sandbox |
+| `auto_stop_interval` | int | `30` | Minutes before idle Daytona sandboxes are auto-stopped |
+| `auto_delete_interval` | int | `1440` | Minutes before stopped Daytona sandboxes are auto-deleted |
+| `daytona.api_url` | string | `""` | Daytona API URL. If empty, uses the default Daytona endpoint. |
+| `daytona.snapshot` | string | `""` | Daytona snapshot ID. Pre-built VM images with dependencies for faster startup. |
 
-`sandbox.post_create` still exists as a deprecated compatibility input, but new configs should use `project_setup.commands`.
-
-Practical guidance:
-
-- use `local` for the fastest inner-loop development and test runs
-- use `daytona` for remote or production-style isolation
+`sandbox.post_create` exists as a deprecated compatibility input. Use `project_setup.commands` instead.
 
 ### `project_setup`
 
-- `commands` - setup commands to run after sandbox creation
-- `verify` - lightweight checks for the setup stage
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `commands` | string[] | `[]` | Shell commands to run after sandbox creation (e.g., `"bun install"`) |
+| `verify` | string[] | `[]` | Lightweight checks to confirm setup succeeded (e.g., `"bun --version"`) |
 
 ### `agents`
 
-- `runtime` - currently `pi` or `claude-code`
-- `max_concurrent` - max worker sessions at once
-- `max_depth` - nested depth limit for agent spawning
-- `stagger_delay_ms` - delay between spawns
-- `idle_timeout_minutes` - coarse watchdog timeout
-- `timeouts.*` - per-role max duration and idle limits
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `runtime` | string | `"claude-code"` | Agent runtime: `pi` or `claude-code`. See [Agent Runtimes](/docs/getting-started/agent-runtimes). |
+| `max_concurrent` | int | `8` | Maximum number of agent sessions running at the same time |
+| `max_depth` | int | `2` | Maximum nesting depth for blueprint references |
+| `stagger_delay_ms` | int | `500` | Milliseconds to wait between spawning concurrent agents |
+| `idle_timeout_minutes` | int | `15` | Coarse idle timeout. Overridden by per-role `timeouts` if set. |
+| `pi.provider` | string | `"anthropic"` | LLM provider for the Pi runtime |
+| `pi.model` | string | `""` | Model override for Pi. If empty, uses `models.default`. |
+| `pi.thinking_level` | string | `"medium"` | Pi thinking level: controls how much reasoning the model does |
+| `pi.extension_path` | string | `""` | Path to custom Pi extension directory. If empty, uses the embedded extension. |
+
+### `agents.timeouts`
+
+Per-role timeout configuration. Each role can have `max_duration_minutes` (total wall clock) and `idle_minutes` (time since last output).
+
+| Role | Default `max_duration_minutes` | Default `idle_minutes` |
+|------|------|------|
+| `default` | 30 | 10 |
+| `planner` | 20 | — (inherits default) |
+| `builder` | 45 | — (inherits default) |
+| `reviewer` | 15 | — (inherits default) |
 
 ### `runtime_auth`
 
-Controls how the selected runtime authenticates to the chosen provider.
+Controls how credentials get from Tack's credential store into the running agent.
 
-- `mode` - `native` or `tack`
-- `runtime` - runtime name
-- `provider` - provider used by that runtime
-- `method` - `api_key` or `oauth`
-- `credential_ref` - provider key in the credentials store
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | string | `"tack"` | `tack` (Tack manages and injects credentials) or `native` (runtime uses its own auth) |
+| `runtime` | string | — | Runtime name this auth config applies to |
+| `provider` | string | — | LLM provider this auth config applies to |
+| `method` | string | `"api_key"` | Authentication method: `api_key` or `oauth` |
+| `credential_ref` | string | — | Key in the credentials store to read from. Required when `mode: tack`. |
 
 ### `models`
 
-Model selection is now split by purpose:
+Model selection split by purpose. Each field accepts a model identifier string.
 
-- `default`
-- `agent`
-- `planner`
-- `small_tasks`
-- `deterministic`
+| Field | Description |
+|-------|-------------|
+| `default` | Fallback for any role not explicitly set |
+| `agent` | Builder and reviewer agents |
+| `planner` | Planner agent |
+| `small_tasks` | Lightweight operations where a smaller model suffices |
+| `deterministic` | Deterministic step operations |
 
 ### `planning`
 
-- `default_mode` - planning mode, currently `collaborative` by default
-- `model` - legacy/shared planning model override
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `default_mode` | string | `"collaborative"` | Planning mode. Currently only `collaborative` is supported. |
+| `model` | string | `""` | Shared planning model override. If empty, uses `models.planner`. |
 
 ### `watchdog`
 
-- `check_interval_seconds`
-- `nudge_after_minutes`
-- `escalate_after_nudges`
+Monitors agent health and triggers escalation when agents stall.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `check_interval_seconds` | int | `30` | How often the watchdog checks agent status |
+| `nudge_after_minutes` | int | `10` | Minutes of inactivity before sending a nudge to the agent |
+| `escalate_after_nudges` | int | `3` | Number of nudges before escalating to human |
 
 ### `tools`
 
-- `max_per_agent`
-- `always_include`
-- `always_exclude`
+Controls agent tool access globally. Also configurable per-blueprint-step and per-rule.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_per_agent` | int | `20` | Maximum number of tools available to each agent |
+| `always_include` | string[] | `[]` | Tools that are always available regardless of other restrictions |
+| `always_exclude` | string[] | `[]` | Tools that are always removed from agent tool sets |
 
 ### `git`
 
-- `author_name`
-- `author_email`
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `author_name` | string | `"Tack"` | Author name for commits made by agents |
+| `author_email` | string | `"tack@local"` | Author email for commits made by agents |
+
+### `quality_gates`
+
+List of shell commands. Each command runs in the sandbox. Non-zero exit means failure.
+
+| Default (Go projects) | Description |
+|---|---|
+| `"go vet ./..."` | Static analysis |
+| `"go test ./..."` | Run tests |
+| `"go build ./..."` | Build check |
+
+Override for JavaScript/TypeScript projects:
+
+```yaml
+quality_gates:
+  - "bun test"
+  - "bunx tsc --noEmit"
+  - "bun run lint"
+```
 
 ## Credentials
 
-Stored in `~/.config/tack/credentials.yaml`:
+Stored separately in `~/.config/tack/credentials.yaml`:
 
 ```yaml
 providers:
@@ -206,18 +266,19 @@ sandbox:
 ```
 
 Credential values can be:
+- **Literal secrets** — stored directly in the file
+- **Environment variable names** — Tack reads `os.Getenv()` for the value
+- **Shell command lookups** — `!op read op://vault/item` runs the command and uses the output
 
-- literal secrets
-- environment variable names like `GITHUB_TOKEN`
-- shell lookups like `!op read op://...`
+See the [Credentials & Auth guide](/docs/guides/credentials) for full details.
 
 ## Environment Variables
 
-There are no hardcoded environment variable field names in the config schema itself. Instead, credentials file values can point at environment variables by name.
+Common environment variables used by credential references:
 
-Common examples:
-
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `GITHUB_TOKEN`
-- `DAYTONA_API_KEY`
+| Variable | Purpose |
+|----------|---------|
+| `ANTHROPIC_API_KEY` | Anthropic API authentication |
+| `OPENAI_API_KEY` | OpenAI API authentication |
+| `GITHUB_TOKEN` | GitHub PAT for PR creation and repo access |
+| `DAYTONA_API_KEY` | Daytona sandbox API authentication |

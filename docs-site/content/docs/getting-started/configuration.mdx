@@ -3,24 +3,76 @@ title: Configuration
 description: Configure Tack for your project with .tack/config.yaml
 ---
 
-Recommended path: run `tack init` and let Tack generate `.tack/config.yaml` for the current repo.
+Tack uses a layered config system. You do not need to write config by hand — `tack init` generates it interactively. This page explains what each section does so you can customize it.
 
-If you want to author the file directly, start with something like this:
+## Config Layers
+
+Tack merges config from three sources:
+
+| Layer | Location | What It Contains |
+|-------|----------|-----------------|
+| Built-in defaults | Embedded in the binary | Sensible defaults for everything |
+| User config | `~/.config/tack/config.yaml` | Machine-wide preferences |
+| Project config | `<repo>/.tack/config.yaml` | Per-repo settings |
+
+Later layers override earlier ones. Most users only need a project config.
+
+The daemon reads the **user layer** on startup. Project-scoped CLI commands read the **merged result**.
+
+You can inspect the merged config:
+
+```bash
+tack config list              # All merged values
+tack config get models.default # A specific value
+```
+
+## Sections Overview
+
+### Sandbox
+
+Controls where agents execute. The two options are local git worktrees and remote Daytona VMs.
 
 ```yaml
 sandbox:
-  provider: local   # fastest for development; use daytona for remote sandboxes
+  provider: local
+```
 
+Use `local` for development speed (agents run on your machine in separate worktrees). Use `daytona` for isolation (agents run in remote VMs).
+
+If you use Daytona, you also need to configure git credentials and optionally a snapshot:
+
+```yaml
+sandbox:
+  provider: daytona
+  daytona:
+    snapshot: "snap_123"
+```
+
+See [Isolation & Sandboxes](/docs/concepts/isolation) for the full picture.
+
+### Project Setup
+
+Commands that run after a sandbox is created to prepare the environment:
+
+```yaml
 project_setup:
   commands:
     - "bun install"
+  verify:
+    - "bun --version"
+```
 
+`commands` run once when the sandbox is created. `verify` runs lightweight checks to confirm setup succeeded.
+
+### Agents
+
+Controls how agents run: which runtime, how many at once, and timeout limits.
+
+```yaml
 agents:
-  runtime: pi
-  max_concurrent: 4
-  stagger_delay_ms: 1000
-  pi:
-    provider: openai-codex
+  runtime: pi               # pi or claude-code
+  max_concurrent: 4          # Max parallel agents
+  stagger_delay_ms: 1000     # Delay between agent spawns
   timeouts:
     default:
       max_duration_minutes: 30
@@ -29,95 +81,128 @@ agents:
       max_duration_minutes: 45
     reviewer:
       max_duration_minutes: 15
+```
 
+The runtime determines which agent program Tack uses. See [Agent Runtimes](/docs/getting-started/agent-runtimes) for the comparison.
+
+Timeouts prevent agents from running forever. `max_duration_minutes` is total wall clock time. `idle_minutes` is time since the agent last produced output.
+
+### Runtime Auth
+
+Controls how credentials get from Tack into the running agent:
+
+```yaml
 runtime_auth:
-  mode: tack
+  mode: tack           # tack or native
   runtime: pi
-  provider: openai-codex
-  method: oauth
-  credential_ref: openai-codex
+  provider: anthropic
+  method: api_key
+  credential_ref: anthropic
+```
 
+- `mode: tack` — Tack manages credentials and injects them into sandboxes
+- `mode: native` — the runtime uses its own auth (e.g., your `ANTHROPIC_API_KEY` env var)
+
+Native mode only works with local sandboxes. Remote sandboxes need Tack mode so credentials can be injected.
+
+### Models
+
+Which LLM models to use for different purposes:
+
+```yaml
 models:
-  default: gpt-5.4
-  agent: gpt-5.4
-  planner: gpt-5.4
-  small_tasks: gpt-5.4-mini
+  default: claude-opus-4-1
+  agent: claude-opus-4-1
+  planner: claude-opus-4-1
+  small_tasks: claude-sonnet-4-6
+```
 
-watchdog:
-  check_interval_seconds: 30
-  nudge_after_minutes: 10
-  escalate_after_nudges: 3
+- `default` — fallback for any role not explicitly set
+- `agent` — builder and reviewer agents
+- `planner` — the planner agent
+- `small_tasks` — lightweight operations where a smaller model suffices
 
-tools:
-  max_per_agent: 20
+### Quality Gates
 
-git:
-  author_name: Tack
-  author_email: tack@local
+Shell commands that run after agents make changes:
 
-planning:
-  default_mode: collaborative
-
+```yaml
 quality_gates:
   - "bun test"
   - "bunx tsc --noEmit"
   - "bun run lint"
 ```
 
-For remote execution, switch the sandbox section to:
+Gates run in order. The first failure stops the chain. See [Quality Gates](/docs/concepts/quality-gates) for how file attribution works.
+
+### Tools
+
+Control which tools agents have access to:
 
 ```yaml
-sandbox:
-  provider: daytona
-  daytona:
-    snapshot: "snap_123"   # optional but recommended
+tools:
+  max_per_agent: 20
+  always_include: []
+  always_exclude: []
 ```
 
-## Credentials
+Tools can also be restricted per-rule and per-blueprint-step. The effective tool set is the intersection of all restrictions.
 
-Credentials live in `~/.config/tack/credentials.yaml` and are usually managed through `tack init` or `tack auth`.
+### Watchdog
 
-Current file shape:
+Monitors agent health and triggers escalation if an agent stalls:
 
 ```yaml
-providers:
-  openai-codex:
-    type: oauth
-    access_token: "..."
-    refresh_token: "..."
+watchdog:
+  check_interval_seconds: 30
+  nudge_after_minutes: 10
+  escalate_after_nudges: 3
+```
 
+### Git
+
+Author identity for commits made by agents:
+
+```yaml
 git:
-  type: pat
-  host: github.com
-  token: GITHUB_TOKEN
-
-sandbox:
-  daytona:
-    type: api_key
-    api_key: DAYTONA_API_KEY
+  author_name: Tack
+  author_email: tack@local
 ```
 
-Provider and sandbox secrets can be stored as literal values, environment variable names, or `!command` lookups.
+## Editing Config
+
+### Interactive
+
+```bash
+tack config set models.default claude-opus-4-1
+tack config set sandbox.provider local
+tack config remove sandbox.daytona.snapshot
+```
+
+By default, `config set` writes to the project layer. Use `--user` to write to the user layer:
+
+```bash
+tack config set --user agents.max_concurrent 8
+```
+
+### Manual
+
+Edit `.tack/config.yaml` directly. The file is YAML and follows the structure shown above.
 
 ## Project Layout
 
+After `tack init`, your project has this structure:
+
 ```
 .tack/
-  config.yaml          # Project-layer config
-  project-id           # Stable project identity used by the daemon
-  blueprints/          # Optional project overrides or custom workflows
-    standard.yaml
-    build-review.yaml
-  rules/               # Project-specific prompt/rule files
-    payments.md
+  config.yaml          # Project config (committable)
+  project-id           # Stable UUID (gitignored)
+  blueprints/          # Optional custom blueprints (committable)
+  rules/               # Project-specific rules (committable)
 ```
 
-Defaults also exist at the user layer under `~/.config/tack/`. Tack merges config as:
+Defaults also exist at the user layer under `~/.config/tack/`.
 
-1. built-in defaults
-2. user config
-3. project config
+## Full Reference
 
-## Configuration Reference
-
-See the [full config reference](/docs/reference/config) for all available options.
+See the [Configuration Reference](/docs/reference/config) for every available option with default values.

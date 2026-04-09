@@ -3,67 +3,73 @@ title: How It Works
 description: The Tack pipeline from objective to PR.
 ---
 
-## Current Pipeline
+## The Pipeline
+
+Tack takes an objective (a description of what you want built), plans how to break it into parallel work, executes each piece in isolation, checks quality, reviews the result, merges everything, and creates a PR.
 
 ```
 Objective
     │
     ▼
- Run starts automatically
+  Run starts automatically
     │
     ▼
- Planner ──► Plan (streams, file scopes, dependencies)
+  Planner ──► Plan (streams, file scopes, dependencies)
     │
     ▼
- Human Approval
+  Human Approval
     │
     ▼
- Dispatch ──► Parallel Agents in Isolated Worktrees
+  Dispatch ──► Parallel Agents in Isolated Sandboxes
     │
     ├── Work item 1: Scout? ──► Build ──► Quality Gates ──► Review ──► Merge Ready
     ├── Work item 2: Scout? ──► Build ──► Quality Gates ──► Review ──► Merge Ready
     └── Work item 3: Scout? ──► Build ──► Quality Gates ──► Review ──► Merge Ready
     │
     ▼
- Merge Queue ──► Post-Merge Gates ──► PR Created
+  Merge Queue ──► Post-Merge Gates ──► PR Created
     │
     ▼
- Objective Complete
+  Objective Complete
 ```
 
-Each step is either **deterministic** (quality gates, merge, scheduling) or **agentic** (planning, building, reviewing). The blueprint YAML defines which is which. You control the workflow.
+## What Is Deterministic vs Agentic
 
-## Next Direction
+Each pipeline step is either **deterministic** or **agentic**:
 
-The next phase of Tack adds a stronger context layer ahead of planning:
+- **Deterministic steps** are infrastructure: quality gates (lint, typecheck, tests), merge ordering, scheduling, file scope enforcement, timeout management. These behave the same way every time regardless of which LLM you use.
+- **Agentic steps** involve LLM reasoning: planning (decomposing the objective), building (writing code), reviewing (evaluating quality). The blueprint YAML defines which steps are which.
 
-```text
-Objective
-  -> Discovery / research
-  -> Context dossier
-  -> Planning / decomposition
-  -> Execution contracts
-  -> Workers
-  -> Review / merge
-  -> Codification back into docs, rules, and defaults
-```
-
-That work is intentionally about better context, smaller packets, and more legible repositories, not about adding more surface area first.
+The key insight: Tack's product surface is the deterministic harness around the agent, not the agent itself. The agent is replaceable. The harness is what makes the output reliable.
 
 ## Agent Roles
 
-| Role | What it does |
-|------|-------------|
-| **Planner** | Explores the codebase, decomposes the objective into parallel streams with file scopes and dependencies |
-| **Scout** | Optional pre-build research inside a bounded scope |
-| **Builder** | Implements the stream's task in an isolated worktree, commits changes |
-| **Reviewer** | Reviews the implementation for correctness and quality |
-| **Merger** | Integrates ready streams and runs post-merge checks |
+| Role | What it does | When It Runs |
+|------|-------------|-------------|
+| **Planner** | Explores the codebase, decomposes the objective into parallel streams with file scopes and dependencies | First, after objective is created |
+| **Scout** | Optional pre-build research inside a bounded scope — investigates files or patterns before building | Before builder, if the blueprint includes it |
+| **Builder** | Implements the stream's task in an isolated sandbox, commits changes | After scout (if present) or directly |
+| **Reviewer** | Reviews the implementation for correctness and quality | After builder passes quality gates |
+| **Merger** | Integrates ready streams and runs post-merge checks | After streams signal merge_ready |
 
 ## Key Principles
 
-- **Deterministic infrastructure.** Everything that isn't an LLM decision is deterministic: scheduling, gates, merge, scoped rules.
-- **Isolation by default.** Each agent works in its own sandbox. Agents never see each other's changes during execution.
-- **Human in the loop.** You approve the plan before execution begins. Escalations pause for your input.
-- **Partial completion.** When some streams fail, Tack merges what succeeded. You can retry failures without re-running everything.
-- **Harness over hype.** Tack's product surface is the workflow, context shaping, and control loops around the model.
+### Deterministic Infrastructure
+
+Everything that is not an LLM decision is deterministic infrastructure you control: scheduling, quality gates, merge ordering, scoped rules, file scope enforcement, timeout management, and recovery policies. The harness is the product.
+
+### Isolation by Default
+
+Each agent works in its own sandbox (a git worktree or remote VM). Agents never see each other's changes during execution. This prevents interference and makes merge the explicit integration point.
+
+### Human in the Loop
+
+You approve the plan before execution begins. When agents hit blockers they cannot resolve, Tack pauses and sends you an escalation instead of silently failing or looping forever. You stay in control of what gets merged.
+
+### Partial Completion
+
+When some streams fail, Tack merges the ones that succeeded and marks the objective `partial`. You do not lose successful work because one stream failed. You can retry failures or accept the partial result.
+
+### Self-Healing by Default
+
+The default `build-review` workflow uses a `self_healing` retry profile. Quality gate failures and reviewer rejections automatically send the builder back with fix context. Only when the retry budget is exhausted does Tack block for human input.

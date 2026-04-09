@@ -5,36 +5,124 @@ description: Tiered conflict resolution and dependency-aware merging.
 
 ## How Merging Works
 
-When a stream completes and passes quality gates, it enters the merge queue. The merge processor integrates stream branches into the base branch.
+When a stream completes and passes quality gates, it enters the merge queue. The merge processor integrates stream branches into the base branch one at a time.
 
-Merges are **cumulative** — stream 1 merges first, then stream 2 merges on top of the result.
+Merges are **cumulative** — stream 1 merges first, then stream 2 merges on top of that result, and so on. This ensures each merge is tested against the latest integrated state.
+
+## The Merge Process
+
+For each merge entry:
+
+1. **Check dependencies** — if the stream depends on other streams, verify those are already merged
+2. **Attempt merge** — try tiered conflict resolution (see below)
+3. **Run post-merge quality gates** — validate the integrated result
+4. **On success** — record diff stats, advance to the next entry
+5. **On failure** — revert the merge, mark the entry as failed, record the error
+
+The merge processor runs as a background loop. It checks for new entries every 30 seconds and also triggers immediately when a stream signals `merge_ready`.
 
 ## Tiered Conflict Resolution
 
-| Tier | Strategy | When |
-|------|----------|------|
-| 1 | Clean merge | No conflicts |
-| 2 | Auto-resolve (favor incoming) | Textual conflicts in isolated file scopes |
-| 3 | AI merge (planned) | Semantic conflicts |
-| 4 | Human escalation | All else fails |
+When a merge encounters conflicts, Tack tries increasingly aggressive resolution strategies:
+
+### Tier 1: Clean Merge
+
+```bash
+git merge --no-edit <branch>
+```
+
+Attempts a standard git merge. If there are no conflicts, this succeeds and the merge is complete.
+
+**When this works:** The stream's changes do not overlap with any previous changes. This is the common case when file scopes are well-isolated.
+
+### Tier 2: Auto-Resolve
+
+```bash
+git merge -X theirs --no-edit <branch>
+```
+
+If there are conflicts, Tack tries again with the "favor incoming" strategy. This resolves conflicts by taking the stream's version of any conflicting lines.
+
+**When this works:** The conflicts are in isolated file scopes where the stream's version is authoritative. This is appropriate when streams have non-overlapping file scopes — the conflicts are typically from unrelated changes in the same file (e.g., both streams added imports at the top).
+
+**When this is risky:** If two streams modified the same function, auto-resolve picks one version and drops the other. Post-merge quality gates usually catch this.
+
+### Tier 3: AI Merge (Planned)
+
+Semantic conflict resolution using an AI agent. Not yet implemented.
+
+### Tier 4: Human Escalation
+
+If all automatic resolution fails, the merge is marked as `conflict` and the stream sends an escalation. You can:
+
+```bash
+tack merge                      # See which merges are conflicted
+tack merge retry <entry-id>     # Try again (useful if you fixed things manually)
+```
+
+Or create a new objective for the remaining work.
 
 ## Dependency Ordering
 
-Streams with dependencies are merged in order. Stream 2 won't merge until stream 1 is merged if it depends on it.
+Streams with dependencies are merged in order. If stream 2 depends on stream 1, stream 2 will not merge until stream 1 is successfully merged.
+
+The merge processor respects the same dependency graph used during execution. This ensures that:
+
+- A stream that extends an interface merges after the stream that defines it
+- A stream that depends on new database schema merges after the migration stream
+
+If a dependency fails to merge, dependent streams also fail (they cannot merge against missing changes).
 
 ## Post-Merge Quality Gates
 
-After each merge, quality gates run against the merged result. If gates fail, the merge is reverted and the stream is marked as failed with an opportunity to retry.
-
-## Retry
-
-Failed or conflicted merges can be retried:
+After each successful merge, quality gates run against the integrated result. This is the final safety check:
 
 ```bash
-tack merge                      # View merge queue
-tack merge retry <entry-id>     # Retry a failed merge
+# Runs in the merge sandbox after git merge succeeds
+bun test
+bunx tsc --noEmit
+bun run lint
 ```
+
+If post-merge gates fail:
+1. The merge is reverted (`git reset --hard HEAD~1`)
+2. The entry is marked as `failed` with the gate error
+3. The stream is not lost — you can retry the merge
+
+Post-merge gates catch issues that individual streams could not detect: interface mismatches, import path conflicts, and integration bugs.
 
 ## Partial Completion
 
-When some streams fail to merge, Tack marks the objective as `partial`. Successfully merged streams are preserved. You can retry failed streams or accept the partial result.
+When some streams merge successfully but others fail, Tack marks the objective as `partial`. The successfully merged streams are preserved — you do not lose that work.
+
+Your options for a partial objective:
+- **Accept it** — the merged changes stay on the base branch, handle the rest manually
+- **Retry failed merges** — `tack merge retry <entry-id>` to try again
+- **Create a follow-up objective** — for the work that did not complete
+
+## Monitoring Merges
+
+```bash
+tack merge                                    # All entries with status
+tack merge --objective <objective-id>          # Filter by objective
+tack merge diff <stream-id>                    # See what a stream changed
+```
+
+The merge table shows each entry's status, resolution tier, and timing:
+
+```
+ID        STREAM    BRANCH                          STATUS    TIER  CREATED
+a1b2c3    d4e5f6    tack/d4e5f6/builder-g7h8i9      merged    1     5m ago
+j0k1l2    m3n4o5    tack/m3n4o5/builder-p6q7r8      pending   0     2m ago
+```
+
+The `TIER` column shows which resolution strategy worked (1 = clean, 2 = auto-resolve, 4 = human).
+
+## Branch Cleanup
+
+After a stream is merged, Tack:
+1. Pushes the merge commit to the remote base branch
+2. Deletes the remote stream branch
+3. Cleans up the local worktree
+
+This prevents stale branches from accumulating. If a PR was created from the merge branch, Tack checks for open PRs before deleting.

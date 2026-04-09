@@ -19,15 +19,36 @@ tack plan "Refactor the auth module to use JWT"
 
 Tack creates an objective for the current registered project and starts the run. Under the default `standard` blueprint, the planner explores the codebase and decomposes the objective into streams with file scopes and dependencies.
 
+For your first objective, start with something small and scoped:
+
+```bash
+tack plan "Add a health check endpoint at GET /health that returns 200 OK"
+```
+
+This is a good first objective because it is small enough to complete quickly, specific about what to build, and easy to verify.
+
 ## Review the Plan
 
 ```bash
-tack watch --summary
 tack plans
 tack show <plan-id>
 ```
 
 The plan shows each stream's title, description, file scope, and dependency chain. Review it before approving.
+
+What to look for:
+- **File scopes** — do they cover the right files? Are they too broad or too narrow?
+- **Dependencies** — are the ordering constraints correct?
+- **Stream count** — does the decomposition make sense? Too many streams for a small change is a sign the planner over-decomposed.
+
+If the plan does not look right, reject it and submit a clearer objective:
+
+```bash
+tack reject <plan-id>
+tack plan "A more specific description pointing to the right files and modules"
+```
+
+See [Writing Good Objectives](/docs/guides/writing-objectives) for patterns.
 
 ## Approve
 
@@ -35,43 +56,57 @@ The plan shows each stream's title, description, file scope, and dependency chai
 tack approve <plan-id>
 ```
 
-Execution begins. Tack schedules streams based on dependencies and concurrency limits.
+Execution begins. Tack schedules streams based on dependencies and the concurrency limit.
 
 ## Watch Progress
 
 ```bash
 tack watch
-tack watch --stream <stream-id>
-tack watch --agent <agent-id>
 ```
 
-Live stream of agent activity — tool calls, file edits, test results, recovery attempts, and status changes.
+You will see a live stream of agent activity:
 
 ```
 18:16:12 [stream-1] builder: read src/schemas.ts
 18:16:15 [stream-1] builder: edit src/routes/expenses.ts
 18:16:19 [stream-2] builder: $ bunx tsc --noEmit
 18:16:23 [stream-1] builder: done: Added PATCH endpoint
-18:16:25 [stream-1] lint passed
+18:16:25 [stream-1] lint passed ✓
 18:16:38 [stream-1] quality_gate_failure -> rerun_previous_agent (1/4)
 18:16:52 [stream-1] recovery blocked: retry budget exhausted; awaiting human guidance
 18:20:04 [stream-1] recovery resumed: guidance applied
 18:47:35 [stream-1] merged ✓
 ```
 
-## Check Results
+### Filter the Stream
 
 ```bash
-tack status
-tack merge --objective <objective-id>
-tack merge diff <stream-id>
+tack watch --summary                         # Status changes only
+tack watch --stream <stream-id>               # One stream
+tack watch --agent <agent-id>                 # One agent
+tack watch --verbose                          # Full tool arguments and diffs
 ```
+
+## Check Results
 
 When all streams complete, Tack merges everything and creates a PR.
 
-If a stream cannot heal automatically, the objective can become `partial` or `blocked` instead of disappearing into a failed run. That preserves the stream state and recovery context for a later retry.
+```bash
+tack status                                  # Daemon status
+tack merge                                   # Merge queue state
+tack merge diff <stream-id>                  # What a stream changed
+```
 
-## Choose A Blueprint Explicitly
+If some streams failed, the objective becomes `partial` — the merged streams are preserved and you can handle the rest separately. If a stream is blocked waiting for human input, you can send guidance:
+
+```bash
+tack mail <agent-name>                       # See what the agent needs
+tack mail send <agent-name> "Hint" "Try..." --objective <id>
+```
+
+See [Recovery & Retries](/docs/guides/recovery) for the full recovery workflow.
+
+## Choose a Blueprint Explicitly
 
 If you want a non-default workflow, pick a blueprint by `id`:
 
@@ -79,4 +114,17 @@ If you want a non-default workflow, pick a blueprint by `id`:
 tack plan "Fix the typo in the README" --blueprint standard
 ```
 
-Blueprint IDs are project-scoped and resolved from the current registry.
+Blueprint IDs are project-scoped and resolved from the current registry. See [Blueprints](/docs/concepts/blueprints) for how blueprints work.
+
+## Common Issues
+
+| Problem | Solution |
+|---------|----------|
+| Daemon not reachable | Start the daemon: `tack daemon` |
+| Plan looks wrong | Reject and resubmit with a clearer objective |
+| Agent stuck in a loop | Check `tack logs <agent-id>` and send guidance via `tack mail` |
+| Objective blocked | Check `tack mail` for escalations, send guidance to unblock |
+| Quality gates failing | Check `tack watch --verbose` for the gate output |
+| Merge conflict | Retry: `tack merge retry <entry-id>` |
+
+See the [Troubleshooting guide](/docs/guides/troubleshooting) for detailed solutions.

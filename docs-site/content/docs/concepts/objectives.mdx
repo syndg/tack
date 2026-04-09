@@ -12,47 +12,108 @@ tack plan "Add pagination to all list endpoints"
 tack plan "Add pagination to all list endpoints" --blueprint standard
 ```
 
-The default workflow is:
+The default workflow:
 
-```text
-objective created -> planner runs -> plan ready -> human approval -> execution -> merge/pr
 ```
+objective created → planner runs → plan ready → human approval → execution → merge → PR
+```
+
+See [Writing Good Objectives](/docs/guides/writing-objectives) for patterns and examples that produce better plans.
 
 ## The Planner
 
 When you submit an objective, Tack spawns a planner agent. The planner:
 
-1. Explores your codebase to understand its structure
-2. Identifies what needs to change
-3. Decomposes the objective into independent streams
-4. Assigns file scopes and dependencies to each stream
+1. **Explores your codebase** to understand its structure, conventions, and relevant files
+2. **Identifies what needs to change** to fulfill the objective
+3. **Decomposes the objective** into independent streams that can run in parallel
+4. **Assigns file scopes** — glob patterns defining which files each stream can modify
+5. **Sets dependencies** — ordering constraints between streams when changes must happen sequentially
 
 The planner outputs a structured plan that Tack validates and presents for your review.
 
-Tack's roadmap pushes this further: discovery and a context dossier are expected to become planner inputs so planning starts from researched, cited context instead of raw objective text alone.
+### Planning Modes
+
+The `planning.default_mode` config controls how planning works:
+
+```yaml
+planning:
+  default_mode: collaborative
+```
+
+Currently, `collaborative` is the default mode. The planner produces a plan and waits for your approval before any execution begins.
 
 ## Plan Approval
 
-Plans require human approval before execution begins:
+Plans require human approval before execution begins. This is your checkpoint to verify the decomposition makes sense.
 
 ```bash
 tack show <plan-id>    # Review streams, file scopes, dependencies
 tack approve <plan-id> # Start execution
-tack reject <plan-id>  # Return to planning
+tack reject <plan-id>  # Discard the plan
 ```
 
-## Work Items And Streams
+### What to Look For
 
-Plans are made of streams: parallel work items with file scopes, dependency ordering, and isolated execution.
+When reviewing a plan, check:
 
-Public docs and CLI still talk about **streams** because they are the execution unit you see in plans, watch output, and merge state.
+- **Stream count** — is the decomposition reasonable? Too many streams for a simple task means the planner over-decomposed. Too few for a complex task means work items may be too broad.
+- **File scopes** — do the glob patterns cover the right files? Are they too broad (agent may modify unrelated files) or too narrow (agent may be blocked from files it needs)?
+- **Dependencies** — are the ordering constraints correct? Unnecessary dependencies reduce parallelism. Missing dependencies cause build failures.
 
-In blueprint YAML, nested execution now uses `foreach: work_item` to describe per-item fanout without baking old starter blueprint names into the public model.
+### When the Plan Is Wrong
+
+If the plan does not match your intent:
+
+```bash
+tack reject <plan-id>
+```
+
+Then resubmit with a clearer objective. Common reasons plans go wrong:
+
+- The objective was too vague for the planner to find the right scope
+- The objective mixed unrelated concerns that should be separate objectives
+- The objective referenced files or modules the planner did not discover
+
+Providing more specific file paths, module names, and acceptance criteria in the objective helps the planner produce better decompositions.
+
+## Work Items and Streams
+
+Plans are made of **streams**: parallel work items with file scopes, dependency ordering, and isolated execution.
+
+Each stream has:
+- **Title** — a short description of what the stream does
+- **Description** — detailed task specification for the builder agent
+- **File scope** — glob patterns defining which files the stream can modify
+- **Dependencies** — other streams that must complete before this one starts
+
+Streams are the execution unit you see in plans, `tack watch` output, and merge state. See [Streams](/docs/concepts/streams) for the full lifecycle.
 
 ## Blueprint Selection
+
+Every objective runs against a blueprint that defines the workflow steps:
 
 ```bash
 tack plan "Fix the typo in README.md" --blueprint standard
 ```
 
-If you omit `--blueprint`, Tack resolves the default blueprint from the blueprints loaded for the targeted project.
+If you omit `--blueprint`, Tack resolves the default blueprint from the loaded blueprints for the current project. See [Blueprints](/docs/concepts/blueprints) for how defaults work.
+
+## Objective Lifecycle
+
+```
+planning → approved → executing → completed
+                               ↘ partial
+                               ↘ failed
+                               ↘ blocked
+```
+
+| State | Meaning |
+|-------|---------|
+| `planning` | Planner is working on decomposition |
+| `approved` | Plan approved, waiting to execute |
+| `executing` | Agents are working on streams |
+| `completed` | All streams merged, PR created |
+| `partial` | Some streams merged, some failed |
+| `failed` | All streams failed or the run could not proceed |
+| `blocked` | One or more streams waiting for human guidance |

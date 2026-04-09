@@ -3,30 +3,77 @@ title: Blueprints
 description: YAML state machines that define agent workflows.
 ---
 
-## What is a Blueprint?
+## What Is a Blueprint?
 
-A blueprint is a YAML state machine that defines a Tack workflow. Filenames are arbitrary. The public identity is the blueprint `id`.
+A blueprint is a YAML file that defines a workflow — a sequence of steps that Tack executes to turn an objective into merged code. You do not need to write blueprints to use Tack (it ships working defaults), but understanding them helps you customize the workflow.
 
-Steps can be:
+The key idea: blueprints make the workflow **explicit and inspectable**. Every step is declared in YAML. You can see exactly what will happen, in what order, and what happens when things fail.
 
-| Type | Description |
-|------|-------------|
-| `agent` | Spawns an AI agent such as planner, scout, builder, or reviewer |
-| `deterministic` | Runs infrastructure logic such as dispatch, gates, merge, or PR creation |
-| `human` | Pauses for human approval |
-| `blueprint_ref` | Runs another blueprint by `id` |
+### Blueprint Identity
+
+Every blueprint has an `id`. This is the public identity used when selecting a blueprint — filenames are organizational only.
+
+```yaml
+id: build-review
+name: Build and review
+```
+
+Two blueprints with the same `id` are the same blueprint, regardless of their filenames. This is how overrides work.
+
+### Step Types
+
+| Type | What It Does | Example |
+|------|-------------|---------|
+| `agent` | Spawns an AI agent with a specific role | planner, builder, reviewer, scout |
+| `deterministic` | Runs infrastructure logic | quality gates, merge queue, PR creation |
+| `human` | Pauses for human approval | plan approval gate |
+| `blueprint_ref` | Invokes another blueprint by `id` | per-work-item fanout |
 
 ## Default Blueprints
 
-Tack ships two default blueprints:
+Tack ships two blueprints that work together:
 
-### `standard`
+### `standard` — The Top-Level Workflow
 
-The default top-level workflow. It plans, waits for approval, dispatches work, runs the nested build-review workflow for each work item, merges, and opens a PR.
+This is what runs when you submit an objective. It handles the full lifecycle:
 
-### `build-review`
+```yaml
+id: standard
+default: true
+steps:
+  - id: plan
+    type: agent
+    role: planner
+    next: approve
 
-The nested per-work-item workflow.
+  - id: approve
+    type: human
+    next: execute
+
+  - id: execute
+    type: blueprint_ref
+    ref: build-review
+    foreach: work_item
+    on_work_item_failure: escalate
+
+  - id: merge
+    type: deterministic
+    action: merge_queue
+
+  - id: pr
+    type: deterministic
+    action: create_pr
+
+  - id: complete
+    type: deterministic
+    action: mark_complete
+```
+
+The `foreach: work_item` on the execute step is what makes streams run in parallel — each work item (stream) gets its own execution of the `build-review` blueprint.
+
+### `build-review` — The Per-Stream Workflow
+
+This runs for each stream independently:
 
 ```yaml
 id: build-review
@@ -66,35 +113,22 @@ steps:
     action: signal_merge_ready
 ```
 
-The shipped top-level blueprint references the nested one by `id`:
-
-```yaml
-id: standard
-default: true
-steps:
-  - id: execute
-    type: blueprint_ref
-    ref: build-review
-    foreach: work_item
-    on_work_item_failure: escalate
-```
+Walkthrough of the steps:
+1. **build** — the builder agent implements the stream's task and commits
+2. **lint** — quality gates run; on failure, jump back to `build` with the gate output (up to 3 fix iterations)
+3. **review** — the reviewer agent checks the implementation; on rejection, jump back to `build` with feedback (up to 3 fix iterations)
+4. **merge_ready** — signals that this stream is ready to merge
 
 ## Customizing Blueprints
 
-Blueprints are loaded per project with this precedence:
+You can override shipped blueprints or add new ones. Place files in `.tack/blueprints/` (per-project) or `~/.config/tack/blueprints/` (per-user).
 
-1. embedded defaults
-2. `~/.config/tack/blueprints/`
-3. `<repo>/.tack/blueprints/`
-
-Later definitions win **by blueprint `id`**, not by filename.
-
-Override the default `build-review` workflow by defining your own blueprint with `id: build-review`:
+Blueprints override by **`id`**, not filename. To replace the shipped `build-review`, create a file with `id: build-review`:
 
 ```yaml
 # .tack/blueprints/review-lite.yaml
 id: build-review
-name: Review lite
+name: Review lite — skip review for faster iteration
 
 retry:
   profile: balanced
@@ -120,66 +154,72 @@ steps:
     action: signal_merge_ready
 ```
 
-This example keeps the public workflow identity the same while changing the implementation for the current project.
+This version drops the review step entirely. The blueprint `id` is still `build-review`, so it replaces the shipped workflow for this project.
+
+See [Custom Blueprints](/docs/guides/custom-blueprints) for more examples.
 
 ## Default Resolution
 
-When an objective starts, Tack resolves the blueprint like this:
+When an objective starts, Tack resolves which blueprint to use:
 
-1. If the objective explicitly requested a blueprint, use that `id`.
-2. Otherwise, if exactly one blueprint is loaded, use it.
-3. Otherwise, exactly one loaded blueprint must set `default: true`.
+1. If the objective explicitly requested `--blueprint <id>`, use that
+2. Otherwise, if exactly one blueprint is loaded, use it
+3. Otherwise, exactly one loaded blueprint must set `default: true`
 
-If no default exists, or more than one blueprint is marked default, Tack returns an error until you fix the registry or choose a blueprint explicitly.
+If no default exists or multiple blueprints claim default, Tack returns an error. Fix this by either passing `--blueprint` explicitly or ensuring exactly one blueprint has `default: true`.
 
-## Step Options
+## Step Options Reference
 
 ### Agent Steps
 
-- `role` — agent role (planner, builder, reviewer)
-- `commit` — commit mode: `auto` (default), `agent`, or `none`
-- `model` — optional model override for that step
-- `messages` — structured outputs the agent should generate such as commit or PR text
-- `message_source` — where structured messages should be derived from
-- `on_fail` — reroute target for agent-driven repair loops such as `review -> build`
-- `max_fix_iterations` — cap on reroute-driven repair loops
-- `tools` — optional tool scope restrictions
-- `optional` — allow the step to be skipped without failing the run
+| Field | Description |
+|-------|-------------|
+| `role` | Agent role: `planner`, `builder`, `reviewer`, `scout` |
+| `commit` | Commit mode: `auto` (default), `agent`, or `none` |
+| `model` | Optional model override for this step |
+| `messages` | Structured outputs to request: `commit: true` for commit messages |
+| `message_source` | Where to derive structured messages from |
+| `on_fail` | Step to jump to on failure (enables fix loops) |
+| `max_fix_iterations` | Cap on fix-loop cycles |
+| `tools` | Tool include/exclude lists for this step |
+| `optional` | Allow the step to be skipped without failing |
 
 ### Deterministic Steps
 
-- `action` — the action to run: `dispatch_streams`, `run_quality_gates`, `signal_merge_ready`, `merge_queue`, `create_pr`, `mark_complete`
-- `retry.max_attempts` — retry budget for that step
-- `retry.on_exhausted` — what to do when retry budget is exhausted
-- `retry.human_guidance_mode` — how human guidance should be attached on resume
-- `on_fail` — step to jump to on failure (fix-loop)
-- `max_fix_iterations` — cap on fix-loop cycles
+| Field | Description |
+|-------|-------------|
+| `action` | What to run: `dispatch_streams`, `run_quality_gates`, `signal_merge_ready`, `merge_queue`, `create_pr`, `mark_complete` |
+| `retry.max_attempts` | Retry budget for this step |
+| `retry.on_exhausted` | What to do when retries run out: `ask_human`, `escalate`, `fail` |
+| `retry.human_guidance_mode` | How guidance is attached on resume |
+| `on_fail` | Step to jump to on failure |
+| `max_fix_iterations` | Cap on fix-loop cycles |
 
-### Top-Level Retry Config
+### Blueprint Reference Steps
 
-Blueprints can define a narrow recovery posture at the top level:
+| Field | Description |
+|-------|-------------|
+| `ref` | Nested blueprint `id` to invoke |
+| `foreach` | Currently `work_item` — runs the blueprint once per stream |
+| `on_work_item_failure` | `escalate` (continue other streams) or `fail` (fail the run) |
+| `escalation.context` | How much context to include: `full`, `minimal`, or `error_only` |
+| `escalation.include_agent_history` | Include worker history in escalation payload |
+
+## Retry Profiles
+
+Blueprints can set a retry profile that controls the recovery posture:
+
+| Profile | Max Attempts | Use For |
+|---------|-------------|---------|
+| `strict` | 2 | Critical paths where failures are serious |
+| `balanced` | 4 | Default for top-level workflows |
+| `self_healing` | 6 | Per-stream loops where failures are expected and fixable |
 
 ```yaml
 retry:
-  profile: balanced
+  profile: self_healing
   default_max_attempts: 4
   default_on_exhausted: ask_human
 ```
 
-The built-in profiles are:
-
-- `strict`
-- `balanced`
-- `self_healing`
-
-### Human Steps
-
-Pause execution until a human approves via `tack approve` or the API.
-
-### Blueprint Reference Steps
-
-- `ref` — nested blueprint `id`
-- `foreach` — currently `work_item`
-- `on_work_item_failure` — `escalate` or `fail`
-- `escalation.context` — `full`, `minimal`, or `error_only`
-- `escalation.include_agent_history` — include worker history in the escalation payload
+See [Recovery & Retries](/docs/guides/recovery) for how retry profiles map to failure kinds and recovery actions.

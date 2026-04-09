@@ -1,46 +1,119 @@
 ---
-title: Isolation
-description: How Tack isolates agents using sandboxes.
+title: Isolation & Sandboxes
+description: How Tack isolates agents using sandboxes and how to choose between local and remote providers.
 ---
 
-## Isolation Model
+## Why Isolation Matters
 
-Each agent works in its own isolated sandbox. Agents never see each other's changes during execution. Integration happens at merge time.
+Each agent works in its own isolated sandbox. Agents never see each other's changes during execution. This is fundamental to how Tack works:
 
-## Sandbox Providers
+- **No interference** — one agent cannot break another agent's work in progress
+- **Clean state** — each sandbox starts from the same base branch, so agents work from a known state
+- **Deterministic merge** — integration is an explicit step, not an accident of timing
+- **Safe recovery** — rerunning a builder does not affect other streams
 
-| Provider | Isolation | Use case |
-|----------|-----------|----------|
-| **Local** (git worktrees) | Process-level | Development, testing |
-| **Daytona** | VM-level | Production, remote |
-| Docker (planned) | Container-level | Self-hosted |
-| E2B (planned) | VM-level | Cloud |
+## Choosing a Sandbox Provider
 
-### Local Provider
+| Provider | Isolation Level | Speed | Best For |
+|----------|----------------|-------|----------|
+| **Local** (git worktrees) | Process-level | Fast | Development, testing, small teams |
+| **Daytona** | VM-level | Moderate | Production, remote teams, CI |
+| Docker (planned) | Container-level | Moderate | Self-hosted isolation |
+| E2B (planned) | VM-level | Moderate | Cloud deployments |
 
-Creates git worktrees from the latest base branch. Each stream gets its own worktree directory with a unique branch name.
+### When to Use Local
+
+Local sandboxes use git worktrees on your machine. They are fast because there is no network overhead, no VM startup, and files use copy-on-write where available.
+
+Use local when:
+- You are developing and iterating quickly
+- Your project does not require special hardware or OS configuration
+- You are running on a single machine
+- You want the fastest possible feedback loop
 
 ```yaml
 sandbox:
   provider: local
 ```
 
-### Daytona Provider
+### When to Use Daytona
 
-Creates remote sandboxes via the Daytona API. Full VM isolation with SSH access.
+Daytona provides remote VM sandboxes. Each agent gets its own VM with full OS isolation. Sandboxes can be pre-configured with snapshots that include your project dependencies.
+
+Use Daytona when:
+- You want strong isolation between agent environments
+- You are running on a remote server or CI
+- Your project needs specific system dependencies (databases, Docker, etc.)
+- You want agents to run without consuming local resources
 
 ```yaml
 sandbox:
   provider: daytona
+  daytona:
+    snapshot: "snap_123"
 ```
 
-See the [Daytona setup guide](/docs/guides/daytona) for configuration details.
+See the [Daytona setup guide](/docs/guides/daytona) for full configuration.
+
+## How Local Sandboxes Work
+
+Local sandboxes create git worktrees from the latest base branch:
+
+1. Tack creates a new branch: `tack/{objective-short}/{stream-slug}`
+2. A git worktree is created in a separate directory
+3. Gitignored files are copied from the main repo (see Copy-Ignored below)
+4. Project setup commands run (e.g., `bun install`)
+5. The agent executes inside the worktree
+6. When the objective completes, the worktree is cleaned up
+
+Each stream gets its own worktree. The builder and reviewer agents for a stream share the same worktree — the reviewer sees the builder's changes but not other streams' changes.
+
+### Worktree Rediscovery
+
+If the daemon restarts, Tack rediscovers existing worktrees via `git worktree list` and reconnects to them. In-flight executions resume without losing state.
+
+## How Daytona Sandboxes Work
+
+1. Tack creates a Daytona sandbox via the API
+2. The sandbox clones your repo and checks out a working branch
+3. Git credentials are embedded for push/pull within the sandbox
+4. Project setup commands run (or a pre-built snapshot is used)
+5. Agents execute inside the sandbox via Daytona's API
+6. After completion, branches are pushed to origin for merging
+
+### Sandbox Reuse
+
+Tack reuses sandboxes within a stream:
+- Gate failure reruns reuse the same sandbox
+- Reviewer-driven builder reruns reuse the same sandbox
+- The merger sandbox is shared across all streams in an objective for cumulative merging
+
+### Snapshots
+
+Snapshots are pre-built VM images with your project dependencies already installed. They dramatically speed up sandbox creation:
+
+```bash
+tack snapshot create    # Create a snapshot from the current repo
+tack snapshot check     # Check if the snapshot is stale
+tack snapshot update    # Update the snapshot
+```
 
 ## Copy-Ignored
 
-New sandboxes automatically receive gitignored files from the main repo — `node_modules`, build caches, `.env` files. No cold starts. Uses reflink (copy-on-write) on macOS where available.
+New sandboxes automatically receive gitignored files from the main repo. This prevents cold starts where the agent would need to install everything from scratch.
 
-Control what gets copied with `.worktreeinclude`:
+**What gets copied:**
+- `node_modules/`
+- Build caches (`.next/`, `dist/`, etc.)
+- `.env` files
+- Any other gitignored files
+
+**How it works:**
+On macOS, Tack uses reflink (copy-on-write) where available — files share storage with the original until modified. This makes copying near-instant and storage-efficient.
+
+**Customizing what gets copied:**
+
+Create a `.worktreeinclude` file in your project root:
 
 ```
 node_modules/
@@ -48,8 +121,27 @@ node_modules/
 .next/
 ```
 
-If `.worktreeinclude` doesn't exist, all gitignored files are copied.
+If `.worktreeinclude` does not exist, all gitignored files are copied by default.
 
 ## Cleanup
 
-Sandboxes are automatically deleted when an objective reaches a terminal state. No stale worktrees accumulating on disk.
+Sandboxes are automatically cleaned up when an objective reaches a terminal state:
+
+- **Local**: worktrees and branches are deleted
+- **Daytona**: VMs are stopped and removed
+
+Tack's branch janitor also runs periodically (every 5 minutes) to catch any orphaned resources from interrupted runs.
+
+## Project Setup
+
+Regardless of provider, Tack runs your project setup commands after creating a sandbox:
+
+```yaml
+project_setup:
+  commands:
+    - "bun install"
+  verify:
+    - "bun --version"
+```
+
+`commands` run once after sandbox creation. `verify` runs lightweight checks to confirm the environment is ready. If verification fails, Tack retries the setup before failing the stream.
