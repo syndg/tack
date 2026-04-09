@@ -31,6 +31,10 @@ The nested per-work-item workflow.
 ```yaml
 id: build-review
 name: Build and review
+
+retry:
+  profile: self_healing
+
 steps:
   - id: build
     type: agent
@@ -43,7 +47,8 @@ steps:
   - id: lint
     type: deterministic
     action: run_quality_gates
-    retry: 2
+    retry:
+      max_attempts: 2
     on_fail: build
     max_fix_iterations: 3
     next: review
@@ -52,6 +57,8 @@ steps:
     type: agent
     role: reviewer
     commit: none
+    on_fail: build
+    max_fix_iterations: 3
     next: merge_ready
 
   - id: merge_ready
@@ -88,6 +95,10 @@ Override the default `build-review` workflow by defining your own blueprint with
 # .tack/blueprints/review-lite.yaml
 id: build-review
 name: Review lite
+
+retry:
+  profile: balanced
+
 steps:
   - id: build
     type: agent
@@ -98,7 +109,8 @@ steps:
   - id: lint
     type: deterministic
     action: run_quality_gates
-    retry: 3
+    retry:
+      max_attempts: 3
     on_fail: build
     max_fix_iterations: 5
     next: merge_ready
@@ -129,15 +141,36 @@ If no default exists, or more than one blueprint is marked default, Tack returns
 - `model` — optional model override for that step
 - `messages` — structured outputs the agent should generate such as commit or PR text
 - `message_source` — where structured messages should be derived from
+- `on_fail` — reroute target for agent-driven repair loops such as `review -> build`
+- `max_fix_iterations` — cap on reroute-driven repair loops
 - `tools` — optional tool scope restrictions
 - `optional` — allow the step to be skipped without failing the run
 
 ### Deterministic Steps
 
 - `action` — the action to run: `dispatch_streams`, `run_quality_gates`, `signal_merge_ready`, `merge_queue`, `create_pr`, `mark_complete`
-- `retry` — number of retries on failure
+- `retry.max_attempts` — retry budget for that step
+- `retry.on_exhausted` — what to do when retry budget is exhausted
+- `retry.human_guidance_mode` — how human guidance should be attached on resume
 - `on_fail` — step to jump to on failure (fix-loop)
 - `max_fix_iterations` — cap on fix-loop cycles
+
+### Top-Level Retry Config
+
+Blueprints can define a narrow recovery posture at the top level:
+
+```yaml
+retry:
+  profile: balanced
+  default_max_attempts: 4
+  default_on_exhausted: ask_human
+```
+
+The built-in profiles are:
+
+- `strict`
+- `balanced`
+- `self_healing`
 
 ### Human Steps
 

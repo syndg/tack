@@ -33,10 +33,13 @@ When gates fail for errors in the stream's file scope, Tack sends the errors bac
 - id: lint
   type: deterministic
   action: run_quality_gates
-  retry: 2
+  retry:
+    max_attempts: 2
   on_fail: build
   max_fix_iterations: 3
 ```
+
+Gate failures are now part of Tack's recovery model, not just a local loop counter. Each failure records a recovery attempt, shows up in `tack watch`, and can block for human guidance if the retry budget is exhausted.
 
 ## Post-Merge Gates
 

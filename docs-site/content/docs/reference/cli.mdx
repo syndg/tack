@@ -134,6 +134,8 @@ tack watch --stream <stream-id>
 tack watch --agent <agent-id>
 ```
 
+`watch` also shows recovery lifecycle events such as retry attempts, blocked recovery, and resumed recovery.
+
 ## tack logs
 
 Replay agent activity from JSONL logs.
@@ -154,6 +156,10 @@ tack merge --objective <objective-id>
 tack merge retry <entry-id>
 tack merge diff <stream-id>
 ```
+
+## Recovery Notes
+
+Blocked recovery and human-guided resume are daemon-backed and visible in `watch`, `mail`, and objective state. The CLI surface for interactive recovery control is still evolving, so recovery resume may currently happen through the daemon API rather than a dedicated stable CLI subcommand.
 
 ## tack snapshot
 

@@ -23,7 +23,7 @@ daemon:
   base_branch: "main"
 
 sandbox:
-  provider: "daytona"             # default is daytona; local is also supported
+  provider: "daytona"             # default is daytona; switch to local for faster dev loops
   worktree_dir: ""
   default_resources:
     cpu: 2
@@ -120,6 +120,11 @@ quality_gates:
 - `daytona.snapshot` - snapshot ID to reuse for remote startup speed
 
 `sandbox.post_create` still exists as a deprecated compatibility input, but new configs should use `project_setup.commands`.
+
+Practical guidance:
+
+- use `local` for the fastest inner-loop development and test runs
+- use `daytona` for remote or production-style isolation
 
 ### `project_setup`
 

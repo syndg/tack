@@ -3,7 +3,7 @@ title: Introduction
 description: One objective in. Reviewed, tested, merged code out.
 ---
 
-Tack is an open-source harness for deterministic, repository-aware agentic code execution. It is not just another agent orchestrator. You describe what you want built, and Tack turns that objective into a bounded workflow: planning, isolated execution, deterministic checks, merge, and PR creation.
+Tack is an open-source harness for deterministic, repository-aware agentic code execution. It is not just another agent orchestrator. You describe what you want built, and Tack turns that objective into a bounded workflow: planning, isolated execution, deterministic checks, recovery, merge, and PR creation.
 
 You go from being the developer to being the team lead.
 
@@ -38,6 +38,17 @@ Tack is trying to make repositories legible to agents and make agent execution r
 - **Blueprint-driven.** Workflow steps are explicit YAML state machines, not hidden prompts.
 - **Isolation-first.** Agents run in separate worktrees or remote sandboxes.
 - **Deterministic where it matters.** Quality gates, merge ordering, scoped rules, and retries are infrastructure concerns.
+- **Recovery-aware.** Gate failures, reviewer rejection, and restart recovery are first-class parts of the workflow.
+
+## Recovery Model
+
+Tack records recovery attempts durably and uses them to drive reruns.
+
+- Quality gate failures rerun the builder with gate output attached
+- Reviewer rejection reruns the builder with reviewer feedback attached
+- Transient runtime failures retry the same step in place
+- Exhausted retries can block for human guidance instead of failing permanently
+- Human-guided retries survive daemon restarts and resume from the correct point
 
 ## Where Tack Is Going
 

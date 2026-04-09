@@ -72,6 +72,13 @@ tack snapshot update
 
 These commands help you create and refresh snapshots from the current repo state and `project_setup.commands`.
 
-## Sandbox Reuse
+## Sandbox Reuse And Recovery
 
 Tack reuses sandboxes within a stream — if a fix-loop retry occurs, the same sandbox is used. The merger sandbox is shared across all streams in an objective for cumulative merging.
+
+Recovery-aware behavior matters here too:
+
+- gate failure reruns reuse the same stream sandbox
+- reviewer-driven builder reruns reuse the same stream sandbox
+- restarted runs reload Daytona sandboxes and keep the repo workdir stable
+- blocked recovery can be resumed later without losing the stream sandbox context

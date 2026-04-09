@@ -20,6 +20,10 @@ Remove the reviewer step for faster iteration:
 # .tack/blueprints/review-lite.yaml
 id: build-review
 name: Review lite
+
+retry:
+  profile: balanced
+
 steps:
   - id: build
     type: agent
@@ -30,7 +34,8 @@ steps:
   - id: lint
     type: deterministic
     action: run_quality_gates
-    retry: 3
+    retry:
+      max_attempts: 3
     on_fail: build
     max_fix_iterations: 5
     next: merge_ready
@@ -50,6 +55,10 @@ Add a reconnaissance step before building:
 # .tack/blueprints/build-review-with-scout.yaml
 id: build-review
 name: Build and review with scout
+
+retry:
+  profile: self_healing
+
 steps:
   - id: scout
     type: agent
@@ -67,7 +76,8 @@ steps:
   - id: lint
     type: deterministic
     action: run_quality_gates
-    retry: 2
+    retry:
+      max_attempts: 2
     on_fail: build
     max_fix_iterations: 3
     next: merge_ready

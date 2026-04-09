@@ -9,7 +9,7 @@ If you want to author the file directly, start with something like this:
 
 ```yaml
 sandbox:
-  provider: local
+  provider: local   # fastest for development; use daytona for remote sandboxes
 
 project_setup:
   commands:
@@ -62,6 +62,15 @@ quality_gates:
   - "bun test"
   - "bunx tsc --noEmit"
   - "bun run lint"
+```
+
+For remote execution, switch the sandbox section to:
+
+```yaml
+sandbox:
+  provider: daytona
+  daytona:
+    snapshot: "snap_123"   # optional but recommended
 ```
 
 ## Credentials
