@@ -1,5 +1,10 @@
 # Retry And Recovery Implementation Plan
 
+**Date:** 2026-04-09  
+**Status:** Working plan / checklist not yet fully reconciled with code
+
+This checklist was written for the recovery redesign. Some recovery pieces have already landed in code, but this plan still remains useful as the detailed implementation backlog.
+
 ## Constraints
 
 - Treat this as a clean-break design improvement, not a compatibility rollout.

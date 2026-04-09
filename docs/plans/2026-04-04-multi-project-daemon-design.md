@@ -1,5 +1,10 @@
 # Multi-Project Daemon Design
 
+**Date:** 2026-04-04  
+**Status:** Implemented foundation / historical design note
+
+This doc captures the design behind the current machine-wide daemon plus project-scoped execution model. For the current public explanation, also see `docs-site/content/docs/getting-started/init-and-projects.mdx`.
+
 ## Goal
 
 Make `tack daemon` a machine-wide service that can orchestrate multiple registered projects while preserving project-local configuration inside `.tack/`.

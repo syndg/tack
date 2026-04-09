@@ -1,5 +1,10 @@
 # Operator Observability Implementation Plan
 
+**Date:** 2026-04-05  
+**Status:** Planned / not yet complete
+
+This remains a forward-looking implementation plan. The current code already has `internal/observability/recorder.go`, but this deeper canonical operator-record model is not finished yet.
+
 ## Constraints
 
 - Build a deep module with a small public boundary.

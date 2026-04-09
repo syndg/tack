@@ -1,5 +1,9 @@
 # Tack Phase 2: Harness Core — PRD & Implementation Plan
 
+> Historical phase artifact.
+> Do not treat this as the current product description.
+> Start with `docs-site/content/docs/`, `docs/README.md`, and `docs/CURRENT_ARCHITECTURE.md`.
+
 Build the deterministic harness infrastructure that constrains and informs agents. This phase produces the blueprint engine (YAML state machine), scoped rules engine (glob-matched context injection), tool curator (per-agent tool selection), and quality gate runner (deterministic validation in sandboxes).
 
 Phase 1 artifacts: `docs/phase1/PRD.md`, `docs/phase1/FINDINGS.md`

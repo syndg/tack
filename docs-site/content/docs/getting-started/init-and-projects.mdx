@@ -84,11 +84,11 @@ You can also manage credentials directly (outside of `tack init`):
 
 ```bash
 tack auth add anthropic       # Add Anthropic API key
-tack auth add openai-codex    # Add OpenAI Codex OAuth
-tack auth add git             # Add GitHub PAT for PR creation
+tack auth add openai-codex    # Add OpenAI Codex credential
+tack auth add git             # Add git host PAT for PR creation
 tack auth add daytona         # Add Daytona API key
 tack auth list                # Show all configured providers
-tack auth test anthropic      # Validate a credential works
+tack auth test anthropic      # Check that a stored credential resolves
 ```
 
 See the [Credentials & Auth guide](/docs/guides/credentials) for full details on credential formats, multi-provider setup, and security.

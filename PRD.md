@@ -1,5 +1,8 @@
 # Tack Phase 5: Merge & Review — PRD & Implementation Plan
 
+> Historical phase artifact.
+> For the current product story, start with `docs-site/content/docs/` and `docs/README.md`.
+
 Build the merge queue that processes completed stream branches into the main branch. This phase implements the merge queue store, merge processor with tiered conflict resolution, post-merge quality gate re-execution, diff extraction for client consumption, and the API/CLI surface for managing merges.
 
 Phase 1 artifacts: `docs/phase1/PRD.md`, `docs/phase1/FINDINGS.md`

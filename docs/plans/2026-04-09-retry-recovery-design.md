@@ -1,5 +1,10 @@
 # Retry And Recovery Design
 
+**Date:** 2026-04-09  
+**Status:** Active design reference / partially implemented
+
+This doc describes the recovery model currently being brought into the codebase. The public docs site already reflects much of this direction, but this file remains the deeper internal design reference.
+
 ## Goal
 
 Make Tack self-healing by default.

@@ -2,6 +2,12 @@
 
 > Runtime-agnostic protocol with Pi-native reference adapter
 
+**Date:** 2026-03-13  
+**Status:** Superseded  
+**Superseded by:** `docs/plans/2026-03-14-gate-isolation-design.md`
+
+This design reflects an earlier execution model. The current direction removed most agent-to-agent messaging from the core loop because isolated worktrees make in-flight peer coordination low-value. Keep this doc for historical context only.
+
 ## Architecture
 
 Tack's inter-agent communication splits into two layers:

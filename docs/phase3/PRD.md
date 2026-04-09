@@ -1,5 +1,9 @@
 # Tack Phase 3: Planning — PRD & Implementation Plan
 
+> Historical phase artifact.
+> Do not treat this as the current product description.
+> Start with `docs-site/content/docs/`, `docs/README.md`, and `docs/CURRENT_ARCHITECTURE.md`.
+
 Build the planning layer that bridges objectives to execution. This phase produces plan and stream data stores, a planning service that manages planner agent sessions, agent overlay generation, objective lifecycle management, plan approval flow, simple mode (single-agent escape hatch), and the CLI/API surface for interacting with plans.
 
 Phase 1 artifacts: `docs/phase1/PRD.md`, `docs/phase1/FINDINGS.md`

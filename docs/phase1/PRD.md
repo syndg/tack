@@ -1,5 +1,9 @@
 # Tack Phase 1: Foundation — PRD & Implementation Plan
 
+> Historical phase artifact.
+> Do not treat this as the current product description.
+> Start with `docs-site/content/docs/`, `docs/README.md`, and `docs/CURRENT_ARCHITECTURE.md`.
+
 Establish the Go project structure, core domain types, database layer, event bus, HTTP daemon, and basic CLI. This phase produces a running daemon that accepts HTTP requests, persists data to SQLite, streams events via SSE, and a CLI client that can query status and create objectives.
 
 Atomic tasks for phased implementation. Each task targets 1-2 files max.

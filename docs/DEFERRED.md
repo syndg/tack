@@ -1,6 +1,8 @@
 # Deferred Items
 
-Items intentionally deferred from their original phase. Each entry tracks where it was originally scoped, why it was deferred, and when it should land.
+Items intentionally deferred from their original phase or parked for later design. Each entry tracks where it was originally scoped, why it was deferred, and when it should land.
+
+For current product behavior, start with `docs-site/content/docs/` and `docs/README.md`. This file is the future-work backlog, not the current-state source of truth.
 
 ---
 
@@ -91,3 +93,14 @@ _(none yet)_
 - **What's missing:** No per-client filtering (by objective, event type, etc.)
 - **Deferred to:** When a real dashboard/UI is built
 - **Reason:** Clients can filter client-side. No production UI exists yet to motivate server-side filtering.
+
+---
+
+## Cross-Cutting Future Work
+
+### Feature resurrection benchmark for context-engineering evaluation
+- **Original scope:** New evaluation work driven by the harness-first / context-engineering direction
+- **What exists:** Current public docs already position Tack around repo-aware execution, recovery, and upcoming discovery/context-dossier work. A draft benchmark note lives at `docs/plans/2026-04-09-feature-resurrection-benchmark-design.md`.
+- **What's missing:** A canonical benchmark case, scoring rubric, and a repeatable run flow that exercises discovery, planning, execution, review, and merge end to end.
+- **Deferred to:** After the next round of core context-gathering work starts landing, with a thin manual benchmark likely before full automation.
+- **Reason:** Tack's current context flow is not strong enough yet for a fair automated benchmark, but the idea is important enough to capture now because it should shape future discovery and dossier design.

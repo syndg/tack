@@ -1,5 +1,8 @@
 # Phase 5 Findings
 
+> Historical phase artifact.
+> Read this for implementation archaeology only.
+
 ## Task 1.1: Create merge queue domain model and store
 
 - Changed `merge_queue` table PK from `INTEGER PRIMARY KEY AUTOINCREMENT` to `TEXT PRIMARY KEY` to use UUIDs, consistent with all other stores (objectives, plans, streams, agents, executions).

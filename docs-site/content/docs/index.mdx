@@ -50,6 +50,24 @@ Tack records recovery attempts durably and uses them to drive reruns.
 - Exhausted retries can block for human guidance instead of failing permanently
 - Human-guided retries survive daemon restarts and resume from the correct point
 
+## What Exists Today vs What Is Planned
+
+**Exists today:**
+
+- machine-wide daemon with project-scoped execution
+- explicit blueprints, isolated sandboxes, and deterministic quality gates
+- planner -> approval -> build/review -> merge flow
+- recovery-aware execution with watch/log/mail surfaces
+
+**Planned next:**
+
+- a first-class discovery step before planning
+- compact context dossiers
+- bounded execution contracts per work item
+- stronger benchmark-driven evaluation for context quality
+
+Tack's direction is to make the context packet better, not just add more workers.
+
 ## Where Tack Is Going
 
 Tack's next focus is **context engineering** and **harness hardening**.

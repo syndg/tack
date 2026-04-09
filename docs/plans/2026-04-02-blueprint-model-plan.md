@@ -1,5 +1,8 @@
 # Blueprint Model Refactor Plan
 
+**Date:** 2026-04-02  
+**Status:** Completed historical implementation plan
+
 - [x] Add blueprint `id` and `default` fields to blueprint schema
 - [x] Add `foreach: work_item` support to `blueprint_ref` steps
 - [x] Make the registry canonical on blueprint ID, not filename/name aliases

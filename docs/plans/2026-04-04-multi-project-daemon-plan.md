@@ -1,5 +1,8 @@
 # Multi-Project Daemon Implementation Plan
 
+**Date:** 2026-04-04  
+**Status:** Completed historical implementation plan
+
 - [x] Add a first-class `Project` domain model and project store
 - [x] Add a `projects` table to the global DB schema
 - [x] Rewrite project-scoped tables to require `project_id`

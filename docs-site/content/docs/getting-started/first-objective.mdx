@@ -84,7 +84,7 @@ You will see a live stream of agent activity:
 tack watch --summary                         # Status changes only
 tack watch --stream <stream-id>               # One stream
 tack watch --agent <agent-id>                 # One agent
-tack watch --verbose                          # Full tool arguments and diffs
+tack watch --verbose                          # More tool and message detail
 ```
 
 ## Check Results
@@ -122,8 +122,8 @@ Blueprint IDs are project-scoped and resolved from the current registry. See [Bl
 |---------|----------|
 | Daemon not reachable | Start the daemon: `tack daemon` |
 | Plan looks wrong | Reject and resubmit with a clearer objective |
-| Agent stuck in a loop | Check `tack logs <agent-id>` and send guidance via `tack mail` |
-| Objective blocked | Check `tack mail` for escalations, send guidance to unblock |
+| Agent stuck in a loop | Check `tack logs <agent-id>`, then send guidance with `tack mail send <agent-name> ... --objective <id>` |
+| Objective blocked | Use `tack watch` or `tack agents` to identify the blocked agent, then open `tack mail <agent-name>` and send guidance |
 | Quality gates failing | Check `tack watch --verbose` for the gate output |
 | Merge conflict | Retry: `tack merge retry <entry-id>` |
 

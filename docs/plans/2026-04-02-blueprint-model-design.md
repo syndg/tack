@@ -1,5 +1,10 @@
 # Blueprint Model Redesign
 
+**Date:** 2026-04-02  
+**Status:** Implemented foundation / historical design note
+
+This doc captures the blueprint identity and composition model that now underpins the current public docs. For current user-facing behavior, also see `docs-site/content/docs/concepts/blueprints.mdx`.
+
 ## Goal
 
 Make Tack blueprints fully user-owned without forcing users to learn or preserve internal starter concepts like `feature`, `hotfix`, or `stream`.

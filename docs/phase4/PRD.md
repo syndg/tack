@@ -1,5 +1,9 @@
 # Tack Phase 4: Execution — PRD & Implementation Plan
 
+> Historical phase artifact.
+> Do not treat this as the current product description.
+> Start with `docs-site/content/docs/`, `docs/README.md`, and `docs/CURRENT_ARCHITECTURE.md`.
+
 Build the execution engine that transforms approved plans into running agent teams. This phase implements the mail broker, local sandbox provider, Claude Code agent runtime, agent spawner, stream scheduler, blueprint step handlers, execution coordinator, and the API/CLI surface for managing execution.
 
 Phase 1 artifacts: `docs/phase1/PRD.md`, `docs/phase1/FINDINGS.md`
