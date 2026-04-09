@@ -65,6 +65,7 @@ type Config struct {
 	MergeEnqueuer MergeEnqueuer           // merge queue integration
 	PlanCreator   PlanCreator             // plan creation from planner output
 	MailSender    MailSender              // optional: nil disables mail escalation
+	Attempts      *db.AttemptStore        // optional: nil disables attempt ledger recording
 	Executions    *db.ExecutionStore      // execution persistence
 	Objectives    *db.ObjectiveStore      // objective persistence
 	Plans         *db.PlanStore           // plan persistence
@@ -131,6 +132,7 @@ type Coordinator struct {
 	mergeEnqueuer MergeEnqueuer
 	planCreator   PlanCreator
 	mailSender    MailSender
+	attempts      *db.AttemptStore
 	executions    *db.ExecutionStore
 	objectives    *db.ObjectiveStore
 	plans         *db.PlanStore
@@ -163,6 +165,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		mergeEnqueuer: cfg.MergeEnqueuer,
 		planCreator:   cfg.PlanCreator,
 		mailSender:    cfg.MailSender,
+		attempts:      cfg.Attempts,
 		executions:    cfg.Executions,
 		objectives:    cfg.Objectives,
 		plans:         cfg.Plans,
@@ -236,6 +239,10 @@ func (c *Coordinator) recoverExecutions(ctx context.Context) {
 		c.logger.Error("execution recovery: failed to list executions", "error", err)
 		return
 	}
+	execByID := make(map[string]*blueprint.Execution, len(allExecs))
+	for i := range allExecs {
+		execByID[allExecs[i].ID] = &allExecs[i]
+	}
 
 	for i := range allExecs {
 		exec := &allExecs[i]
@@ -265,6 +272,7 @@ func (c *Coordinator) recoverExecutions(ctx context.Context) {
 				)
 				continue
 			}
+			c.requeueInFlightSubExecutions(ctx, exec, execByID)
 
 			execCtx, cancel := context.WithCancel(ctx)
 
@@ -288,6 +296,117 @@ func (c *Coordinator) recoverExecutions(ctx context.Context) {
 			)
 		}
 	}
+
+	for i := range allExecs {
+		exec := &allExecs[i]
+		if exec.ParentID == "" || exec.Status != "running" || exec.StreamID == "" {
+			continue
+		}
+		parent := execByID[exec.ParentID]
+		if parent != nil && parent.Status == "running" {
+			continue
+		}
+		c.resumeStandaloneSubExecution(ctx, exec)
+	}
+}
+
+func (c *Coordinator) requeueInFlightSubExecutions(ctx context.Context, parent *blueprint.Execution, execByID map[string]*blueprint.Execution) {
+	if parent == nil {
+		return
+	}
+	children, err := c.executions.ListByParent(ctx, parent.ID)
+	if err != nil {
+		c.logger.Warn("execution recovery: failed to list sub-executions", "parent_execution_id", parent.ID, "error", err)
+		return
+	}
+	for i := range children {
+		child := &children[i]
+		if child.StreamID == "" {
+			continue
+		}
+		if child.Status != "running" && child.Status != "waiting_human" {
+			continue
+		}
+		stream, err := c.streams.Get(ctx, child.StreamID)
+		if err != nil {
+			c.logger.Warn("execution recovery: failed to load stream for sub-execution reset", "execution_id", child.ID, "stream_id", child.StreamID, "error", err)
+			continue
+		}
+		if stream.ExecutionID != child.ID {
+			continue
+		}
+		if stream.Status == domain.StreamStatusExecuting {
+			if err := c.streams.UpdateStatus(ctx, stream.ID, domain.StreamStatusFailed); err == nil {
+				if err := c.streams.UpdateStatus(ctx, stream.ID, domain.StreamStatusPending); err != nil {
+					c.logger.Warn("execution recovery: failed to requeue stream", "stream_id", stream.ID, "execution_id", child.ID, "error", err)
+					continue
+				}
+			} else {
+				c.logger.Warn("execution recovery: failed to fail executing stream before requeue", "stream_id", stream.ID, "execution_id", child.ID, "error", err)
+				continue
+			}
+		}
+		c.logger.Info("execution recovery: requeued in-flight stream sub-execution",
+			"parent_execution_id", parent.ID,
+			"execution_id", child.ID,
+			"stream_id", stream.ID,
+		)
+		if stale, ok := execByID[child.ID]; ok {
+			stale.Status = "failed"
+		}
+	}
+}
+
+func (c *Coordinator) resumeStandaloneSubExecution(ctx context.Context, exec *blueprint.Execution) {
+	obj, err := c.objectives.Get(ctx, exec.ObjectiveID)
+	if err != nil {
+		c.logger.Warn("execution recovery: failed to get objective for sub-execution", "execution_id", exec.ID, "objective_id", exec.ObjectiveID, "error", err)
+		return
+	}
+	if obj.Status != domain.ObjectiveStatusExecuting {
+		return
+	}
+	stream, err := c.streams.Get(ctx, exec.StreamID)
+	if err != nil {
+		c.logger.Warn("execution recovery: failed to get stream for sub-execution", "execution_id", exec.ID, "stream_id", exec.StreamID, "error", err)
+		return
+	}
+	if stream.ExecutionID != exec.ID || stream.Status != domain.StreamStatusExecuting {
+		return
+	}
+	plan, err := c.plans.GetByObjective(ctx, exec.ObjectiveID)
+	if err != nil {
+		c.logger.Warn("execution recovery: failed to get plan for sub-execution", "execution_id", exec.ID, "objective_id", exec.ObjectiveID, "error", err)
+		return
+	}
+	baseCtx := c.ctx
+	if baseCtx == nil {
+		baseCtx = ctx
+	}
+	execCtx, cancel := context.WithCancel(baseCtx)
+	retryKey := "retry:" + exec.ID
+	c.mu.Lock()
+	if existing, ok := c.activeExecs[retryKey]; ok {
+		existing()
+	}
+	c.activeExecs[retryKey] = cancel
+	c.mu.Unlock()
+	go func() {
+		defer func() {
+			c.mu.Lock()
+			delete(c.activeExecs, retryKey)
+			c.mu.Unlock()
+			cancel()
+		}()
+		results := make(chan streamResult, 1)
+		c.advanceSubExecution(execCtx, exec, stream, plan.ID, results)
+		res := <-results
+		if res.Error != "" {
+			c.logger.Warn("execution recovery: resumed retry sub-execution failed", "stream_id", stream.ID, "execution_id", exec.ID, "error", res.Error)
+			return
+		}
+		c.logger.Info("execution recovery: resumed retry sub-execution completed", "stream_id", stream.ID, "execution_id", exec.ID)
+	}()
 }
 
 // Stop cancels all active executions, kills tracked agents, and cleans up.
@@ -456,6 +575,10 @@ func (c *Coordinator) runExecution(ctx context.Context, exec *blueprint.Executio
 
 		// Persist state after each advance.
 		if err := c.executions.Update(ctx, exec); err != nil {
+			if isExpectedShutdownError(ctx, err) {
+				c.logger.Debug("skipping execution persistence during shutdown", "execution_id", exec.ID, "error", err)
+				return
+			}
 			c.logger.Error("failed to persist execution state",
 				"execution_id", exec.ID,
 				"error", err,
@@ -471,6 +594,10 @@ func (c *Coordinator) runExecution(ctx context.Context, exec *blueprint.Executio
 			)
 			return
 		case "failed":
+			if ctx.Err() != nil {
+				c.logger.Debug("execution stopped during shutdown", "execution_id", exec.ID, "objective_id", exec.ObjectiveID)
+				return
+			}
 			c.failExecution(ctx, exec.ObjectiveID, "execution failed")
 			c.logger.Error("execution failed",
 				"execution_id", exec.ID,

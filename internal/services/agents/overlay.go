@@ -26,6 +26,7 @@ type OverlayInput struct {
 	CommitMode   string                     // "auto", "agent", "none" — controls commit behavior
 	Messages     *blueprint.MessageRequests // optional delivery messages to generate
 	FixContext   string                     // quality gate errors from a previous fix-loop iteration
+	RetryContext *RetryContext              // normalized recovery context for reruns
 }
 
 // BuildOverlay generates the markdown system prompt overlay for an agent.
@@ -57,9 +58,31 @@ func BuildOverlay(input OverlayInput) string {
 		fmt.Fprintf(&b, "%s\n", input.TaskSpec)
 	}
 	b.WriteString("\n")
+	if input.Role != nil && input.Role.Name == "reviewer" {
+		b.WriteString("## Review Output\n")
+		b.WriteString("End your final response with `REVIEW_DECISION: approve` or `REVIEW_DECISION: reject`.\n")
+		b.WriteString("If you reject, add `REVIEW_FEEDBACK:` followed by the actionable issues the builder must fix.\n\n")
+	}
 
-	// 2b. Fix context (when agent is re-running after gate failure)
-	if input.FixContext != "" {
+	// 2b. Retry context (when agent is re-running after recovery)
+	if input.RetryContext != nil {
+		b.WriteString("## Retry Context\n")
+		fmt.Fprintf(&b, "Attempt: %d/%d\n", input.RetryContext.AttemptNumber, input.RetryContext.MaxAttempts)
+		fmt.Fprintf(&b, "Failure kind: %s\n\n", input.RetryContext.FailureKind)
+		if input.RetryContext.LastError != "" {
+			b.WriteString("Last error:\n")
+			b.WriteString("```\n")
+			b.WriteString(input.RetryContext.LastError)
+			b.WriteString("\n```\n\n")
+		}
+		if input.RetryContext.HumanGuidance != "" {
+			b.WriteString("Human guidance:\n")
+			b.WriteString("```\n")
+			b.WriteString(input.RetryContext.HumanGuidance)
+			b.WriteString("\n```\n\n")
+		}
+		b.WriteString("Your previous code is still in the worktree. Fix the issue and continue from the existing branch state.\n\n")
+	} else if input.FixContext != "" {
 		b.WriteString("## Fix Context\n")
 		b.WriteString("Your previous changes failed quality gates. Fix the errors below:\n\n")
 		b.WriteString("```\n")

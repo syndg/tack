@@ -130,6 +130,27 @@ CREATE TABLE IF NOT EXISTS runs (
     updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS attempts (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    objective_id TEXT NOT NULL DEFAULT '',
+    run_id TEXT NOT NULL DEFAULT '',
+    execution_id TEXT NOT NULL DEFAULT '',
+    stream_id TEXT NOT NULL DEFAULT '',
+    step_id TEXT NOT NULL DEFAULT '',
+    merge_entry_id TEXT NOT NULL DEFAULT '',
+    attempt_number INTEGER NOT NULL,
+    max_attempts INTEGER NOT NULL,
+    failure_kind TEXT NOT NULL,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error_summary TEXT NOT NULL DEFAULT '',
+    fix_context TEXT NOT NULL DEFAULT '',
+    human_guidance TEXT NOT NULL DEFAULT '',
+    triggered_by_attempt_id TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_projects_root_path ON projects(root_path);
 CREATE INDEX IF NOT EXISTS idx_objectives_project_created ON objectives(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_plans_project_created ON plans(project_id, created_at DESC);
@@ -146,6 +167,10 @@ CREATE INDEX IF NOT EXISTS idx_merge_queue_objective ON merge_queue(objective_id
 CREATE INDEX IF NOT EXISTS idx_executions_project_objective ON executions(project_id, objective_id);
 CREATE INDEX IF NOT EXISTS idx_runs_project_status ON runs(project_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_runs_objective ON runs(objective_id);
+CREATE INDEX IF NOT EXISTS idx_attempts_project_objective_created ON attempts(project_id, objective_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_attempts_execution_created ON attempts(execution_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_attempts_stream_created ON attempts(stream_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_attempts_run_created ON attempts(run_id, created_at DESC);
 `
 
 // RunMigrations executes the clean-break multi-project schema migration.
@@ -182,6 +207,7 @@ func maybeResetLegacySchema(db *sql.DB) error {
 
 func resetSchema(db *sql.DB) error {
 	for _, table := range []string{
+		"attempts",
 		"agent_sessions",
 		"events",
 		"executions",

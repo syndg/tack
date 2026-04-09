@@ -174,6 +174,12 @@ func formatWatchEvent(event domain.Event) string {
 
 	case domain.EventEscalation:
 		return fmt.Sprintf("%s [%s] ESCALATION: %s", ts, stream, truncate(stringPayload(payload, "summary"), 100))
+	case domain.EventRecoveryAttempt:
+		return fmt.Sprintf("%s [%s] %s", ts, stream, stringPayload(payload, "summary"))
+	case domain.EventRecoveryBlocked:
+		return fmt.Sprintf("%s [%s] recovery blocked: %s", ts, stream, stringPayload(payload, "summary"))
+	case domain.EventRecoveryResumed:
+		return fmt.Sprintf("%s [%s] recovery resumed: %s", ts, stream, stringPayload(payload, "summary"))
 
 	case domain.EventExecutionStarted:
 		if watchSummary {

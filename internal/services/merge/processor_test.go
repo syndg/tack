@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/harness/gates"
 	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/sandbox"
@@ -72,6 +76,7 @@ type processorFixture struct {
 	streams    *db.StreamStore
 	plans      *db.PlanStore
 	objectives *db.ObjectiveStore
+	attempts   *db.AttemptStore
 	bus        *events.PersistentBus
 	sbProvider *mockSandboxProvider
 	sb         *mockSandbox
@@ -97,6 +102,7 @@ func setupProcessor(t *testing.T) *processorFixture {
 	streamStore := db.NewStreamStore(conn)
 	planStore := db.NewPlanStore(conn)
 	objStore := db.NewObjectiveStore(conn)
+	attemptStore := db.NewAttemptStore(conn)
 	eventStore := db.NewEventStore(conn)
 
 	logger := slog.Default()
@@ -120,10 +126,17 @@ func setupProcessor(t *testing.T) *processorFixture {
 	merger := NewGitMerger(logger)
 	differ := NewDiffExtractor(logger)
 	gateRunner := gates.NewRunner(logger)
+	registry := blueprint.NewRegistry()
+	if err := registry.LoadDefaults(); err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
 
 	processor := NewProcessor(
 		"test-project",
 		queueStore, streamStore, planStore,
+		objStore,
+		blueprint.NewEngine(registry, logger),
+		attemptStore,
 		merger, differ, gateRunner, sbProvider,
 		bus, recorder, "main", logger,
 	)
@@ -134,10 +147,29 @@ func setupProcessor(t *testing.T) *processorFixture {
 		streams:    streamStore,
 		plans:      planStore,
 		objectives: objStore,
+		attempts:   attemptStore,
 		bus:        bus,
 		sbProvider: sbProvider,
 		sb:         sb,
 	}
+}
+
+func listMergeAttempts(t *testing.T, f *processorFixture, streamID, mergeEntryID string) []domain.Attempt {
+	t.Helper()
+	attempts, err := f.attempts.ListByStream(context.Background(), streamID)
+	if err != nil {
+		t.Fatalf("ListByStream: %v", err)
+	}
+	filtered := make([]domain.Attempt, 0, len(attempts))
+	for _, attempt := range attempts {
+		if attempt.MergeEntryID == mergeEntryID {
+			filtered = append(filtered, attempt)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].AttemptNumber < filtered[j].AttemptNumber
+	})
+	return filtered
 }
 
 // createTestData inserts an objective, plan, and stream and returns their IDs.
@@ -345,6 +377,9 @@ func TestProcessNext_SuccessfulMerge(t *testing.T) {
 func TestProcessNext_FailedGates(t *testing.T) {
 	f := setupProcessor(t)
 	ctx := context.Background()
+	sub, unsub := f.bus.Subscribe(10)
+	defer unsub()
+	var callLog []string
 
 	// Create objective, plan with quality gates, and stream.
 	obj := &domain.Objective{Description: "test", Status: domain.ObjectiveStatusExecuting}
@@ -359,11 +394,23 @@ func TestProcessNext_FailedGates(t *testing.T) {
 
 	// Configure sandbox: merge succeeds but quality gate fails.
 	f.sb.execFn = func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
+		callLog = append(callLog, cmd)
 		switch {
 		case cmd == "git fetch origin":
 			return sandbox.ExecResult{ExitCode: 0}, nil
+		case strings.Contains(cmd, "git fetch origin '+refs/heads/*:refs/remotes/origin/*'"):
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		case cmd == "git rev-parse --verify origin/branch-1":
+			return sandbox.ExecResult{ExitCode: 128}, nil
+		case cmd == "git rev-parse HEAD":
+			return sandbox.ExecResult{ExitCode: 0, Stdout: "abc123\n"}, nil
 		case cmd == "git merge --no-edit branch-1":
 			return sandbox.ExecResult{ExitCode: 0}, nil
+		case cmd == "git diff --stat abc123...HEAD":
+			return sandbox.ExecResult{
+				ExitCode: 0,
+				Stdout:   " f.go | 1 +\n 1 file changed, 1 insertion(+)\n",
+			}, nil
 		case cmd == "git diff --stat HEAD~1":
 			return sandbox.ExecResult{
 				ExitCode: 0,
@@ -372,7 +419,7 @@ func TestProcessNext_FailedGates(t *testing.T) {
 		case cmd == "go test ./...":
 			// Gate fails.
 			return sandbox.ExecResult{ExitCode: 1, Stderr: "FAIL"}, nil
-		case cmd == "git reset --hard HEAD~1":
+		case cmd == "git reset --hard ORIG_HEAD":
 			// Revert after failed gates.
 			return sandbox.ExecResult{ExitCode: 0}, nil
 		default:
@@ -395,6 +442,267 @@ func TestProcessNext_FailedGates(t *testing.T) {
 	if got.Status != domain.MergeStatusFailed {
 		t.Errorf("entry status = %q, want %q", got.Status, domain.MergeStatusFailed)
 	}
+
+	attempts := listMergeAttempts(t, f, stream.ID, entry.ID)
+	if len(attempts) != 1 {
+		t.Fatalf("attempt count = %d, want 1", len(attempts))
+	}
+	if attempts[0].FailureKind != domain.FailurePostMergeGate {
+		t.Errorf("failure kind = %q, want %q", attempts[0].FailureKind, domain.FailurePostMergeGate)
+	}
+	if attempts[0].Action != domain.RecoveryActionRestartStream {
+		t.Errorf("action = %q, want %q", attempts[0].Action, domain.RecoveryActionRestartStream)
+	}
+	if attempts[0].Status != domain.AttemptStatusRecorded {
+		t.Errorf("status = %q, want %q", attempts[0].Status, domain.AttemptStatusRecorded)
+	}
+	if !strings.Contains(attempts[0].ErrorSummary, "post-merge-gate-1") {
+		t.Errorf("error summary = %q, want gate context", attempts[0].ErrorSummary)
+	}
+
+	if len(callLog) == 0 || !contains(callLog, "git reset --hard ORIG_HEAD") {
+		t.Fatalf("expected merge revert via ORIG_HEAD, calls = %v", callLog)
+	}
+
+	seenAttempt := false
+	for {
+		select {
+		case ev := <-sub:
+			if ev.Type == domain.EventRecoveryAttempt {
+				seenAttempt = true
+			}
+		default:
+			if !seenAttempt {
+				t.Fatal("expected recovery attempt event")
+			}
+			return
+		}
+	}
+}
+
+func TestProcessNext_MergeConflictRetriesThenBlocks(t *testing.T) {
+	f := setupProcessor(t)
+	ctx := context.Background()
+	obj := &domain.Objective{Description: "test", Status: domain.ObjectiveStatusExecuting}
+	if err := f.objectives.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	plan := &domain.Plan{ObjectiveID: obj.ID, QualityGates: []string{}}
+	if err := f.plans.Create(ctx, plan); err != nil {
+		t.Fatalf("Create plan: %v", err)
+	}
+	stream := &domain.Stream{
+		PlanID:       plan.ID,
+		Title:        "s1",
+		FileScope:    []string{"**"},
+		Dependencies: []string{},
+		Status:       domain.StreamStatusMergeReady,
+	}
+	if err := f.streams.Create(ctx, stream); err != nil {
+		t.Fatalf("Create stream: %v", err)
+	}
+	sub, unsub := f.bus.Subscribe(32)
+	defer unsub()
+
+	f.sb.execFn = func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
+		switch cmd {
+		case "git fetch origin '+refs/heads/*:refs/remotes/origin/*'":
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		case "git rev-parse --verify origin/conflict-branch":
+			return sandbox.ExecResult{ExitCode: 128}, nil
+		case "git rev-parse HEAD":
+			return sandbox.ExecResult{ExitCode: 0, Stdout: "abc123\n"}, nil
+		case "git merge --no-edit conflict-branch":
+			return sandbox.ExecResult{ExitCode: 1, Stderr: "CONFLICT (content): Merge conflict in file.go"}, nil
+		case "git merge -X theirs --no-edit conflict-branch":
+			return sandbox.ExecResult{ExitCode: 1, Stderr: "CONFLICT (content): Merge conflict in file.go"}, nil
+		case "git diff --name-only --diff-filter=U":
+			return sandbox.ExecResult{ExitCode: 0, Stdout: "file.go\n"}, nil
+		case "git merge --abort":
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		default:
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		}
+	}
+
+	entry := &domain.MergeEntry{
+		StreamID:    stream.ID,
+		PlanID:      plan.ID,
+		ObjectiveID: obj.ID,
+		Branch:      "conflict-branch",
+	}
+	if err := f.queue.Enqueue(ctx, entry); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	processed, err := f.processor.ProcessNext(ctx)
+	if err != nil {
+		t.Fatalf("ProcessNext first attempt: %v", err)
+	}
+	if !processed {
+		t.Fatal("expected first conflict attempt to process entry")
+	}
+
+	attempts := listMergeAttempts(t, f, stream.ID, entry.ID)
+	if len(attempts) != 1 {
+		t.Fatalf("attempt count after first run = %d, want 1", len(attempts))
+	}
+	if attempts[0].FailureKind != domain.FailureMergeConflict {
+		t.Errorf("failure kind = %q, want %q", attempts[0].FailureKind, domain.FailureMergeConflict)
+	}
+	if attempts[0].Action != domain.RecoveryActionRetryMerge {
+		t.Errorf("action = %q, want %q", attempts[0].Action, domain.RecoveryActionRetryMerge)
+	}
+	if attempts[0].Status != domain.AttemptStatusRecorded {
+		t.Errorf("status = %q, want %q", attempts[0].Status, domain.AttemptStatusRecorded)
+	}
+
+	got, err := f.queue.Get(ctx, entry.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != domain.MergeStatusPending {
+		t.Errorf("entry status after first conflict = %q, want %q", got.Status, domain.MergeStatusPending)
+	}
+
+	streamState, err := f.streams.Get(ctx, stream.ID)
+	if err != nil {
+		t.Fatalf("Get stream: %v", err)
+	}
+	if streamState.Status != domain.StreamStatusMergeReady {
+		t.Errorf("stream status after first conflict = %q, want %q", streamState.Status, domain.StreamStatusMergeReady)
+	}
+
+	for i := 1; i < attempts[0].MaxAttempts; i++ {
+		processed, err := f.processor.ProcessNext(ctx)
+		if err != nil {
+			t.Fatalf("ProcessNext retry %d: %v", i+1, err)
+		}
+		if !processed {
+			t.Fatalf("expected retry %d to process entry", i+1)
+		}
+	}
+
+	attempts = listMergeAttempts(t, f, stream.ID, entry.ID)
+	if len(attempts) != attempts[0].MaxAttempts {
+		t.Fatalf("attempt count after exhaustion = %d, want %d", len(attempts), attempts[0].MaxAttempts)
+	}
+	last := attempts[len(attempts)-1]
+	if last.Action != domain.RecoveryActionAskHumanThenResume {
+		t.Errorf("last action = %q, want %q", last.Action, domain.RecoveryActionAskHumanThenResume)
+	}
+	if last.Status != domain.AttemptStatusBlocked {
+		t.Errorf("last status = %q, want %q", last.Status, domain.AttemptStatusBlocked)
+	}
+
+	got, err = f.queue.Get(ctx, entry.ID)
+	if err != nil {
+		t.Fatalf("Get after exhaustion: %v", err)
+	}
+	if got.Status != domain.MergeStatusConflict {
+		t.Errorf("entry status after exhaustion = %q, want %q", got.Status, domain.MergeStatusConflict)
+	}
+
+	streamState, err = f.streams.Get(ctx, stream.ID)
+	if err != nil {
+		t.Fatalf("Get stream after exhaustion: %v", err)
+	}
+	if streamState.Status != domain.StreamStatusFailed {
+		t.Errorf("stream status after exhaustion = %q, want %q", streamState.Status, domain.StreamStatusFailed)
+	}
+
+	seenAttempt := 0
+	seenBlocked := false
+	for {
+		select {
+		case ev := <-sub:
+			switch ev.Type {
+			case domain.EventRecoveryAttempt:
+				seenAttempt++
+			case domain.EventRecoveryBlocked:
+				seenBlocked = true
+			}
+		default:
+			if seenAttempt != len(attempts) {
+				t.Fatalf("recovery attempt events = %d, want %d", seenAttempt, len(attempts))
+			}
+			if !seenBlocked {
+				t.Fatal("expected recovery blocked event on exhaustion")
+			}
+			return
+		}
+	}
+}
+
+func TestProcessNext_MergeConflictUsesBlueprintRetryProfile(t *testing.T) {
+	f := setupProcessor(t)
+	ctx := context.Background()
+
+	blueprintDir := t.TempDir()
+	if err := os.WriteFile(blueprintDir+"/strict-merge.yaml", []byte(`id: strict-merge
+name: Strict merge
+retry:
+  profile: strict
+steps:
+  - id: build
+    type: agent
+    role: builder
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	reg := blueprint.NewRegistry()
+	if err := reg.LoadFromDir(blueprintDir); err != nil {
+		t.Fatalf("LoadFromDir: %v", err)
+	}
+	f.processor.engine = blueprint.NewEngine(reg, slog.Default())
+
+	obj := &domain.Objective{Description: "strict merge objective", Status: domain.ObjectiveStatusExecuting, Blueprint: "strict-merge"}
+	if err := f.objectives.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	plan := &domain.Plan{ObjectiveID: obj.ID, QualityGates: []string{}}
+	if err := f.plans.Create(ctx, plan); err != nil {
+		t.Fatalf("Create plan: %v", err)
+	}
+	stream := &domain.Stream{PlanID: plan.ID, Title: "strict stream", FileScope: []string{"**/*.go"}, Status: domain.StreamStatusMergeReady}
+	if err := f.streams.Create(ctx, stream); err != nil {
+		t.Fatalf("Create stream: %v", err)
+	}
+	entry := &domain.MergeEntry{ProjectID: "test-project", StreamID: stream.ID, PlanID: plan.ID, ObjectiveID: obj.ID, Branch: "conflict-branch"}
+	if err := f.queue.Enqueue(ctx, entry); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	decision, attempt, err := f.processor.recordRecoveryAttempt(ctx, entry, domain.FailureMergeConflict, "merge conflict")
+	if err != nil {
+		t.Fatalf("recordRecoveryAttempt first: %v", err)
+	}
+	if decision.Action != domain.RecoveryActionRetryMerge {
+		t.Fatalf("first action = %q, want %q", decision.Action, domain.RecoveryActionRetryMerge)
+	}
+	if attempt.MaxAttempts != 2 {
+		t.Fatalf("max_attempts = %d, want 2", attempt.MaxAttempts)
+	}
+
+	decision, attempt, err = f.processor.recordRecoveryAttempt(ctx, entry, domain.FailureMergeConflict, "merge conflict")
+	if err != nil {
+		t.Fatalf("recordRecoveryAttempt second: %v", err)
+	}
+	if decision.Action != domain.RecoveryActionAskHumanThenResume {
+		t.Fatalf("second action = %q, want %q", decision.Action, domain.RecoveryActionAskHumanThenResume)
+	}
+	if attempt.Status != domain.AttemptStatusBlocked {
+		t.Fatalf("second status = %q, want %q", attempt.Status, domain.AttemptStatusBlocked)
+	}
+}
+
+func contains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCheckObjectiveComplete(t *testing.T) {

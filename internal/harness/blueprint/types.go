@@ -1,6 +1,10 @@
 package blueprint
 
-import "github.com/syndg/tack/internal/harness/tools"
+import (
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/tools"
+	"github.com/syndg/tack/internal/recovery"
+)
 
 // StepType identifies the kind of step in a blueprint.
 type StepType string
@@ -23,11 +27,36 @@ const (
 
 // Blueprint defines a workflow as a sequence of steps.
 type Blueprint struct {
-	ID          string `yaml:"id" json:"id"`
-	Name        string `yaml:"name,omitempty" json:"name,omitempty"`
-	Description string `yaml:"description,omitempty" json:"description,omitempty"`
-	Default     bool   `yaml:"default,omitempty" json:"default,omitempty"`
-	Steps       []Step `yaml:"steps" json:"steps"`
+	ID          string       `yaml:"id" json:"id"`
+	Name        string       `yaml:"name,omitempty" json:"name,omitempty"`
+	Description string       `yaml:"description,omitempty" json:"description,omitempty"`
+	Default     bool         `yaml:"default,omitempty" json:"default,omitempty"`
+	Retry       *RetryConfig `yaml:"retry,omitempty" json:"retry,omitempty"`
+	Steps       []Step       `yaml:"steps" json:"steps"`
+}
+
+// RetryConfig is the narrow top-level retry surface for a blueprint.
+type RetryConfig struct {
+	Profile            recovery.Profile      `yaml:"profile,omitempty" json:"profile,omitempty"`
+	DefaultMaxAttempts int                   `yaml:"default_max_attempts,omitempty" json:"default_max_attempts,omitempty"`
+	DefaultOnExhausted domain.ExhaustionMode `yaml:"default_on_exhausted,omitempty" json:"default_on_exhausted,omitempty"`
+}
+
+// Any reports whether at least one retry field has been set.
+func (r *RetryConfig) Any() bool {
+	return r != nil && (r.Profile != "" || r.DefaultMaxAttempts != 0 || r.DefaultOnExhausted != "")
+}
+
+// StepRetryConfig is the narrow per-step retry override surface.
+type StepRetryConfig struct {
+	MaxAttempts       int                   `yaml:"max_attempts,omitempty" json:"max_attempts,omitempty"`
+	OnExhausted       domain.ExhaustionMode `yaml:"on_exhausted,omitempty" json:"on_exhausted,omitempty"`
+	HumanGuidanceMode string                `yaml:"human_guidance_mode,omitempty" json:"human_guidance_mode,omitempty"`
+}
+
+// Any reports whether at least one retry override has been set.
+func (r *StepRetryConfig) Any() bool {
+	return r != nil && (r.MaxAttempts != 0 || r.OnExhausted != "" || r.HumanGuidanceMode != "")
 }
 
 // MessageRequests controls which delivery messages an agent should generate.
@@ -76,7 +105,7 @@ type Step struct {
 	Description       string            `yaml:"description,omitempty" json:"description,omitempty"`
 	Model             string            `yaml:"model,omitempty" json:"model,omitempty"`
 	Next              string            `yaml:"next,omitempty" json:"next,omitempty"`
-	Retry             int               `yaml:"retry,omitempty" json:"retry,omitempty"`
+	Retry             *StepRetryConfig  `yaml:"retry,omitempty" json:"retry,omitempty"`
 	Optional          bool              `yaml:"optional,omitempty" json:"optional,omitempty"`
 	Tools             *tools.ToolScope  `yaml:"tools,omitempty" json:"tools,omitempty"`
 	Commit            CommitMode        `yaml:"commit,omitempty" json:"commit,omitempty"`
@@ -86,6 +115,14 @@ type Step struct {
 	MaxFixIterations  int               `yaml:"max_fix_iterations,omitempty" json:"max_fix_iterations,omitempty"`
 	OnWorkItemFailure string            `yaml:"on_work_item_failure,omitempty" json:"on_work_item_failure,omitempty"` // "escalate" | "fail" (blueprint_ref only)
 	Escalation        *EscalationConfig `yaml:"escalation,omitempty" json:"escalation,omitempty"`                     // blueprint_ref only
+}
+
+// MaxAttempts returns the configured per-step retry budget.
+func (s *Step) MaxAttempts() int {
+	if s == nil || s.Retry == nil {
+		return 0
+	}
+	return s.Retry.MaxAttempts
 }
 
 // EffectiveCommitMode returns the commit mode for this step, defaulting to

@@ -111,7 +111,7 @@ func TestAdvance_RetryOnFailure(t *testing.T) {
 		ID:   "retry-bp",
 		Name: "Retry workflow",
 		Steps: []Step{
-			{ID: "s1", Type: StepTypeAgent, Role: "dev", Retry: 2},
+			{ID: "s1", Type: StepTypeAgent, Role: "dev", Retry: &StepRetryConfig{MaxAttempts: 2}},
 		},
 	}
 	reg := newTestRegistry(t, bp)
@@ -238,7 +238,7 @@ func TestAdvance_OnFailRoutesBackToAgentWithFixContext(t *testing.T) {
 		Name: "fix-loop-bp",
 		Steps: []Step{
 			{ID: "fix", Type: StepTypeAgent, Role: "builder", Next: "lint"},
-			{ID: "lint", Type: StepTypeDeterministic, Action: "run_quality_gates", Retry: 1, OnFail: "fix", MaxFixIterations: 2},
+			{ID: "lint", Type: StepTypeDeterministic, Action: "run_quality_gates", Retry: &StepRetryConfig{MaxAttempts: 1}, OnFail: "fix", MaxFixIterations: 2},
 		},
 	}
 	reg := newTestRegistry(t, bp)

@@ -2,7 +2,10 @@ package events
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"strings"
+	"sync/atomic"
 
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
@@ -11,7 +14,8 @@ import (
 // PersistentBus wraps Bus to persist events to the database before broadcasting.
 type PersistentBus struct {
 	*Bus
-	store *db.EventStore
+	store           *db.EventStore
+	persistDisabled atomic.Bool
 }
 
 // NewPersistentBus creates a bus that persists events via the EventStore
@@ -26,11 +30,31 @@ func NewPersistentBus(store *db.EventStore, logger *slog.Logger) *PersistentBus 
 // Publish persists the event to the database and then broadcasts it
 // to all subscribers. Database errors are logged but do not prevent broadcasting.
 func (pb *PersistentBus) Publish(event domain.Event) {
-	if pb.store != nil {
+	if pb.store != nil && !pb.persistDisabled.Load() {
 		if err := pb.store.Insert(context.Background(), &event); err != nil {
-			pb.logger.Error("failed to persist event", "type", event.Type, "error", err)
+			if isExpectedEventPersistenceError(err) {
+				pb.logger.Debug("skipping event persistence during shutdown", "type", event.Type, "error", err)
+			} else {
+				pb.logger.Error("failed to persist event", "type", event.Type, "error", err)
+			}
 		}
 	}
 
 	pb.Bus.Publish(event)
+}
+
+// Shutdown disables event persistence while keeping in-memory delivery active.
+func (pb *PersistentBus) Shutdown() {
+	pb.persistDisabled.Store(true)
+}
+
+func isExpectedEventPersistenceError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "context canceled") || strings.Contains(msg, "database is closed")
 }

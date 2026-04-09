@@ -66,6 +66,7 @@ type ProjectContextManager struct {
 	plans        *db.PlanStore
 	streams      *db.StreamStore
 	runs         *db.RunStore
+	attempts     *db.AttemptStore
 	mergeQueue   *db.MergeQueueStore
 	eventBus     *events.PersistentBus
 	mailBroker   *mailservice.Broker
@@ -88,6 +89,7 @@ func newProjectContextManager(
 	planStore *db.PlanStore,
 	streamStore *db.StreamStore,
 	runStore *db.RunStore,
+	attemptStore *db.AttemptStore,
 	mergeQueueStore *db.MergeQueueStore,
 	eventBus *events.PersistentBus,
 	mailBroker *mailservice.Broker,
@@ -113,6 +115,7 @@ func newProjectContextManager(
 		plans:          planStore,
 		streams:        streamStore,
 		runs:           runStore,
+		attempts:       attemptStore,
 		mergeQueue:     mergeQueueStore,
 		eventBus:       eventBus,
 		mailBroker:     mailBroker,
@@ -287,6 +290,9 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 		m.mergeQueue,
 		m.streams,
 		m.plans,
+		m.objectives,
+		bpEngine,
+		m.attempts,
 		merge.NewGitMerger(m.logger),
 		merge.NewDiffExtractor(m.logger),
 		gates.NewRunner(m.logger),
@@ -326,6 +332,7 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 		GitAuthorName:      cfg.Git.AuthorName,
 		GitAuthorEmail:     cfg.Git.AuthorEmail,
 		Runs:               m.runs,
+		Attempts:           m.attempts,
 		Objectives:         m.objectives,
 		Plans:              m.plans,
 		Streams:            m.streams,

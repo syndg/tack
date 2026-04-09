@@ -243,8 +243,10 @@ type Command struct {
 
 // BlockedState describes why a run is blocked.
 type BlockedState struct {
-	Kind   string `json:"kind"`
-	Reason string `json:"reason,omitempty"`
+	Kind      string `json:"kind"`
+	Reason    string `json:"reason,omitempty"`
+	StreamID  string `json:"stream_id,omitempty"`
+	AttemptID string `json:"attempt_id,omitempty"`
 }
 
 // Outcome describes the terminal result of a run.
@@ -275,6 +277,74 @@ type Snapshot struct {
 	UpdatedAt   time.Time        `json:"updated_at"`
 }
 
+// Recovery and retry
+
+type FailureKind string
+
+const (
+	FailureAgentRuntimeTransient FailureKind = "agent_runtime_transient"
+	FailureAgentOutput           FailureKind = "agent_output_failure"
+	FailureQualityGate           FailureKind = "quality_gate_failure"
+	FailureReviewRejection       FailureKind = "review_rejection"
+	FailureSandbox               FailureKind = "sandbox_failure"
+	FailureProviderRateLimit     FailureKind = "provider_rate_limit"
+	FailureMergeConflict         FailureKind = "merge_conflict"
+	FailurePostMergeGate         FailureKind = "post_merge_gate_failure"
+	FailureDeterministicStep     FailureKind = "deterministic_step_failure"
+)
+
+type RecoveryAction string
+
+const (
+	RecoveryActionRetrySameStep      RecoveryAction = "retry_same_step"
+	RecoveryActionRerunPreviousAgent RecoveryAction = "rerun_previous_agent"
+	RecoveryActionRestartStream      RecoveryAction = "restart_stream"
+	RecoveryActionRetryMerge         RecoveryAction = "retry_merge"
+	RecoveryActionAskHumanThenResume RecoveryAction = "ask_human_then_resume"
+	RecoveryActionFailTerminal       RecoveryAction = "fail_terminal"
+)
+
+type ExhaustionMode string
+
+const (
+	ExhaustionAskHuman ExhaustionMode = "ask_human"
+	ExhaustionEscalate ExhaustionMode = "escalate"
+	ExhaustionFail     ExhaustionMode = "fail"
+)
+
+type AttemptStatus string
+
+const (
+	AttemptStatusRecorded  AttemptStatus = "recorded"
+	AttemptStatusRunning   AttemptStatus = "running"
+	AttemptStatusBlocked   AttemptStatus = "blocked"
+	AttemptStatusSucceeded AttemptStatus = "succeeded"
+	AttemptStatusFailed    AttemptStatus = "failed"
+	AttemptStatusExhausted AttemptStatus = "exhausted"
+)
+
+// Attempt is an append-only recovery ledger record.
+type Attempt struct {
+	ID                 string         `json:"id"`
+	ProjectID          string         `json:"project_id"`
+	ObjectiveID        string         `json:"objective_id"`
+	RunID              string         `json:"run_id,omitempty"`
+	ExecutionID        string         `json:"execution_id,omitempty"`
+	StreamID           string         `json:"stream_id,omitempty"`
+	StepID             string         `json:"step_id,omitempty"`
+	MergeEntryID       string         `json:"merge_entry_id,omitempty"`
+	AttemptNumber      int            `json:"attempt_number"`
+	MaxAttempts        int            `json:"max_attempts"`
+	FailureKind        FailureKind    `json:"failure_kind"`
+	Action             RecoveryAction `json:"action"`
+	Status             AttemptStatus  `json:"status"`
+	ErrorSummary       string         `json:"error_summary,omitempty"`
+	FixContext         string         `json:"fix_context,omitempty"`
+	HumanGuidance      string         `json:"human_guidance,omitempty"`
+	TriggeredByAttempt string         `json:"triggered_by_attempt_id,omitempty"`
+	CreatedAt          time.Time      `json:"created_at"`
+}
+
 // Events
 
 type EventType string
@@ -295,6 +365,9 @@ const (
 	EventStreamReady      EventType = "stream.ready"
 	EventExecutionStarted EventType = "execution.started"
 	EventAgentActivity    EventType = "agent.activity"
+	EventRecoveryAttempt  EventType = "recovery.attempt"
+	EventRecoveryBlocked  EventType = "recovery.blocked"
+	EventRecoveryResumed  EventType = "recovery.resumed"
 )
 
 type Event struct {

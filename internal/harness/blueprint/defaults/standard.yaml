@@ -3,6 +3,9 @@ name: Standard workflow
 default: true
 description: Plan, build, review, merge, and open a PR
 
+retry:
+  profile: balanced
+
 steps:
   - id: plan
     type: agent

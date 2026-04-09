@@ -37,6 +37,7 @@ type Daemon struct {
 	plans           *db.PlanStore
 	streams         *db.StreamStore
 	runStore        *db.RunStore
+	attempts        *db.AttemptStore
 	mergeQueue      *db.MergeQueueStore
 	mergeQueueStore *db.MergeQueueStore
 
@@ -79,6 +80,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	runStore := db.NewRunStore(conn)
+	attemptStore := db.NewAttemptStore(conn)
 	mergeQueueStore := db.NewMergeQueueStore(conn)
 	eventBus := events.NewPersistentBus(eventStore, logger)
 
@@ -111,6 +113,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 		planStore,
 		streamStore,
 		runStore,
+		attemptStore,
 		mergeQueueStore,
 		eventBus,
 		mailBroker,
@@ -132,6 +135,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 		plans:           planStore,
 		streams:         streamStore,
 		runStore:        runStore,
+		attempts:        attemptStore,
 		mergeQueue:      mergeQueueStore,
 		mergeQueueStore: mergeQueueStore,
 		eventBus:        eventBus,
@@ -188,6 +192,9 @@ func deriveDaemonURL(cfg *config.Config, logger *slog.Logger) string {
 
 func (d *Daemon) Shutdown(ctx context.Context) error {
 	d.logger.Info("shutting down daemon")
+	if d.eventBus != nil {
+		d.eventBus.Shutdown()
+	}
 	if d.cancel != nil {
 		d.cancel()
 	}

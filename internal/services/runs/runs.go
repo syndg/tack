@@ -197,6 +197,7 @@ type Config struct {
 	MergeProcessor MergeOrchestrator
 
 	Runs       *db.RunStore
+	Attempts   *db.AttemptStore
 	Objectives *db.ObjectiveStore
 	Plans      *db.PlanStore
 	Streams    *db.StreamStore
@@ -210,6 +211,7 @@ type Config struct {
 // Service implements the Runs boundary.
 type Service struct {
 	runs       *db.RunStore
+	attempts   *db.AttemptStore
 	objectives *db.ObjectiveStore
 	plans      *db.PlanStore
 	streams    *db.StreamStore
@@ -280,9 +282,9 @@ func New(cfg Config) (*Service, error) {
 
 		// Step handlers for deterministic and human blueprint steps.
 		handlers := dispatch.NewHandlers(
-			scheduler, cfg.GateRunner, cfg.Lifecycle, cfg.MergeProcessor,
+			scheduler, cfg.GateRunner, cfg.Lifecycle, cfg.MergeProcessor, cfg.Engine,
 			cfg.AgentRuntime,
-			cfg.Plans, cfg.Streams, cfg.Objectives, cfg.Executions, cfg.Agents,
+			cfg.Plans, cfg.Streams, cfg.Objectives, cfg.Executions, cfg.Agents, cfg.Attempts,
 			cfg.SandboxProvider, cfg.EventBus, cfg.Observability, cfg.BaseBranch, cfg.Credentials, cfg.RuntimeAuth, cfg.DeterministicModel, logger,
 		)
 		cfg.Engine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
@@ -302,6 +304,7 @@ func New(cfg Config) (*Service, error) {
 			MergeEnqueuer: cfg.MergeProcessor,
 			PlanCreator:   cfg.PlanCreator,
 			MailSender:    cfg.MailSender,
+			Attempts:      cfg.Attempts,
 			Executions:    cfg.Executions,
 			Objectives:    cfg.Objectives,
 			Plans:         cfg.Plans,
@@ -318,6 +321,7 @@ func New(cfg Config) (*Service, error) {
 
 	return &Service{
 		runs:           cfg.Runs,
+		attempts:       cfg.Attempts,
 		objectives:     cfg.Objectives,
 		plans:          cfg.Plans,
 		streams:        cfg.Streams,
@@ -705,10 +709,18 @@ func (s *Service) recoverRuns(ctx context.Context) {
 		case domain.ObjectiveStatusCompleted:
 			newStatus = domain.RunStatusCompleted
 		case domain.ObjectiveStatusPartial:
-			newStatus = domain.RunStatusPartial
+			if s.hasActiveRecoveryBlock(ctx, run.ObjectiveID) {
+				newStatus = domain.RunStatusBlocked
+			} else {
+				newStatus = domain.RunStatusPartial
+			}
 		case domain.ObjectiveStatusFailed:
 			newStatus = domain.RunStatusFailed
 		case domain.ObjectiveStatusExecuting:
+			if s.hasActiveRecoveryBlock(ctx, run.ObjectiveID) {
+				newStatus = domain.RunStatusBlocked
+				break
+			}
 			// Coordinator's recoverExecutions handles resuming the execution.
 			// Check if there's a waiting_human execution that should block the run.
 			if exec, err := s.executions.GetByObjective(ctx, run.ObjectiveID); err == nil {
@@ -772,7 +784,11 @@ func (s *Service) syncRunStatus(ctx context.Context, event domain.Event) {
 	case domain.ObjectiveStatusCompleted:
 		runStatus = domain.RunStatusCompleted
 	case domain.ObjectiveStatusPartial:
-		runStatus = domain.RunStatusPartial
+		if s.hasActiveRecoveryBlock(ctx, event.Objective) {
+			runStatus = domain.RunStatusBlocked
+		} else {
+			runStatus = domain.RunStatusPartial
+		}
 	case domain.ObjectiveStatusFailed:
 		runStatus = domain.RunStatusFailed
 	default:
@@ -820,10 +836,16 @@ func (s *Service) syncRunStatus(ctx context.Context, event domain.Event) {
 func (s *Service) resolveBlocked(ctx context.Context, run *domain.Run) *domain.BlockedState {
 	exec, err := s.executions.GetByObjective(ctx, run.ObjectiveID)
 	if err != nil {
+		if block, ok := s.activeRecoveryBlock(ctx, run.ObjectiveID); ok {
+			return block
+		}
 		return &domain.BlockedState{Kind: "unknown"}
 	}
 	if exec.Status == "waiting_human" {
 		return &domain.BlockedState{Kind: "human_approval"}
+	}
+	if block, ok := s.activeRecoveryBlock(ctx, run.ObjectiveID); ok {
+		return block
 	}
 	return &domain.BlockedState{Kind: "unknown"}
 }

@@ -187,6 +187,45 @@ func TestBuildOverlay_MessageMetadataInstructions(t *testing.T) {
 	}
 }
 
+func TestBuildOverlay_RetryContext(t *testing.T) {
+	input := OverlayInput{
+		AgentName: "builder-1",
+		Role:      builderRole(),
+		Objective: testObjective(),
+		RetryContext: &RetryContext{
+			AttemptNumber: 2,
+			MaxAttempts:   3,
+			FailureKind:   domain.FailureQualityGate,
+			LastError:     "gate failed",
+			HumanGuidance: "keep the API shape unchanged",
+		},
+	}
+
+	result := BuildOverlay(input)
+
+	for _, want := range []string{"## Retry Context", "Attempt: 2/3", "Failure kind: quality_gate_failure", "gate failed", "keep the API shape unchanged"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("overlay missing %q\n%s", want, result)
+		}
+	}
+}
+
+func TestBuildOverlay_ReviewerOutputInstructions(t *testing.T) {
+	input := OverlayInput{
+		AgentName: "reviewer-auth",
+		Role:      DefaultRoles()["reviewer"],
+		Objective: &domain.Objective{Description: "review auth flow"},
+		Stream:    &domain.Stream{Title: "auth stream"},
+	}
+
+	result := BuildOverlay(input)
+	for _, want := range []string{"## Review Output", "REVIEW_DECISION: approve", "REVIEW_DECISION: reject", "REVIEW_FEEDBACK:"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("overlay missing %q\n%s", want, result)
+		}
+	}
+}
+
 func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 	obj := testObjective()
 	result := BuildPlannerOverlay(obj, "use bun for JS")

@@ -163,7 +163,7 @@ func (e *Engine) Advance(ctx context.Context, exec *Execution) (*Execution, erro
 		state.Error = result.Error
 		state.Output = result.Output
 		state.Metadata = cloneMetadata(result.Metadata)
-		if state.RetryCount < step.Retry {
+		if state.RetryCount < step.MaxAttempts() {
 			state.RetryCount++
 			state.Status = StepStatusPending
 			exec.UpdatedAt = time.Now()

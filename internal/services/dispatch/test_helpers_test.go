@@ -25,6 +25,7 @@ type dispatchTestEnv struct {
 	plans      *db.PlanStore
 	streams    *db.StreamStore
 	agents     *db.AgentStore
+	attempts   *db.AttemptStore
 	eventBus   *events.PersistentBus
 	lifecycle  *lifecycle.Manager
 	logger     *slog.Logger
@@ -55,6 +56,7 @@ func setupDispatchEnv(t *testing.T) *dispatchTestEnv {
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	agentStore := db.NewAgentStore(conn)
+	attemptStore := db.NewAttemptStore(conn)
 	eventBus := events.NewPersistentBus(nil, slog.Default())
 	logger := slog.Default()
 
@@ -76,6 +78,7 @@ func setupDispatchEnv(t *testing.T) *dispatchTestEnv {
 		lifecycle:     lm,
 		mergeEnqueuer: &stubMergeEnqueuer{},
 		planCreator:   &stubPlanCreator{},
+		attempts:      attemptStore,
 		executions:    executionStore,
 		objectives:    objectiveStore,
 		plans:         planStore,
@@ -108,6 +111,7 @@ func setupDispatchEnv(t *testing.T) *dispatchTestEnv {
 		plans:      planStore,
 		streams:    streamStore,
 		agents:     agentStore,
+		attempts:   attemptStore,
 		eventBus:   eventBus,
 		lifecycle:  lm,
 		logger:     logger,

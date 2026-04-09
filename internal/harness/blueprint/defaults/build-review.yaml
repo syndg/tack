@@ -2,6 +2,9 @@ id: build-review
 name: Build and review
 description: "Execute one work item: build, validate, review, and mark ready for merge"
 
+retry:
+  profile: self_healing
+
 steps:
   - id: build
     type: agent
@@ -15,7 +18,8 @@ steps:
   - id: lint
     type: deterministic
     action: run_quality_gates
-    retry: 2
+    retry:
+      max_attempts: 2
     on_fail: build
     max_fix_iterations: 3
     next: review
@@ -25,6 +29,8 @@ steps:
     role: reviewer
     description: Review the implementation
     commit: none
+    on_fail: build
+    max_fix_iterations: 3
     next: merge_ready
 
   - id: merge_ready

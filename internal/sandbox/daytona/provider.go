@@ -236,6 +236,7 @@ func (p *Provider) Get(ctx context.Context, id string) (sandbox.Sandbox, error) 
 
 	sb = &DaytonaSandbox{
 		sandbox: dSandbox,
+		workDir: p.cfg.RepoPath,
 		logger:  p.logger,
 	}
 

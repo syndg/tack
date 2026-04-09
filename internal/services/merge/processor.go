@@ -12,9 +12,11 @@ import (
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/harness/gates"
 	"github.com/syndg/tack/internal/naming"
 	"github.com/syndg/tack/internal/observability"
+	"github.com/syndg/tack/internal/recovery"
 	"github.com/syndg/tack/internal/sandbox"
 	events "github.com/syndg/tack/internal/services/events"
 )
@@ -25,6 +27,9 @@ type Processor struct {
 	queue       *db.MergeQueueStore
 	streams     *db.StreamStore
 	plans       *db.PlanStore
+	objectives  *db.ObjectiveStore
+	engine      *blueprint.Engine
+	attempts    *db.AttemptStore
 	merger      *GitMerger
 	differ      *DiffExtractor
 	gateRunner  *gates.Runner
@@ -45,6 +50,9 @@ func NewProcessor(
 	queue *db.MergeQueueStore,
 	streams *db.StreamStore,
 	plans *db.PlanStore,
+	objectives *db.ObjectiveStore,
+	engine *blueprint.Engine,
+	attempts *db.AttemptStore,
 	merger *GitMerger,
 	differ *DiffExtractor,
 	gateRunner *gates.Runner,
@@ -63,6 +71,9 @@ func NewProcessor(
 		queue:       queue,
 		streams:     streams,
 		plans:       plans,
+		objectives:  objectives,
+		engine:      engine,
+		attempts:    attempts,
 		merger:      merger,
 		differ:      differ,
 		gateRunner:  gateRunner,
@@ -328,22 +339,7 @@ func (p *Processor) processEntry(ctx context.Context, entry *domain.MergeEntry) 
 	if result.Success {
 		p.handleMergeSuccess(ctx, sb, entry, result)
 	} else {
-		// All tiers exhausted — mark as conflict.
-		if err := p.queue.UpdateStatus(ctx, entry.ID, domain.MergeStatusConflict, result.Tier, result.Error, ""); err != nil {
-			p.logger.Error("updating entry to conflict", "entry", entry.ID, "error", err)
-		}
-		// Move stream out of "merging" so it doesn't orphan in status APIs.
-		if err := p.streams.UpdateStatus(ctx, entry.StreamID, domain.StreamStatusFailed); err != nil {
-			p.logger.Error("updating stream to failed after conflict", "stream", entry.StreamID, "error", err)
-		}
-		p.publishMergeFailed(entry, result.Error)
-		p.logger.Warn("merge conflict, all tiers exhausted",
-			"entry", entry.ID,
-			"stream", entry.StreamID,
-			"branch", entry.Branch,
-			"tier", result.Tier,
-			"conflicts", result.Conflicts,
-		)
+		p.handleMergeConflict(ctx, entry, result)
 	}
 
 	// Check if all streams for the objective are merged.
@@ -359,13 +355,13 @@ func (p *Processor) handleMergeSuccess(ctx context.Context, sb sandbox.Sandbox, 
 	if err != nil {
 		p.revertMerge(ctx, sb, entry)
 		errMsg := fmt.Sprintf("running post-merge gates: %s", err)
-		p.failEntry(ctx, entry, result.Tier, errMsg)
+		p.handlePostMergeGateFailure(ctx, entry, result.Tier, errMsg)
 		return
 	}
 
 	if gateResult != nil && !gateResult.AllPassed {
 		p.revertMerge(ctx, sb, entry)
-		p.failEntry(ctx, entry, result.Tier, "post-merge quality gates failed")
+		p.handlePostMergeGateFailure(ctx, entry, result.Tier, summarizePostMergeGateFailure(gateResult))
 		return
 	}
 
@@ -439,6 +435,65 @@ func (p *Processor) revertMerge(ctx context.Context, sb sandbox.Sandbox, entry *
 	p.logger.Error("reverting merge", "entry", entry.ID, "error", lastErr)
 }
 
+func (p *Processor) handleMergeConflict(ctx context.Context, entry *domain.MergeEntry, result *MergeResult) {
+	decision, attempt, err := p.recordRecoveryAttempt(ctx, entry, domain.FailureMergeConflict, result.Error)
+	if err != nil {
+		p.logger.Error("recording merge conflict recovery attempt", "entry", entry.ID, "error", err)
+	}
+
+	if decision.Action == domain.RecoveryActionRetryMerge {
+		if err := p.queue.UpdateStatus(ctx, entry.ID, domain.MergeStatusPending, result.Tier, result.Error, ""); err != nil {
+			p.logger.Error("requeueing merge entry after conflict", "entry", entry.ID, "error", err)
+			p.failEntry(ctx, entry, result.Tier, result.Error)
+			return
+		}
+		if err := p.streams.UpdateStatus(ctx, entry.StreamID, domain.StreamStatusMergeReady); err != nil {
+			p.logger.Error("resetting stream to merge_ready after conflict", "stream", entry.StreamID, "error", err)
+		}
+		p.logger.Warn("merge conflict scheduled for retry",
+			"entry", entry.ID,
+			"stream", entry.StreamID,
+			"branch", entry.Branch,
+			"tier", result.Tier,
+			"attempt", attempt.AttemptNumber,
+			"max_attempts", attempt.MaxAttempts,
+			"conflicts", result.Conflicts,
+		)
+		return
+	}
+
+	if err := p.queue.UpdateStatus(ctx, entry.ID, domain.MergeStatusConflict, result.Tier, result.Error, ""); err != nil {
+		p.logger.Error("updating entry to conflict", "entry", entry.ID, "error", err)
+	}
+	if err := p.streams.UpdateStatus(ctx, entry.StreamID, domain.StreamStatusFailed); err != nil {
+		p.logger.Error("updating stream to failed after conflict", "stream", entry.StreamID, "error", err)
+	}
+	p.publishMergeFailed(entry, result.Error)
+	if attempt != nil && attempt.Status == domain.AttemptStatusBlocked {
+		p.publishRecoveryBlocked(entry, attempt)
+	}
+	p.logger.Warn("merge conflict exhausted",
+		"entry", entry.ID,
+		"stream", entry.StreamID,
+		"branch", entry.Branch,
+		"tier", result.Tier,
+		"attempt", attemptNumber(attempt),
+		"max_attempts", maxAttempts(attempt),
+		"conflicts", result.Conflicts,
+	)
+}
+
+func (p *Processor) handlePostMergeGateFailure(ctx context.Context, entry *domain.MergeEntry, tier int, errMsg string) {
+	_, attempt, err := p.recordRecoveryAttempt(ctx, entry, domain.FailurePostMergeGate, errMsg)
+	if err != nil {
+		p.logger.Error("recording post-merge gate recovery attempt", "entry", entry.ID, "error", err)
+	}
+	p.failEntry(ctx, entry, tier, errMsg)
+	if attempt != nil && attempt.Status == domain.AttemptStatusBlocked {
+		p.publishRecoveryBlocked(entry, attempt)
+	}
+}
+
 // failEntry marks a merge entry as failed, transitions the stream out of
 // "merging", and publishes the failure event.
 func (p *Processor) failEntry(ctx context.Context, entry *domain.MergeEntry, tier int, errMsg string) {
@@ -449,6 +504,151 @@ func (p *Processor) failEntry(ctx context.Context, entry *domain.MergeEntry, tie
 		p.logger.Error("updating stream to failed after merge failure", "stream", entry.StreamID, "error", err)
 	}
 	p.publishMergeFailed(entry, errMsg)
+}
+
+func (p *Processor) recordRecoveryAttempt(ctx context.Context, entry *domain.MergeEntry, kind domain.FailureKind, errMsg string) (recovery.Decision, *domain.Attempt, error) {
+	policy := recovery.ResolvePolicy(p.retryConfigForEntry(ctx, entry), recovery.StepOverride{})
+	attemptNumber := 1
+	if p.attempts != nil {
+		attempts, err := p.attempts.ListByStream(ctx, entry.StreamID)
+		if err != nil {
+			return recovery.Decision{}, nil, fmt.Errorf("listing prior attempts: %w", err)
+		}
+		for _, attempt := range attempts {
+			if attempt.MergeEntryID == entry.ID {
+				attemptNumber++
+			}
+		}
+	}
+
+	decision := recovery.Decide(kind, attemptNumber, policy)
+	status := domain.AttemptStatusRecorded
+	if decision.Action == domain.RecoveryActionAskHumanThenResume {
+		status = domain.AttemptStatusBlocked
+	}
+
+	attempt := &domain.Attempt{
+		ProjectID:     entry.ProjectID,
+		ObjectiveID:   entry.ObjectiveID,
+		StreamID:      entry.StreamID,
+		MergeEntryID:  entry.ID,
+		AttemptNumber: attemptNumber,
+		MaxAttempts:   decision.Policy.MaxAttempts,
+		FailureKind:   kind,
+		Action:        decision.Action,
+		Status:        status,
+		ErrorSummary:  errMsg,
+	}
+	if p.attempts != nil {
+		if err := p.attempts.Create(ctx, attempt); err != nil {
+			return decision, nil, fmt.Errorf("creating attempt: %w", err)
+		}
+	}
+	p.publishRecoveryAttempt(entry, attempt, decision.Reason)
+	return decision, attempt, nil
+}
+
+func (p *Processor) retryConfigForEntry(ctx context.Context, entry *domain.MergeEntry) recovery.Config {
+	if p.objectives == nil || p.engine == nil || entry == nil || entry.ObjectiveID == "" {
+		return recovery.Config{}
+	}
+	obj, err := p.objectives.Get(ctx, entry.ObjectiveID)
+	if err != nil || obj == nil || obj.Blueprint == "" {
+		return recovery.Config{}
+	}
+	bp, ok := p.engine.GetBlueprint(obj.Blueprint)
+	if !ok || bp == nil || bp.Retry == nil {
+		return recovery.Config{}
+	}
+	return recovery.Config{
+		Profile:            bp.Retry.Profile,
+		DefaultMaxAttempts: bp.Retry.DefaultMaxAttempts,
+		DefaultOnExhausted: bp.Retry.DefaultOnExhausted,
+	}
+}
+
+func (p *Processor) publishRecoveryAttempt(entry *domain.MergeEntry, attempt *domain.Attempt, reason string) {
+	if p.obs == nil || attempt == nil {
+		return
+	}
+	p.obs.RecordMilestone(observability.Milestone{
+		EventType:   domain.EventRecoveryAttempt,
+		ProjectID:   entry.ProjectID,
+		ObjectiveID: entry.ObjectiveID,
+		StreamID:    entry.StreamID,
+		Status:      string(attempt.Status),
+		Details: map[string]any{
+			"attempt_id":     attempt.ID,
+			"merge_entry_id": entry.ID,
+			"branch":         entry.Branch,
+			"attempt":        attempt.AttemptNumber,
+			"max_attempts":   attempt.MaxAttempts,
+			"failure_kind":   attempt.FailureKind,
+			"action":         attempt.Action,
+			"error":          attempt.ErrorSummary,
+			"reason":         reason,
+		},
+	})
+}
+
+func (p *Processor) publishRecoveryBlocked(entry *domain.MergeEntry, attempt *domain.Attempt) {
+	if p.obs == nil || attempt == nil {
+		return
+	}
+	p.obs.RecordMilestone(observability.Milestone{
+		EventType:   domain.EventRecoveryBlocked,
+		ProjectID:   entry.ProjectID,
+		ObjectiveID: entry.ObjectiveID,
+		StreamID:    entry.StreamID,
+		Status:      string(attempt.Status),
+		Details: map[string]any{
+			"attempt_id":     attempt.ID,
+			"merge_entry_id": entry.ID,
+			"branch":         entry.Branch,
+			"attempt":        attempt.AttemptNumber,
+			"max_attempts":   attempt.MaxAttempts,
+			"failure_kind":   attempt.FailureKind,
+			"action":         attempt.Action,
+			"error":          attempt.ErrorSummary,
+		},
+	})
+}
+
+func summarizePostMergeGateFailure(result *gates.RunResult) string {
+	if result == nil || result.AllPassed {
+		return "post-merge quality gates failed"
+	}
+	for _, gate := range result.Results {
+		if gate.Passed {
+			continue
+		}
+		msg := strings.TrimSpace(gate.Stderr)
+		if msg == "" {
+			msg = strings.TrimSpace(gate.Stdout)
+		}
+		if msg == "" && gate.ExitCode != 0 {
+			msg = fmt.Sprintf("exit code %d", gate.ExitCode)
+		}
+		if msg == "" {
+			msg = "post-merge quality gates failed"
+		}
+		return fmt.Sprintf("%s: %s", gate.Gate.Name, msg)
+	}
+	return "post-merge quality gates failed"
+}
+
+func attemptNumber(attempt *domain.Attempt) int {
+	if attempt == nil {
+		return 0
+	}
+	return attempt.AttemptNumber
+}
+
+func maxAttempts(attempt *domain.Attempt) int {
+	if attempt == nil {
+		return 0
+	}
+	return attempt.MaxAttempts
 }
 
 // getStreamBranch determines the git branch name for a stream.

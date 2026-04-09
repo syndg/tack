@@ -24,17 +24,18 @@ import (
 
 // SpawnRequest describes what agent to create.
 type SpawnRequest struct {
-	Objective   *domain.Objective
-	Stream      *domain.Stream             // nil for planner agents
-	Role        string                     // "planner", "lead", "builder", "reviewer", "scout"
-	Model       string                     // model override for this spawned agent
-	TaskSpec    string                     // task description or spec content
-	ParentAgent string                     // name of parent agent (empty for top-level)
-	Guidance    string                     // project-level guidance from config
-	CommitMode  string                     // "auto", "agent", "none" — controls commit behavior
-	Messages    *blueprint.MessageRequests // delivery messages the agent should generate
-	ExecutionID string                     // sub-execution ID (used to label sandbox for branch lookup)
-	FixContext  string                     // quality gate errors from a previous fix-loop iteration
+	Objective    *domain.Objective
+	Stream       *domain.Stream             // nil for planner agents
+	Role         string                     // "planner", "lead", "builder", "reviewer", "scout"
+	Model        string                     // model override for this spawned agent
+	TaskSpec     string                     // task description or spec content
+	ParentAgent  string                     // name of parent agent (empty for top-level)
+	Guidance     string                     // project-level guidance from config
+	CommitMode   string                     // "auto", "agent", "none" — controls commit behavior
+	Messages     *blueprint.MessageRequests // delivery messages the agent should generate
+	ExecutionID  string                     // sub-execution ID (used to label sandbox for branch lookup)
+	FixContext   string                     // quality gate errors from a previous fix-loop iteration
+	RetryContext *agents.RetryContext
 }
 
 // SpawnResult contains the created agent session, process, and sandbox.
@@ -244,6 +245,7 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 			CommitMode:   req.CommitMode,
 			Messages:     req.Messages,
 			FixContext:   req.FixContext,
+			RetryContext: req.RetryContext,
 		})
 	}
 
@@ -443,12 +445,17 @@ func (s *Spawner) DeleteSandbox(ctx context.Context, sandboxID string) error {
 // CleanupObjective deletes all sandboxes (worktrees + branches) for an objective.
 // Called when the objective reaches a terminal state (completed, partial, failed).
 func (s *Spawner) CleanupObjective(ctx context.Context, objectiveID string) {
+	if ctx.Err() != nil {
+		return
+	}
 	// Find all sandboxes for this objective
 	sandboxes, err := s.sp.List(ctx, map[string]string{
 		"tack.objective": objectiveID,
 	})
 	if err != nil {
-		s.logger.Error("listing sandboxes for cleanup", "objective", objectiveID, "error", err)
+		if !isExpectedShutdownError(ctx, err) {
+			s.logger.Error("listing sandboxes for cleanup", "objective", objectiveID, "error", err)
+		}
 		return
 	}
 
@@ -459,7 +466,9 @@ func (s *Spawner) CleanupObjective(ctx context.Context, objectiveID string) {
 	deleted := 0
 	for _, sb := range sandboxes {
 		if err := s.sp.Delete(ctx, sb.ID()); err != nil {
-			s.logger.Warn("failed to delete sandbox", "sandbox_id", sb.ID(), "objective", objectiveID, "error", err)
+			if !isExpectedShutdownError(ctx, err) {
+				s.logger.Warn("failed to delete sandbox", "sandbox_id", sb.ID(), "objective", objectiveID, "error", err)
+			}
 			continue
 		}
 		deleted++

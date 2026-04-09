@@ -10,6 +10,7 @@ import (
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/sandbox"
+	"github.com/syndg/tack/internal/services/agents"
 	"github.com/syndg/tack/internal/services/lifecycle"
 )
 
@@ -139,14 +140,13 @@ func (c *Coordinator) Retry(ctx context.Context, failedExecID string, guidance s
 		}
 	}
 
-	// 5. Build combined fix context from error + human guidance.
-	var fixContext strings.Builder
-	if lastError != "" {
-		fmt.Fprintf(&fixContext, "Previous error:\n%s\n", lastError)
+	blockedAttempt, err := c.recoveryBlockAttempt(ctx, stream.ID)
+	if err != nil {
+		return fmt.Errorf("loading recovery block attempt for stream %s: %w", stream.ID, err)
 	}
-	if guidance != "" {
-		fmt.Fprintf(&fixContext, "\nHuman guidance:\n%s\n", guidance)
-	}
+
+	// 5. Build combined fix context from prior recovery context + error + guidance.
+	fixCtx := buildRetryFixContext(lastError, blockedAttempt, guidance)
 
 	// 6. Reset stream to pending.
 	if err := c.streams.UpdateStatus(ctx, stream.ID, domain.StreamStatusPending); err != nil {
@@ -166,13 +166,19 @@ func (c *Coordinator) Retry(ctx context.Context, failedExecID string, guidance s
 	subExec.StreamID = stream.ID
 
 	// 8. Inject fix context on the first agent step.
-	if fixCtx := fixContext.String(); fixCtx != "" {
+	if fixCtx != "" {
+		retryCtx := &agents.RetryContext{}
+		if blockedAttempt != nil {
+			retryCtx.AttemptNumber = blockedAttempt.AttemptNumber + 1
+			retryCtx.MaxAttempts = blockedAttempt.MaxAttempts
+			retryCtx.FailureKind = blockedAttempt.FailureKind
+			retryCtx.LastError = blockedAttempt.ErrorSummary
+		}
+		retryCtx.HumanGuidance = guidance
 		for _, step := range refBP.Steps {
 			if step.Type == blueprint.StepTypeAgent {
 				if state := subExec.StepStates[step.ID]; state != nil {
-					state.Metadata = map[string]string{
-						"fix_context": fixCtx,
-					}
+					state.Metadata = mergeStepMetadata(map[string]string{"fix_context": fixCtx}, retryCtx)
 				}
 				break
 			}
@@ -183,6 +189,7 @@ func (c *Coordinator) Retry(ctx context.Context, failedExecID string, guidance s
 		_ = c.scheduler.MarkFailed(ctx, stream.ID)
 		return fmt.Errorf("persisting retry sub-execution: %w", err)
 	}
+	c.recordRecoveryResume(ctx, subExec, blockedAttempt, fixCtx, guidance)
 
 	// Link stream to new sub-execution.
 	if err := c.streams.UpdateExecutionID(ctx, stream.ID, subExec.ID); err != nil {
@@ -246,13 +253,24 @@ func (c *Coordinator) Retry(ctx context.Context, failedExecID string, guidance s
 			"execution_id", subExec.ID,
 		)
 
-		// Enqueue the retried stream for merge (the parent merge step already ran).
+		// Enqueue the retried stream for merge only if the sub-execution actually
+		// advanced the stream to merge_ready. Some workflows intentionally end at
+		// completed without any merge phase, and forcing a merge there corrupts the
+		// stream/objective state after successful recovery.
 		if c.mergeEnqueuer != nil {
-			if err := c.mergeEnqueuer.EnqueueStream(execCtx, stream.ID); err != nil {
-				c.logger.Warn("failed to enqueue retried stream for merge",
+			latestStream, err := c.streams.Get(execCtx, stream.ID)
+			if err != nil {
+				c.logger.Warn("failed to reload stream after retry completion",
 					"stream_id", stream.ID,
 					"error", err,
 				)
+			} else if latestStream.Status == domain.StreamStatusMergeReady {
+				if err := c.mergeEnqueuer.EnqueueStream(execCtx, stream.ID); err != nil {
+					c.logger.Warn("failed to enqueue retried stream for merge",
+						"stream_id", stream.ID,
+						"error", err,
+					)
+				}
 			}
 		}
 
@@ -429,32 +447,48 @@ func (c *Coordinator) completeExecution(ctx context.Context, objectiveID string)
 }
 
 func (c *Coordinator) failExecution(ctx context.Context, objectiveID, reason string) {
+	if ctx.Err() != nil {
+		c.logger.Debug("skipping failure handling during shutdown", "objective_id", objectiveID, "reason", reason)
+		return
+	}
 	plan, err := c.plans.GetByObjective(ctx, objectiveID)
 	if err == nil {
 		if err := c.plans.UpdateStatus(ctx, plan.ID, domain.PlanStatusFailed); err != nil {
-			c.logger.Error("failed to mark plan failed", "plan_id", plan.ID, "error", err)
+			if !isExpectedShutdownError(ctx, err) {
+				c.logger.Error("failed to mark plan failed", "plan_id", plan.ID, "error", err)
+			}
 		}
 	} else {
-		c.logger.Error("failed to load plan on execution failure", "objective_id", objectiveID, "error", err)
+		if !isExpectedShutdownError(ctx, err) {
+			c.logger.Error("failed to load plan on execution failure", "objective_id", objectiveID, "error", err)
+		}
 	}
 
 	stream, streamErr := c.singleStreamForObjective(ctx, objectiveID)
 	if streamErr != nil {
-		c.logger.Error("failed to load single stream on execution failure", "objective_id", objectiveID, "error", streamErr)
+		if !isExpectedShutdownError(ctx, streamErr) {
+			c.logger.Error("failed to load single stream on execution failure", "objective_id", objectiveID, "error", streamErr)
+		}
 	} else if stream != nil && (stream.Status == domain.StreamStatusPending || stream.Status == domain.StreamStatusExecuting) {
 		if err := c.scheduler.MarkFailed(ctx, stream.ID); err != nil {
-			c.logger.Error("failed to mark single stream failed", "stream_id", stream.ID, "error", err)
+			if !isExpectedShutdownError(ctx, err) {
+				c.logger.Error("failed to mark single stream failed", "stream_id", stream.ID, "error", err)
+			}
 		}
 	}
 
 	obj, err := c.objectives.Get(ctx, objectiveID)
 	if err != nil {
-		c.logger.Error("failed to load objective on execution failure", "objective_id", objectiveID, "error", err)
+		if !isExpectedShutdownError(ctx, err) {
+			c.logger.Error("failed to load objective on execution failure", "objective_id", objectiveID, "error", err)
+		}
 		return
 	}
 	if obj.Status != domain.ObjectiveStatusFailed && lifecycle.IsValidTransition(obj.Status, domain.ObjectiveStatusFailed) {
 		if err := c.lifecycle.Transition(ctx, objectiveID, domain.ObjectiveStatusFailed); err != nil {
-			c.logger.Error("failed to transition objective to failed", "objective_id", objectiveID, "reason", reason, "error", err)
+			if !isExpectedShutdownError(ctx, err) {
+				c.logger.Error("failed to transition objective to failed", "objective_id", objectiveID, "reason", reason, "error", err)
+			}
 		}
 	}
 
@@ -466,6 +500,9 @@ func (c *Coordinator) failExecution(ctx context.Context, objectiveID, reason str
 // Runs in a background goroutine to avoid blocking the completion flow.
 func (c *Coordinator) cleanupObjectiveSandboxes(ctx context.Context, objectiveID string) {
 	if c.spawner == nil {
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 	go func() {

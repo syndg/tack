@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -80,6 +81,7 @@ type testEnv struct {
 	coord      *Coordinator
 	tracker    *mockTracker
 	engine     *blueprint.Engine
+	attempts   *db.AttemptStore
 	executions *db.ExecutionStore
 	objectives *db.ObjectiveStore
 	plans      *db.PlanStore
@@ -104,6 +106,7 @@ func setupTestCoordinator(t *testing.T) *testEnv {
 	}
 
 	conn := database.Conn()
+	attempts := db.NewAttemptStore(conn)
 	executions := db.NewExecutionStore(conn)
 	objectives := db.NewObjectiveStore(conn)
 	plans := db.NewPlanStore(conn)
@@ -130,6 +133,7 @@ func setupTestCoordinator(t *testing.T) *testEnv {
 		lifecycle:     lm,
 		mergeEnqueuer: &stubMergeEnqueuer{},
 		planCreator:   &stubPlanCreator{},
+		attempts:      attempts,
 		executions:    executions,
 		objectives:    objectives,
 		plans:         plans,
@@ -156,6 +160,7 @@ func setupTestCoordinator(t *testing.T) *testEnv {
 		coord:      c,
 		tracker:    tracker,
 		engine:     engine,
+		attempts:   attempts,
 		executions: executions,
 		objectives: objectives,
 		plans:      plans,
@@ -366,6 +371,143 @@ func TestRetry_RejectsNonFailedExecution(t *testing.T) {
 	}
 }
 
+func TestRetry_ResumesBlockedRecoveryWithGuidance(t *testing.T) {
+	env := setupTestCoordinator(t)
+	ctx := context.Background()
+	env.coord.ctx = ctx
+
+	env.createObjective(t, "obj-recovery")
+	plan := &domain.Plan{ID: "plan-recovery", ObjectiveID: "obj-recovery", Status: domain.PlanStatusExecuting, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := env.plans.Create(ctx, plan); err != nil {
+		t.Fatalf("creating plan: %v", err)
+	}
+	stream := &domain.Stream{ID: "stream-recovery", PlanID: plan.ID, Title: "recovery stream", Status: domain.StreamStatusFailed, CreatedAt: time.Now()}
+	if err := env.streams.Create(ctx, stream); err != nil {
+		t.Fatalf("creating stream: %v", err)
+	}
+	failedExec := &blueprint.Execution{
+		ID:          "exec-recovery-failed",
+		BlueprintID: "build-review",
+		ObjectiveID: "obj-recovery",
+		StreamID:    stream.ID,
+		ParentID:    "exec-parent",
+		Status:      "failed",
+		StepStates:  map[string]*blueprint.StepState{"build": {StepID: "build", Status: blueprint.StepStatusFailed, Error: "unit tests still failing"}},
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	if err := env.executions.Create(ctx, failedExec); err != nil {
+		t.Fatalf("creating failed execution: %v", err)
+	}
+	if err := env.streams.UpdateExecutionID(ctx, stream.ID, failedExec.ID); err != nil {
+		t.Fatalf("linking failed execution: %v", err)
+	}
+	blocked := &domain.Attempt{
+		ObjectiveID:   failedExec.ObjectiveID,
+		ExecutionID:   failedExec.ID,
+		StreamID:      stream.ID,
+		AttemptNumber: 3,
+		MaxAttempts:   3,
+		FailureKind:   domain.FailureAgentOutput,
+		Action:        domain.RecoveryActionAskHumanThenResume,
+		Status:        domain.AttemptStatusExhausted,
+		ErrorSummary:  "retry budget exhausted",
+		FixContext:    "Previous recovery context:\ninspect the failing fixture",
+	}
+	if err := env.attempts.Create(ctx, blocked); err != nil {
+		t.Fatalf("creating blocked attempt: %v", err)
+	}
+
+	sub, unsub := env.eventBus.Subscribe(8)
+	defer unsub()
+
+	if err := env.coord.Retry(ctx, failedExec.ID, "re-run with a clean temp database"); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+
+	updatedStream, err := env.streams.Get(ctx, stream.ID)
+	if err != nil {
+		t.Fatalf("loading stream: %v", err)
+	}
+	if updatedStream.ExecutionID == failedExec.ID || updatedStream.ExecutionID == "" {
+		t.Fatalf("stream execution id = %q, want new retry execution", updatedStream.ExecutionID)
+	}
+	retryExec, err := env.executions.Get(ctx, updatedStream.ExecutionID)
+	if err != nil {
+		t.Fatalf("loading retry execution: %v", err)
+	}
+
+	var fixContext string
+	for _, state := range retryExec.StepStates {
+		if state != nil && state.Metadata != nil && state.Metadata["fix_context"] != "" {
+			fixContext = state.Metadata["fix_context"]
+			break
+		}
+	}
+	if fixContext == "" {
+		t.Fatal("expected retry fix_context to be attached")
+	}
+	if !strings.Contains(fixContext, "inspect the failing fixture") {
+		t.Fatalf("fix_context missing blocked recovery context: %q", fixContext)
+	}
+	if !strings.Contains(fixContext, "unit tests still failing") {
+		t.Fatalf("fix_context missing previous error: %q", fixContext)
+	}
+	if !strings.Contains(fixContext, "re-run with a clean temp database") {
+		t.Fatalf("fix_context missing human guidance: %q", fixContext)
+	}
+
+	attempts, err := env.attempts.ListByStream(ctx, stream.ID)
+	if err != nil {
+		t.Fatalf("listing attempts: %v", err)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("attempt count = %d, want 2", len(attempts))
+	}
+	var resume *domain.Attempt
+	for i := range attempts {
+		if attempts[i].TriggeredByAttempt == blocked.ID {
+			resume = &attempts[i]
+			break
+		}
+	}
+	if resume == nil {
+		t.Fatal("expected resumed attempt linked to blocked attempt")
+	}
+	if resume.Status != domain.AttemptStatusRunning {
+		t.Fatalf("resume status = %q, want %q", resume.Status, domain.AttemptStatusRunning)
+	}
+	if resume.HumanGuidance != "re-run with a clean temp database" {
+		t.Fatalf("resume guidance = %q", resume.HumanGuidance)
+	}
+	if resume.ExecutionID != retryExec.ID {
+		t.Fatalf("resume execution_id = %q, want %q", resume.ExecutionID, retryExec.ID)
+	}
+	if resume.TriggeredByAttempt != blocked.ID {
+		t.Fatalf("resume triggered_by = %q, want %q", resume.TriggeredByAttempt, blocked.ID)
+	}
+
+	var retryContext string
+	for _, state := range retryExec.StepStates {
+		if state != nil && state.Metadata != nil && state.Metadata[retryContextMetadataKey] != "" {
+			retryContext = state.Metadata[retryContextMetadataKey]
+			break
+		}
+	}
+	if retryContext == "" {
+		t.Fatal("expected retry_context metadata on resumed execution")
+	}
+
+	select {
+	case ev := <-sub:
+		if ev.Type != domain.EventRecoveryResumed {
+			t.Fatalf("event type = %q, want %q", ev.Type, domain.EventRecoveryResumed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recovery resumed event")
+	}
+}
+
 // --- Stop flow tests ---
 
 func TestStop_CancelsRetryGoroutines(t *testing.T) {
@@ -469,4 +611,128 @@ func TestStop_CallsTrackerStopAll(t *testing.T) {
 	if !called {
 		t.Fatal("expected tracker.StopAll to be called on Stop")
 	}
+}
+
+func TestRecoverExecutions_RequeuesInFlightSubExecutionForParent(t *testing.T) {
+	env := setupTestCoordinator(t)
+	ctx := context.Background()
+	env.coord.ctx = ctx
+
+	obj := &domain.Objective{ID: "obj-parent-recover", Description: "parent recovery", Status: domain.ObjectiveStatusExecuting, Blueprint: "standard", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := env.objectives.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+	plan := &domain.Plan{ID: "plan-parent-recover", ObjectiveID: obj.ID, Status: domain.PlanStatusExecuting, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := env.plans.Create(ctx, plan); err != nil {
+		t.Fatalf("creating plan: %v", err)
+	}
+	stream := &domain.Stream{ID: "stream-parent-recover", PlanID: plan.ID, Title: "stream one", Status: domain.StreamStatusExecuting, CreatedAt: time.Now()}
+	if err := env.streams.Create(ctx, stream); err != nil {
+		t.Fatalf("creating stream: %v", err)
+	}
+	parent, err := env.engine.Start(ctx, "standard", obj.ID)
+	if err != nil {
+		t.Fatalf("Start parent: %v", err)
+	}
+	parent.ID = "exec-parent-recover"
+	parent.Status = "running"
+	parent.CurrentStep = "execute"
+	if err := env.executions.Create(ctx, parent); err != nil {
+		t.Fatalf("creating parent execution: %v", err)
+	}
+	child, err := env.engine.Start(ctx, "build-review", obj.ID)
+	if err != nil {
+		t.Fatalf("Start child: %v", err)
+	}
+	child.ID = "exec-child-recover"
+	child.ParentID = parent.ID
+	child.StreamID = stream.ID
+	child.Status = "running"
+	if err := env.executions.Create(ctx, child); err != nil {
+		t.Fatalf("creating child execution: %v", err)
+	}
+	if err := env.streams.UpdateExecutionID(ctx, stream.ID, child.ID); err != nil {
+		t.Fatalf("linking child execution: %v", err)
+	}
+
+	env.coord.recoverExecutions(ctx)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := env.streams.Get(ctx, stream.ID)
+		if err != nil {
+			t.Fatalf("loading stream: %v", err)
+		}
+		if got.Status == domain.StreamStatusCompleted {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	got, _ := env.streams.Get(ctx, stream.ID)
+	t.Fatalf("stream status = %q, want completed", got.Status)
+}
+
+func TestRecoverExecutions_ResumesStandaloneRetrySubExecution(t *testing.T) {
+	env := setupTestCoordinator(t)
+	ctx := context.Background()
+	env.coord.ctx = ctx
+
+	obj := &domain.Objective{ID: "obj-retry-recover", Description: "retry recovery", Status: domain.ObjectiveStatusExecuting, Blueprint: "build-review", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := env.objectives.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+	plan := &domain.Plan{ID: "plan-retry-recover", ObjectiveID: obj.ID, Status: domain.PlanStatusExecuting, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := env.plans.Create(ctx, plan); err != nil {
+		t.Fatalf("creating plan: %v", err)
+	}
+	stream := &domain.Stream{ID: "stream-retry-recover", PlanID: plan.ID, Title: "retry stream", Status: domain.StreamStatusExecuting, CreatedAt: time.Now()}
+	if err := env.streams.Create(ctx, stream); err != nil {
+		t.Fatalf("creating stream: %v", err)
+	}
+	parent, err := env.engine.Start(ctx, "standard", obj.ID)
+	if err != nil {
+		t.Fatalf("Start parent: %v", err)
+	}
+	parent.ID = "exec-parent-completed"
+	parent.Status = "completed"
+	if err := env.executions.Create(ctx, parent); err != nil {
+		t.Fatalf("creating parent execution: %v", err)
+	}
+	retryExec, err := env.engine.Start(ctx, "build-review", obj.ID)
+	if err != nil {
+		t.Fatalf("Start retry execution: %v", err)
+	}
+	retryExec.ID = "exec-retry-running"
+	retryExec.ParentID = parent.ID
+	retryExec.StreamID = stream.ID
+	retryExec.Status = "running"
+	if err := env.executions.Create(ctx, retryExec); err != nil {
+		t.Fatalf("creating retry execution: %v", err)
+	}
+	if err := env.streams.UpdateExecutionID(ctx, stream.ID, retryExec.ID); err != nil {
+		t.Fatalf("linking retry execution: %v", err)
+	}
+
+	env.coord.recoverExecutions(ctx)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := env.executions.Get(ctx, retryExec.ID)
+		if err != nil {
+			t.Fatalf("loading retry execution: %v", err)
+		}
+		if got.Status == "completed" {
+			streamState, err := env.streams.Get(ctx, stream.ID)
+			if err != nil {
+				t.Fatalf("loading stream: %v", err)
+			}
+			if streamState.Status != domain.StreamStatusCompleted {
+				t.Fatalf("stream status = %q, want completed", streamState.Status)
+			}
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	got, _ := env.executions.Get(ctx, retryExec.ID)
+	t.Fatalf("retry execution status = %q, want completed", got.Status)
 }

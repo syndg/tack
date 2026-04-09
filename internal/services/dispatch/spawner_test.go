@@ -16,6 +16,7 @@ import (
 	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/sandbox"
+	"github.com/syndg/tack/internal/services/agents"
 	events "github.com/syndg/tack/internal/services/events"
 )
 
@@ -249,6 +250,34 @@ func TestSpawn_UsesBuildPlannerOverlayForPlannerRole(t *testing.T) {
 	// BuildPlannerOverlay produces "# Tack Agent: planner" and "You are a Planner agent"
 	if !strings.Contains(rt.lastOpts.Overlay, "Planner") {
 		t.Errorf("planner overlay should contain 'Planner'\noverlay: %s", rt.lastOpts.Overlay)
+	}
+}
+
+func TestSpawn_IncludesRetryContextInOverlay(t *testing.T) {
+	spawner, rt, _, _, _ := setupSpawnerTest(t)
+	ctx := context.Background()
+
+	obj := makeSpawnObjective("obj-retry-5678")
+	req := SpawnRequest{
+		Objective: obj,
+		Role:      "builder",
+		RetryContext: &agents.RetryContext{
+			AttemptNumber: 1,
+			MaxAttempts:   4,
+			FailureKind:   domain.FailureQualityGate,
+			LastError:     "gate failed",
+			HumanGuidance: "preserve the public API",
+		},
+	}
+
+	if _, err := spawner.Spawn(ctx, req); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	for _, want := range []string{"## Retry Context", "Attempt: 1/4", "preserve the public API"} {
+		if !strings.Contains(rt.lastOpts.Overlay, want) {
+			t.Fatalf("overlay missing %q\n%s", want, rt.lastOpts.Overlay)
+		}
 	}
 }
 

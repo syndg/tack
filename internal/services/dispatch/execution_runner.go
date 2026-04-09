@@ -71,146 +71,243 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 
 	// Extract fix context from previous iteration (for fix-loop retries).
 	var fixContext string
+	var retryContext *agents.RetryContext
 	if state := exec.StepStates[step.ID]; state != nil && state.Metadata != nil {
 		fixContext = state.Metadata["fix_context"]
+		retryContext = latestRecoveryContextForAgentStep(ctx, c.attempts, exec, step.ID, state.Metadata)
+	}
+	retryCfg := resolveExecutionRetryConfig(c.engine, exec)
+	retryOverride := resolveStepRetryOverride(step)
+
+	spawnRequest := SpawnRequest{
+		Objective:    obj,
+		Stream:       stream,
+		Role:         role,
+		Model:        c.modelForAgentStep(step),
+		TaskSpec:     taskSpec,
+		ExecutionID:  exec.ID,
+		CommitMode:   string(step.EffectiveCommitMode()),
+		Messages:     step.Messages,
+		FixContext:   retryContextFixContext(retryContext, fixContext),
+		RetryContext: retryContext,
 	}
 
-	// Spawn the agent. The spawner handles sandbox reuse internally —
-	// it looks up existing stream sandboxes via labels.
-	result, err := c.spawner.Spawn(ctx, SpawnRequest{
-		Objective:   obj,
-		Stream:      stream,
-		Role:        role,
-		Model:       c.modelForAgentStep(step),
-		TaskSpec:    taskSpec,
-		ExecutionID: exec.ID,
-		CommitMode:  string(step.EffectiveCommitMode()),
-		Messages:    step.Messages,
-		FixContext:  fixContext,
-	})
-	if err != nil {
-		if stream != nil {
-			_ = c.scheduler.MarkFailed(ctx, stream.ID)
-		}
-		return blueprint.StepResult{
-			Status: blueprint.StepStatusFailed,
-			Error:  fmt.Sprintf("spawning agent for step %q: %s", step.ID, err),
-		}, nil
-	}
+	var result *SpawnResult
+	for {
+		result, err = c.spawner.Spawn(ctx, spawnRequest)
+		if err == nil {
+			// Track the spawn result.
+			c.tracker.Track(result.Session, result.Process)
 
-	// Track the spawn result.
-	c.tracker.Track(result.Session, result.Process)
+			c.logger.Info("agent spawned for step",
+				"session_id", result.Session.ID,
+				"role", role,
+				"step", step.ID,
+				"execution_id", exec.ID,
+			)
 
-	c.logger.Info("agent spawned for step",
-		"session_id", result.Session.ID,
-		"role", role,
-		"step", step.ID,
-		"execution_id", exec.ID,
-	)
+			// Block until agent completes.
+			agentResult, waitErr := result.Process.Wait()
 
-	// Block until agent completes.
-	agentResult, waitErr := result.Process.Wait()
-
-	wasKilled := c.tracker.Finish(result.Session.ID)
-	if wasKilled {
-		if stream != nil {
-			_ = c.scheduler.MarkFailed(ctx, stream.ID)
-		}
-		c.spawner.MarkFailed(ctx, result.Session, "killed")
-		return blueprint.StepResult{
-			Status: blueprint.StepStatusFailed,
-			Error:  fmt.Sprintf("agent step %q failed: killed", step.ID),
-		}, nil
-	}
-
-	if waitErr != nil || !agentResult.Success {
-		errMsg := agentResult.Error
-		if waitErr != nil {
-			errMsg = waitErr.Error()
-		}
-		if stream != nil {
-			_ = c.scheduler.MarkFailed(ctx, stream.ID)
-		}
-		c.spawner.MarkFailed(ctx, result.Session, errMsg)
-		return blueprint.StepResult{
-			Status: blueprint.StepStatusFailed,
-			Error:  fmt.Sprintf("agent step %q failed: %s", step.ID, errMsg),
-		}, nil
-	}
-
-	cleanSummary, generatedMessages := c.extractGeneratedMessages(step, agentResult.Summary)
-
-	// Remove runtime artifacts before any status/commit/push operations so they
-	// never leak into stream branches or merger branches.
-	if err := c.cleanupRuntimeArtifacts(ctx, result.Sandbox); err != nil {
-		c.logger.Warn("failed to clean runtime artifacts", "step", step.ID, "error", err)
-	}
-
-	// Handle commit mode after successful agent completion.
-	commitMode := step.EffectiveCommitMode()
-	switch commitMode {
-	case blueprint.CommitModeAuto:
-		if err := c.autoCommit(ctx, result.Sandbox, obj.Description, generatedMessages.CommitMessage); err != nil {
-			c.logger.Error("auto-commit failed", "step", step.ID, "error", err)
-			// Non-fatal: changes are still in the worktree for the merge processor.
-		}
-	case blueprint.CommitModeAgent:
-		// Verify the agent actually committed; fall back to auto if not.
-		statusResult, err := result.Sandbox.Exec(ctx, "git status --porcelain", sandbox.ExecOpts{})
-		if err == nil && strings.TrimSpace(statusResult.Stdout) != "" {
-			c.logger.Warn("agent mode set but uncommitted changes found, falling back to auto-commit", "step", step.ID)
-			if err := c.autoCommit(ctx, result.Sandbox, obj.Description, generatedMessages.CommitMessage); err != nil {
-				c.logger.Error("fallback auto-commit failed", "step", step.ID, "error", err)
+			wasKilled := c.tracker.Finish(result.Session.ID)
+			if wasKilled {
+				c.spawner.MarkFailed(ctx, result.Session, "killed")
+				currentAttempt := 0
+				if retryContext != nil {
+					currentAttempt = retryContext.AttemptNumber
+				}
+				attempt, decision := c.recordRecoveryAttempt(ctx, recoveryAttemptInput{
+					ProjectID:      obj.ProjectID,
+					ObjectiveID:    exec.ObjectiveID,
+					ExecutionID:    exec.ID,
+					StreamID:       exec.StreamID,
+					StepID:         step.ID,
+					CurrentAttempt: currentAttempt,
+					FailureKind:    domain.FailureAgentRuntimeTransient,
+					ErrorSummary:   fmt.Sprintf("agent step %q failed: killed", step.ID),
+				}, retryCfg, retryOverride)
+				if decision.Action == domain.RecoveryActionRetrySameStep {
+					retryContext = &agents.RetryContext{AttemptNumber: attempt.AttemptNumber, MaxAttempts: attempt.MaxAttempts, FailureKind: attempt.FailureKind, LastError: attempt.ErrorSummary}
+					spawnRequest.RetryContext = retryContext
+					spawnRequest.FixContext = retryContextFixContext(retryContext, fixContext)
+					continue
+				}
+				if stream != nil {
+					_ = c.scheduler.MarkFailed(ctx, stream.ID)
+				}
+				return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: attempt.ErrorSummary}, nil
 			}
-		}
-	case blueprint.CommitModeNone:
-		// No commit needed.
-	}
 
-	// Push the branch to origin so the merger sandbox can fetch it later.
-	// Required for remote sandboxes (Daytona) where each sandbox is a separate
-	// clone. Must happen right after commit while the sandbox is still alive —
-	// remote sandboxes may auto-stop before the merge step runs.
-	if stream != nil && role != string(domain.AgentRolePlanner) {
-		branchRes, _ := result.Sandbox.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
-		if branchRes.ExitCode == 0 {
-			branch := strings.TrimSpace(branchRes.Stdout)
-			pushRes, pushErr := result.Sandbox.Exec(ctx, fmt.Sprintf("git push -u origin %s", branch), sandbox.ExecOpts{})
-			if pushErr != nil || pushRes.ExitCode != 0 {
-				c.logger.Warn("failed to push branch (merge may fail for remote sandboxes)",
-					"branch", branch, "step", step.ID, "exit", pushRes.ExitCode)
+			if waitErr != nil || !agentResult.Success {
+				errMsg := agentResult.Error
+				if waitErr != nil {
+					errMsg = waitErr.Error()
+				}
+				c.spawner.MarkFailed(ctx, result.Session, errMsg)
+				failureSummary := fmt.Sprintf("agent step %q failed: %s", step.ID, errMsg)
+				currentAttempt := 0
+				if retryContext != nil {
+					currentAttempt = retryContext.AttemptNumber
+				}
+				attempt, decision := c.recordRecoveryAttempt(ctx, recoveryAttemptInput{
+					ProjectID:      obj.ProjectID,
+					ObjectiveID:    exec.ObjectiveID,
+					ExecutionID:    exec.ID,
+					StreamID:       exec.StreamID,
+					StepID:         step.ID,
+					CurrentAttempt: currentAttempt,
+					FailureKind:    classifyAgentFailure(errMsg),
+					ErrorSummary:   failureSummary,
+				}, retryCfg, retryOverride)
+				if decision.Action == domain.RecoveryActionRetrySameStep {
+					retryContext = &agents.RetryContext{AttemptNumber: attempt.AttemptNumber, MaxAttempts: attempt.MaxAttempts, FailureKind: attempt.FailureKind, LastError: attempt.ErrorSummary}
+					spawnRequest.RetryContext = retryContext
+					spawnRequest.FixContext = retryContextFixContext(retryContext, fixContext)
+					continue
+				}
+				if stream != nil {
+					_ = c.scheduler.MarkFailed(ctx, stream.ID)
+				}
+				return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: attempt.ErrorSummary}, nil
 			}
-		}
-	}
 
-	// If this was a planner agent, create the plan from its output.
-	if role == string(domain.AgentRolePlanner) && c.planCreator != nil {
-		plan, err := c.planCreator.CreatePlan(ctx, exec.ObjectiveID, cleanSummary)
-		if err != nil {
-			c.spawner.MarkFailed(ctx, result.Session, fmt.Sprintf("plan creation failed: %s", err))
+			cleanSummary, generatedMessages := c.extractGeneratedMessages(step, agentResult.Summary)
+
+			// Remove runtime artifacts before any status/commit/push operations so they
+			// never leak into stream branches or merger branches.
+			if err := c.cleanupRuntimeArtifacts(ctx, result.Sandbox); err != nil {
+				c.logger.Warn("failed to clean runtime artifacts", "step", step.ID, "error", err)
+			}
+
+			if role == string(domain.AgentRoleReviewer) {
+				if reviewOutcome, ok := agents.ParseReviewOutcome(cleanSummary); ok && !reviewOutcome.Approved {
+					c.spawner.MarkCompleted(ctx, result.Session, cleanSummary)
+					humanGuidance := ""
+					currentAttempt := 0
+					if retryContext != nil {
+						humanGuidance = retryContext.HumanGuidance
+						currentAttempt = retryContext.AttemptNumber
+					}
+					feedback := strings.TrimSpace(reviewOutcome.Feedback)
+					if feedback == "" {
+						feedback = cleanSummary
+					}
+					attempt, decision := c.recordRecoveryAttempt(ctx, recoveryAttemptInput{
+						ProjectID:      obj.ProjectID,
+						ObjectiveID:    exec.ObjectiveID,
+						ExecutionID:    exec.ID,
+						StreamID:       exec.StreamID,
+						StepID:         step.ID,
+						CurrentAttempt: currentAttempt,
+						FailureKind:    domain.FailureReviewRejection,
+						ErrorSummary:   feedback,
+						HumanGuidance:  humanGuidance,
+					}, retryCfg, retryOverride)
+					if decision.Action != domain.RecoveryActionRerunPreviousAgent {
+						haltLocalRepairLoop(exec, step)
+					}
+					return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: attempt.ErrorSummary}, nil
+				}
+			}
+
+			// Handle commit mode after successful agent completion.
+			commitMode := step.EffectiveCommitMode()
+			switch commitMode {
+			case blueprint.CommitModeAuto:
+				if err := c.autoCommit(ctx, result.Sandbox, obj.Description, generatedMessages.CommitMessage); err != nil {
+					c.logger.Error("auto-commit failed", "step", step.ID, "error", err)
+					// Non-fatal: changes are still in the worktree for the merge processor.
+				}
+			case blueprint.CommitModeAgent:
+				// Verify the agent actually committed; fall back to auto if not.
+				statusResult, err := result.Sandbox.Exec(ctx, "git status --porcelain", sandbox.ExecOpts{})
+				if err == nil && strings.TrimSpace(statusResult.Stdout) != "" {
+					c.logger.Warn("agent mode set but uncommitted changes found, falling back to auto-commit", "step", step.ID)
+					if err := c.autoCommit(ctx, result.Sandbox, obj.Description, generatedMessages.CommitMessage); err != nil {
+						c.logger.Error("fallback auto-commit failed", "step", step.ID, "error", err)
+					}
+				}
+			case blueprint.CommitModeNone:
+				// No commit needed.
+			}
+
+			// Push the branch to origin so the merger sandbox can fetch it later.
+			// Required for remote sandboxes (Daytona) where each sandbox is a separate
+			// clone. Must happen right after commit while the sandbox is still alive —
+			// remote sandboxes may auto-stop before the merge step runs.
+			if stream != nil && role != string(domain.AgentRolePlanner) {
+				branchRes, _ := result.Sandbox.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
+				if branchRes.ExitCode == 0 {
+					branch := strings.TrimSpace(branchRes.Stdout)
+					pushRes, pushErr := result.Sandbox.Exec(ctx, fmt.Sprintf("git push -u origin %s", branch), sandbox.ExecOpts{})
+					if pushErr != nil || pushRes.ExitCode != 0 {
+						c.logger.Warn("failed to push branch (merge may fail for remote sandboxes)",
+							"branch", branch, "step", step.ID, "exit", pushRes.ExitCode)
+					}
+				}
+			}
+
+			// If this was a planner agent, create the plan from its output.
+			if role == string(domain.AgentRolePlanner) && c.planCreator != nil {
+				plan, err := c.planCreator.CreatePlan(ctx, exec.ObjectiveID, cleanSummary)
+				if err != nil {
+					c.spawner.MarkFailed(ctx, result.Session, fmt.Sprintf("plan creation failed: %s", err))
+					return blueprint.StepResult{
+						Status: blueprint.StepStatusFailed,
+						Error:  fmt.Sprintf("creating plan from planner output: %s", err),
+					}, nil
+				}
+				c.logger.Info("plan created from planner agent",
+					"plan_id", plan.ID,
+					"objective_id", exec.ObjectiveID,
+				)
+
+				// Delete planner sandbox — it's no longer needed and frees resources
+				// for the stream agents (important for Daytona tier CPU limits).
+				if err := c.spawner.DeleteSandbox(ctx, result.Sandbox.ID()); err != nil {
+					c.logger.Warn("failed to delete planner sandbox", "sandbox_id", result.Sandbox.ID(), "error", err)
+				}
+			}
+
+			metadata := mergeStepMetadata(generatedMessages.ToMetadata(), retryContext)
+			c.spawner.MarkCompleted(ctx, result.Session, cleanSummary)
 			return blueprint.StepResult{
-				Status: blueprint.StepStatusFailed,
-				Error:  fmt.Sprintf("creating plan from planner output: %s", err),
+				Status:   blueprint.StepStatusCompleted,
+				Output:   cleanSummary,
+				Metadata: metadata,
 			}, nil
 		}
-		c.logger.Info("plan created from planner agent",
-			"plan_id", plan.ID,
-			"objective_id", exec.ObjectiveID,
-		)
-
-		// Delete planner sandbox — it's no longer needed and frees resources
-		// for the stream agents (important for Daytona tier CPU limits).
-		if err := c.spawner.DeleteSandbox(ctx, result.Sandbox.ID()); err != nil {
-			c.logger.Warn("failed to delete planner sandbox", "sandbox_id", result.Sandbox.ID(), "error", err)
+		failureKind := classifySpawnFailure(err.Error())
+		currentAttempt := 0
+		if retryContext != nil {
+			currentAttempt = retryContext.AttemptNumber
 		}
+		attempt, decision := c.recordRecoveryAttempt(ctx, recoveryAttemptInput{
+			ProjectID:      obj.ProjectID,
+			ObjectiveID:    exec.ObjectiveID,
+			ExecutionID:    exec.ID,
+			StreamID:       exec.StreamID,
+			StepID:         step.ID,
+			CurrentAttempt: currentAttempt,
+			FailureKind:    failureKind,
+			ErrorSummary:   fmt.Sprintf("spawning agent for step %q: %s", step.ID, err),
+		}, retryCfg, retryOverride)
+		if decision.Action == domain.RecoveryActionRetrySameStep {
+			retryContext = &agents.RetryContext{
+				AttemptNumber: attempt.AttemptNumber,
+				MaxAttempts:   attempt.MaxAttempts,
+				FailureKind:   attempt.FailureKind,
+				LastError:     attempt.ErrorSummary,
+			}
+			spawnRequest.RetryContext = retryContext
+			spawnRequest.FixContext = retryContextFixContext(retryContext, fixContext)
+			continue
+		}
+		if stream != nil {
+			_ = c.scheduler.MarkFailed(ctx, stream.ID)
+		}
+		return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: attempt.ErrorSummary}, nil
 	}
-
-	c.spawner.MarkCompleted(ctx, result.Session, cleanSummary)
-	return blueprint.StepResult{
-		Status:   blueprint.StepStatusCompleted,
-		Output:   cleanSummary,
-		Metadata: generatedMessages.ToMetadata(),
-	}, nil
 }
 
 func (c *Coordinator) modelForAgentStep(step *blueprint.Step) string {

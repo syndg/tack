@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/recovery"
 	"gopkg.in/yaml.v3"
 )
 
@@ -17,7 +19,9 @@ func LoadFile(path string) (*Blueprint, error) {
 	}
 
 	var bp Blueprint
-	if err := yaml.Unmarshal(data, &bp); err != nil {
+	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&bp); err != nil {
 		return nil, fmt.Errorf("parsing blueprint YAML %s: %w", path, err)
 	}
 
@@ -84,6 +88,23 @@ func Validate(bp *Blueprint) error {
 		return fmt.Errorf("blueprint validation failed: %s", strings.Join(errs, "; "))
 	}
 
+	if bp.Retry != nil {
+		if !bp.Retry.Any() {
+			errs = append(errs, "blueprint retry config cannot be empty")
+		}
+		if bp.Retry.Profile == "" {
+			errs = append(errs, "blueprint retry profile is required when retry config is set")
+		} else if !isValidRetryProfile(bp.Retry.Profile) {
+			errs = append(errs, fmt.Sprintf("blueprint retry profile %q is invalid (must be strict, balanced, or self_healing)", bp.Retry.Profile))
+		}
+		if bp.Retry.DefaultMaxAttempts < 0 {
+			errs = append(errs, "blueprint retry default_max_attempts must be greater than or equal to 0")
+		}
+		if bp.Retry.DefaultOnExhausted != "" && !isValidExhaustionMode(bp.Retry.DefaultOnExhausted) {
+			errs = append(errs, fmt.Sprintf("blueprint retry default_on_exhausted %q is invalid (must be ask_human, escalate, or fail)", bp.Retry.DefaultOnExhausted))
+		}
+	}
+
 	// Check unique step IDs and build ID set.
 	stepIDs := make(map[string]bool, len(bp.Steps))
 	for _, step := range bp.Steps {
@@ -107,6 +128,21 @@ func Validate(bp *Blueprint) error {
 
 	// Check step-type-specific requirements and next references.
 	for _, step := range bp.Steps {
+		if step.Retry != nil {
+			if !step.Retry.Any() {
+				errs = append(errs, fmt.Sprintf("step %q retry config cannot be empty", step.ID))
+			}
+			if step.Retry.MaxAttempts < 0 {
+				errs = append(errs, fmt.Sprintf("step %q retry max_attempts must be greater than or equal to 0", step.ID))
+			}
+			if step.Retry.OnExhausted != "" && !isValidExhaustionMode(step.Retry.OnExhausted) {
+				errs = append(errs, fmt.Sprintf("step %q retry on_exhausted %q is invalid (must be ask_human, escalate, or fail)", step.ID, step.Retry.OnExhausted))
+			}
+			if step.Retry.HumanGuidanceMode != "" && !isValidHumanGuidanceMode(step.Retry.HumanGuidanceMode) {
+				errs = append(errs, fmt.Sprintf("step %q retry human_guidance_mode %q is invalid (must be append or replace)", step.ID, step.Retry.HumanGuidanceMode))
+			}
+		}
+
 		switch step.Type {
 		case StepTypeAgent:
 			if step.Role == "" {
@@ -117,9 +153,6 @@ func Validate(bp *Blueprint) error {
 			}
 			if step.Messages != nil && !step.Messages.Any() {
 				errs = append(errs, fmt.Sprintf("agent step %q has empty messages config", step.ID))
-			}
-			if step.OnFail != "" {
-				errs = append(errs, fmt.Sprintf("agent step %q cannot use on_fail (only deterministic steps can)", step.ID))
 			}
 		case StepTypeDeterministic:
 			if step.Action == "" {
@@ -209,4 +242,31 @@ func Validate(bp *Blueprint) error {
 	}
 
 	return nil
+}
+
+func isValidRetryProfile(profile recovery.Profile) bool {
+	switch profile {
+	case recovery.ProfileStrict, recovery.ProfileBalanced, recovery.ProfileSelfHealing:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidExhaustionMode(mode domain.ExhaustionMode) bool {
+	switch mode {
+	case domain.ExhaustionAskHuman, domain.ExhaustionEscalate, domain.ExhaustionFail:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidHumanGuidanceMode(mode string) bool {
+	switch mode {
+	case "append", "replace":
+		return true
+	default:
+		return false
+	}
 }

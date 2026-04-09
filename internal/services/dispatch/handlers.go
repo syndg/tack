@@ -41,12 +41,14 @@ type Handlers struct {
 	gateRunner      *gates.Runner
 	lifecycle       *lifecycle.Manager
 	mergeProcessor  MergeHelper
+	engine          *blueprint.Engine
 	agentRuntime    runtime.AgentRuntime
 	plans           *db.PlanStore
 	streams         *db.StreamStore
 	objectives      *db.ObjectiveStore
 	executions      *db.ExecutionStore
 	agents          *db.AgentStore
+	attempts        *db.AttemptStore
 	sandboxProvider sandbox.SandboxProvider
 	eventBus        *events.PersistentBus
 	obs             *observability.Recorder
@@ -64,12 +66,14 @@ func NewHandlers(
 	gateRunner *gates.Runner,
 	lc *lifecycle.Manager,
 	mergeProcessor MergeHelper,
+	engine *blueprint.Engine,
 	agentRuntime runtime.AgentRuntime,
 	plans *db.PlanStore,
 	streams *db.StreamStore,
 	objectives *db.ObjectiveStore,
 	executions *db.ExecutionStore,
 	agents *db.AgentStore,
+	attempts *db.AttemptStore,
 	sandboxProvider sandbox.SandboxProvider,
 	eventBus *events.PersistentBus,
 	obs *observability.Recorder,
@@ -87,12 +91,14 @@ func NewHandlers(
 		gateRunner:      gateRunner,
 		lifecycle:       lc,
 		mergeProcessor:  mergeProcessor,
+		engine:          engine,
 		agentRuntime:    agentRuntime,
 		plans:           plans,
 		streams:         streams,
 		objectives:      objectives,
 		executions:      executions,
 		agents:          agents,
+		attempts:        attempts,
 		sandboxProvider: sandboxProvider,
 		eventBus:        eventBus,
 		obs:             obs,
@@ -119,7 +125,7 @@ func (h *Handlers) HandleDeterministic(ctx context.Context, exec *blueprint.Exec
 	case "dispatch_streams":
 		return h.dispatchStreams(ctx, exec)
 	case "run_quality_gates":
-		return h.runQualityGates(ctx, exec)
+		return h.runQualityGates(ctx, exec, step)
 	case "signal_merge_ready":
 		return h.signalMergeReady(ctx, exec)
 	case "mark_complete":
@@ -194,7 +200,7 @@ func (h *Handlers) dispatchStreams(ctx context.Context, exec *blueprint.Executio
 // runQualityGates implements the "run_quality_gates" deterministic action.
 // Gets quality gates from the plan, finds an active lead agent sandbox for the
 // objective, and runs the gates sequentially. Returns failed if any gate fails.
-func (h *Handlers) runQualityGates(ctx context.Context, exec *blueprint.Execution) (blueprint.StepResult, error) {
+func (h *Handlers) runQualityGates(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error) {
 	plan, err := h.plans.GetByObjective(ctx, exec.ObjectiveID)
 	if err != nil {
 		return blueprint.StepResult{
@@ -294,6 +300,7 @@ func (h *Handlers) runQualityGates(ctx context.Context, exec *blueprint.Executio
 		// File-attribution: in a sub-execution, only fail if errors are in
 		// the stream's file scope. Errors in other streams' files are caught
 		// at merge time by the post-merge quality gates.
+		failureSummary := formatGateErrors(result)
 		if exec.StreamID != "" {
 			stream, streamErr := h.streams.Get(ctx, exec.StreamID)
 			if streamErr == nil && len(stream.FileScope) > 0 {
@@ -305,17 +312,27 @@ func (h *Handlers) runQualityGates(ctx context.Context, exec *blueprint.Executio
 					return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
 				}
 				// Only include in-scope errors in the fix context
-				return blueprint.StepResult{
-					Status: blueprint.StepStatusFailed,
-					Error:  formatGateErrorsScoped(result, stream.FileScope),
-				}, nil
+				failureSummary = formatGateErrorsScoped(result, stream.FileScope)
 			}
 		}
-
-		return blueprint.StepResult{
-			Status: blueprint.StepStatusFailed,
-			Error:  formatGateErrors(result),
-		}, nil
+		humanGuidance := humanGuidanceFromRetryContext(exec, step.OnFail)
+		retryCfg := resolveExecutionRetryConfig(h.engine, exec)
+		policy := resolveStepRetryOverride(step)
+		decisionError := failureSummary
+		attempt, decision := (&Coordinator{attempts: h.attempts, eventBus: h.eventBus, logger: h.logger}).recordRecoveryAttempt(ctx, recoveryAttemptInput{
+			ObjectiveID:   exec.ObjectiveID,
+			ExecutionID:   exec.ID,
+			StreamID:      exec.StreamID,
+			StepID:        step.ID,
+			FailureKind:   domain.FailureQualityGate,
+			ErrorSummary:  decisionError,
+			HumanGuidance: humanGuidance,
+		}, retryCfg, policy)
+		if decision.Action != domain.RecoveryActionRerunPreviousAgent {
+			haltLocalRepairLoop(exec, step)
+			return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: attempt.ErrorSummary}, nil
+		}
+		return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: attempt.ErrorSummary}, nil
 	}
 
 	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil

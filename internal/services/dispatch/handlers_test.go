@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,8 +14,10 @@ import (
 	"github.com/syndg/tack/internal/credentials"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/gates"
 	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/sandbox"
+	"github.com/syndg/tack/internal/services/agents"
 )
 
 func TestHandleDeterministic_UnknownAction(t *testing.T) {
@@ -175,6 +178,90 @@ func TestSchedulerMarkCompletedPreservesMergeReady(t *testing.T) {
 	}
 	if stream.Status != domain.StreamStatusMergeReady {
 		t.Fatalf("stream status = %s, want merge_ready", stream.Status)
+	}
+}
+
+func TestRunQualityGates_RecordsRecoveryAttempt(t *testing.T) {
+	env := setupDispatchEnv(t)
+	ctx := context.Background()
+	env.createObjective(t, "obj-gates", domain.ObjectiveStatusExecuting)
+	streams := env.createPlan(t, "plan-gates", "obj-gates", []string{"stream-1"})
+
+	plan, err := env.plans.Get(ctx, "plan-gates")
+	if err != nil {
+		t.Fatalf("Get plan: %v", err)
+	}
+	plan.QualityGates = []string{"go test ./..."}
+	if err := env.plans.Update(ctx, plan); err != nil {
+		t.Fatalf("Update plan: %v", err)
+	}
+
+	if err := env.agents.Create(ctx, &domain.AgentSession{ObjectiveID: "obj-gates", StreamID: streams[0].ID, Role: domain.AgentRoleBuilder, SandboxID: "sb-gates", Status: "running"}); err != nil {
+		t.Fatalf("Create agent session: %v", err)
+	}
+
+	sub, unsub := env.eventBus.Subscribe(10)
+	defer unsub()
+
+	h := &Handlers{
+		gateRunner: gates.NewRunner(env.logger),
+		plans:      env.plans,
+		streams:    env.streams,
+		agents:     env.agents,
+		attempts:   env.attempts,
+		sandboxProvider: &handlersTestSandboxProvider{sb: &handlersTestSandbox{id: "sb-gates", execFn: func(cmd string) (sandbox.ExecResult, error) {
+			return sandbox.ExecResult{ExitCode: 1, Stderr: "pkg/file.go:12: boom"}, nil
+		}}},
+		eventBus: env.eventBus,
+		logger:   env.logger,
+	}
+
+	retryData, _ := json.Marshal(&agents.RetryContext{HumanGuidance: "keep the API stable"})
+	exec := &blueprint.Execution{
+		ID:          "exec-gates",
+		ObjectiveID: "obj-gates",
+		StreamID:    streams[0].ID,
+		StepStates: map[string]*blueprint.StepState{
+			"build": {StepID: "build", Metadata: map[string]string{retryContextMetadataKey: string(retryData)}},
+		},
+	}
+	step := &blueprint.Step{ID: "lint", Type: blueprint.StepTypeDeterministic, Action: "run_quality_gates", OnFail: "build", MaxFixIterations: 3}
+
+	result, err := h.HandleDeterministic(ctx, exec, step)
+	if err != nil {
+		t.Fatalf("HandleDeterministic: %v", err)
+	}
+	if result.Status != blueprint.StepStatusFailed {
+		t.Fatalf("status = %s, want failed", result.Status)
+	}
+
+	attempts, err := env.attempts.ListByExecution(ctx, exec.ID)
+	if err != nil {
+		t.Fatalf("ListByExecution: %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempt count = %d, want 1", len(attempts))
+	}
+	if attempts[0].Action != domain.RecoveryActionRerunPreviousAgent {
+		t.Fatalf("action = %s, want rerun_previous_agent", attempts[0].Action)
+	}
+	if attempts[0].HumanGuidance != "keep the API stable" {
+		t.Fatalf("human guidance = %q", attempts[0].HumanGuidance)
+	}
+
+	var sawRecovery bool
+	for {
+		select {
+		case event := <-sub:
+			if event.Type == domain.EventRecoveryAttempt {
+				sawRecovery = true
+			}
+		default:
+			if !sawRecovery {
+				t.Fatal("expected recovery attempt event")
+			}
+			return
+		}
 	}
 }
 

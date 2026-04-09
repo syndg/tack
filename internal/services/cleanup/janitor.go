@@ -3,6 +3,7 @@ package cleanup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -73,11 +74,16 @@ func (j *Janitor) Start(ctx context.Context) {
 
 func (j *Janitor) runOnce(ctx context.Context) {
 	if err := j.prune(ctx); err != nil {
-		j.logger.Warn("branch janitor run failed", "error", err)
+		if !isExpectedJanitorShutdownError(ctx, err) {
+			j.logger.Warn("branch janitor run failed", "error", err)
+		}
 	}
 }
 
 func (j *Janitor) prune(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if j.projectRoot == "" {
 		return nil
 	}
@@ -197,6 +203,20 @@ func (j *Janitor) prune(ctx context.Context) error {
 
 	_, _ = j.exec(ctx, j.projectRoot, "git", "worktree", "prune")
 	return nil
+}
+
+func isExpectedJanitorShutdownError(ctx context.Context, err error) bool {
+	if ctx != nil && ctx.Err() != nil {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "context canceled") || strings.Contains(msg, "database is closed")
 }
 
 func parseTackBranch(branch string) (prefix string, isMerge bool, ok bool) {
