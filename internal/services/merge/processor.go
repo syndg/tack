@@ -840,12 +840,21 @@ func (p *Processor) publishNewlyReadyStreams(ctx context.Context, planID string)
 
 func (p *Processor) pushMergeBranch(ctx context.Context, sb sandbox.Sandbox, objectiveID string) {
 	branch := naming.MergeBranch(objectiveID)
-	res, err := sb.Exec(ctx, fmt.Sprintf("git push -u origin %s", branch), sandbox.ExecOpts{})
-	if err != nil || res.ExitCode != 0 {
-		p.logger.Warn("pushing merge branch", "branch", branch, "error", err, "stderr", res.Stderr)
-		return
+	pushCmd := fmt.Sprintf("git push -u origin HEAD:refs/heads/%s", branch)
+	verifyCmd := fmt.Sprintf("git ls-remote --exit-code --heads origin %s", branch)
+	for attempt := 1; attempt <= 2; attempt++ {
+		res, err := sb.Exec(ctx, pushCmd, sandbox.ExecOpts{})
+		if err != nil || res.ExitCode != 0 {
+			p.logger.Warn("pushing merge branch", "branch", branch, "attempt", attempt, "error", err, "stderr", res.Stderr)
+			return
+		}
+		verify, verifyErr := sb.Exec(ctx, verifyCmd, sandbox.ExecOpts{})
+		if verifyErr == nil && verify.ExitCode == 0 {
+			p.logger.Info("merge branch pushed", "branch", branch, "objective_id", objectiveID, "attempt", attempt)
+			return
+		}
+		p.logger.Warn("merge branch push verification failed", "branch", branch, "attempt", attempt, "error", verifyErr, "stderr", verify.Stderr, "stdout", verify.Stdout)
 	}
-	p.logger.Info("merge branch pushed", "branch", branch, "objective_id", objectiveID)
 }
 
 func (p *Processor) deleteRemoteBranch(ctx context.Context, sb sandbox.Sandbox, branch string) {

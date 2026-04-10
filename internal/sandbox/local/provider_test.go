@@ -238,6 +238,23 @@ func TestSandboxPaths_DoNotEscapeWorktree(t *testing.T) {
 	if _, err := sb.Download(ctx, "../../escape.txt"); err == nil {
 		t.Fatal("expected Download traversal to fail")
 	}
+
+	outsideDir := t.TempDir()
+	if err := os.Symlink(outsideDir, filepath.Join(sb.(*LocalSandbox).path, "escape-link")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if _, err := sb.Exec(ctx, "pwd", sandbox.ExecOpts{WorkDir: "escape-link"}); err == nil {
+		t.Fatal("expected symlink WorkDir traversal to fail")
+	}
+	if err := sb.Upload(ctx, []byte("x"), "escape-link/file.txt"); err == nil {
+		t.Fatal("expected symlink Upload traversal to fail")
+	}
+	if err := os.WriteFile(filepath.Join(outsideDir, "file.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	if _, err := sb.Download(ctx, "escape-link/file.txt"); err == nil {
+		t.Fatal("expected symlink Download traversal to fail")
+	}
 }
 
 func TestDelete_RemovesWorktreeAndBranch(t *testing.T) {

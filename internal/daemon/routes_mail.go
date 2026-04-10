@@ -28,6 +28,28 @@ func (d *Daemon) handleSendMail(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if claims := agentClaimsFromRequest(r); claims != nil {
+		if msg.From == "" {
+			msg.From = claims.AgentName
+		} else if msg.From != claims.AgentName {
+			writeError(w, http.StatusForbidden, "agent may not spoof sender")
+			return
+		}
+		if msg.Objective == "" {
+			msg.Objective = claims.ObjectiveID
+		} else if msg.Objective != claims.ObjectiveID {
+			writeError(w, http.StatusForbidden, "agent may not target another objective")
+			return
+		}
+		if claims.StreamID != "" {
+			if msg.Stream == "" {
+				msg.Stream = claims.StreamID
+			} else if msg.Stream != claims.StreamID {
+				writeError(w, http.StatusForbidden, "agent may not target another stream")
+				return
+			}
+		}
+	}
 	if msg.ProjectID == "" {
 		msg.ProjectID = projectCtx.Project.ID
 	} else if msg.ProjectID != projectCtx.Project.ID {

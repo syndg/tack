@@ -358,6 +358,10 @@ func buildEffectiveCommand(cmd string, opts sandbox.ExecOpts) string {
 	return "sh -c " + naming.ShellQuote(inner)
 }
 
+func withinRoot(root, candidate string) bool {
+	return candidate == root || strings.HasPrefix(candidate, root+"/")
+}
+
 // DaytonaSandbox wraps a Daytona SDK sandbox to implement sandbox.Sandbox.
 type DaytonaSandbox struct {
 	sandbox       *daytona.Sandbox
@@ -374,6 +378,62 @@ func (s *DaytonaSandbox) ID() string {
 
 func (s *DaytonaSandbox) Status() sandbox.SandboxStatus {
 	return sandbox.SandboxStatusRunning
+}
+
+func (s *DaytonaSandbox) remoteRealPath(ctx context.Context, path string, allowMissing bool) (string, error) {
+	mode := "exact"
+	if allowMissing {
+		mode = "allow-missing"
+	}
+	script := `target="$1"
+mode="$2"
+if [ "$mode" = "exact" ]; then
+  readlink -f -- "$target"
+  exit $?
+fi
+probe="$target"
+suffix=""
+while [ ! -e "$probe" ] && [ "$probe" != "/" ]; do
+  suffix="/$(basename "$probe")${suffix}"
+  probe="$(dirname "$probe")"
+done
+if [ ! -e "$probe" ]; then
+  exit 1
+fi
+base="$(readlink -f -- "$probe")" || exit 1
+printf "%s%s\n" "$base" "$suffix"`
+	cmd := fmt.Sprintf("sh -c %s sh %s %s", naming.ShellQuote(script), naming.ShellQuote(path), naming.ShellQuote(mode))
+	resp, err := s.sandbox.Process.ExecuteCommand(ctx, cmd)
+	if err != nil {
+		return "", fmt.Errorf("resolving remote path: %w", err)
+	}
+	if resp.ExitCode != 0 {
+		return "", fmt.Errorf("resolving remote path %s failed: %s", path, strings.TrimSpace(resp.Result))
+	}
+	resolved := strings.TrimSpace(resp.Result)
+	if resolved == "" {
+		return "", fmt.Errorf("resolving remote path %s returned empty result", path)
+	}
+	return resolved, nil
+}
+
+func (s *DaytonaSandbox) resolveCheckedPath(ctx context.Context, requested string, allowMissing bool) (string, error) {
+	candidate, err := resolveRemotePath(s.workDir, requested)
+	if err != nil {
+		return "", err
+	}
+	rootReal, err := s.remoteRealPath(ctx, s.workDir, false)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := s.remoteRealPath(ctx, candidate, allowMissing)
+	if err != nil {
+		return "", err
+	}
+	if !withinRoot(rootReal, resolved) {
+		return "", fmt.Errorf("path escapes sandbox root: %s", requested)
+	}
+	return resolved, nil
 }
 
 func (s *DaytonaSandbox) Exec(ctx context.Context, cmd string, opts sandbox.ExecOpts) (sandbox.ExecResult, error) {
@@ -397,7 +457,7 @@ func (s *DaytonaSandbox) Exec(ctx context.Context, cmd string, opts sandbox.Exec
 	if workDir == "" {
 		workDir = s.workDir
 	} else {
-		resolved, err := resolveRemotePath(s.workDir, workDir)
+		resolved, err := s.resolveCheckedPath(ctx, workDir, false)
 		if err != nil {
 			return sandbox.ExecResult{}, err
 		}
@@ -426,13 +486,18 @@ func (s *DaytonaSandbox) ExecStreaming(ctx context.Context, cmd string, opts san
 	sessionID := fmt.Sprintf("tack-%d", time.Now().UnixNano())
 
 	var ptyOpts []func(*options.CreatePty)
-	if len(opts.Env) > 0 || len(s.envVars) > 0 {
+	if len(opts.Env) > 0 || len(s.envVars) > 0 || s.gitAuthHeader != "" {
 		merged := make(map[string]string, len(s.envVars)+len(opts.Env))
 		for k, v := range s.envVars {
 			merged[k] = v
 		}
 		for k, v := range opts.Env {
 			merged[k] = v
+		}
+		if s.gitAuthHeader != "" {
+			merged["GIT_CONFIG_COUNT"] = "1"
+			merged["GIT_CONFIG_KEY_0"] = "http.extraHeader"
+			merged["GIT_CONFIG_VALUE_0"] = s.gitAuthHeader
 		}
 		ptyOpts = append(ptyOpts, options.WithCreatePtyEnv(merged))
 	}
@@ -447,7 +512,7 @@ func (s *DaytonaSandbox) ExecStreaming(ctx context.Context, cmd string, opts san
 	if workDir == "" {
 		workDir = s.workDir
 	} else {
-		resolved, err := resolveRemotePath(s.workDir, workDir)
+		resolved, err := s.resolveCheckedPath(ctx, workDir, false)
 		if err != nil {
 			return nil, err
 		}
@@ -497,7 +562,7 @@ func (s *DaytonaSandbox) ExecStreaming(ctx context.Context, cmd string, opts san
 }
 
 func (s *DaytonaSandbox) Upload(ctx context.Context, content []byte, path string) error {
-	resolved, err := resolveRemotePath(s.workDir, path)
+	resolved, err := s.resolveCheckedPath(ctx, path, true)
 	if err != nil {
 		return err
 	}
@@ -505,7 +570,7 @@ func (s *DaytonaSandbox) Upload(ctx context.Context, content []byte, path string
 }
 
 func (s *DaytonaSandbox) Download(ctx context.Context, path string) ([]byte, error) {
-	resolved, err := resolveRemotePath(s.workDir, path)
+	resolved, err := s.resolveCheckedPath(ctx, path, false)
 	if err != nil {
 		return nil, err
 	}

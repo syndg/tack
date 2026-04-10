@@ -375,6 +375,9 @@ func (m *ProjectContextManager) newSandboxProvider(project *domain.Project, cfg 
 			m.logger.Warn("daytona provider configured but no API key found, falling back to local", "project_id", project.ID)
 			return newLocalProvider(project.RootPath, cfg, m.logger), nil
 		}
+		if daemonURLIsLoopback(m.daemonURL) {
+			return nil, fmt.Errorf("daytona sandboxes require daemon.external_url to be reachable from the sandbox; current callback URL %q resolves to loopback", m.daemonURL)
+		}
 		repoURL := ""
 		gitCmd := exec.Command("git", "remote", "get-url", "origin")
 		gitCmd.Dir = project.RootPath

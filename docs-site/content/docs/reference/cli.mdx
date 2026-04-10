@@ -47,6 +47,8 @@ tack daemon
 
 The daemon loads the **user config layer** from `~/.config/tack/config.yaml` by default.
 
+If you use remote Daytona sandboxes, set `daemon.external_url` in the user config so agents can call back into the daemon. Local sandboxes do not require this.
+
 ## tack init
 
 Bootstrap a repo with `.tack/config.yaml`, credentials, `.tack/project-id`, and project registration.

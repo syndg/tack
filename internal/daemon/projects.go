@@ -20,6 +20,9 @@ func (d *Daemon) targetProjectID(r *http.Request) string {
 	if projectID := strings.TrimSpace(r.Header.Get(projectHeader)); projectID != "" {
 		return projectID
 	}
+	if claims := agentClaimsFromRequest(r); claims != nil && strings.TrimSpace(claims.ProjectID) != "" {
+		return strings.TrimSpace(claims.ProjectID)
+	}
 	return strings.TrimSpace(r.URL.Query().Get("project_id"))
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
+	"github.com/syndg/tack/internal/daemonauth"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
@@ -258,6 +259,33 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 
 	// 7. Spawn agent process via runtime.
 	agentToken := uuid.New().String()
+	if s.daemonToken != "" {
+		issued, err := daemonauth.IssueAgentToken(s.daemonToken, daemonauth.AgentClaims{
+			ProjectID:   req.Objective.ProjectID,
+			ObjectiveID: req.Objective.ID,
+			AgentName:   agentName,
+			Role:        req.Role,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("issuing agent token: %w", err)
+		}
+		agentToken = issued
+	}
+	if req.Stream != nil {
+		if s.daemonToken != "" {
+			issued, err := daemonauth.IssueAgentToken(s.daemonToken, daemonauth.AgentClaims{
+				ProjectID:   req.Objective.ProjectID,
+				ObjectiveID: req.Objective.ID,
+				StreamID:    req.Stream.ID,
+				AgentName:   agentName,
+				Role:        req.Role,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("issuing agent token: %w", err)
+			}
+			agentToken = issued
+		}
+	}
 	envVars := make(map[string]string, len(sandboxEnvVars)+6)
 	for k, v := range sandboxEnvVars {
 		envVars[k] = v
@@ -266,14 +294,10 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 		return nil, fmt.Errorf("preparing runtime credentials: %w", err)
 	}
 	envVars["TACK_DAEMON_URL"] = s.daemonURL
-	if s.daemonToken != "" {
-		envVars["TACK_DAEMON_TOKEN"] = s.daemonToken
-		envVars["TACK_AGENT_TOKEN"] = s.daemonToken
-	} else {
-		envVars["TACK_AGENT_TOKEN"] = agentToken
-	}
+	envVars["TACK_AGENT_TOKEN"] = agentToken
 	envVars["TACK_AGENT_NAME"] = agentName
 	envVars["TACK_OBJECTIVE_ID"] = req.Objective.ID
+	envVars["TACK_PROJECT_ID"] = req.Objective.ProjectID
 	envVars["TACK_AGENT_ROLE"] = req.Role
 	if req.Stream != nil {
 		envVars["TACK_STREAM_ID"] = req.Stream.ID

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -198,6 +200,24 @@ func deriveDaemonURL(cfg *config.Config, logger *slog.Logger) string {
 		return "http://127.0.0.1:" + listenAddr[len("0.0.0.0:"):]
 	}
 	return "http://" + listenAddr
+}
+
+func daemonURLIsLoopback(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsUnspecified()
+	}
+	return false
 }
 
 func (d *Daemon) Shutdown(ctx context.Context) error {

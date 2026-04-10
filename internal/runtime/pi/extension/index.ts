@@ -21,6 +21,7 @@ const AGENT_TOKEN = process.env.TACK_DAEMON_TOKEN ?? process.env.TACK_AGENT_TOKE
 const AGENT_NAME = process.env.TACK_AGENT_NAME ?? "unknown";
 const AGENT_ROLE = process.env.TACK_AGENT_ROLE ?? "";
 const OBJECTIVE_ID = process.env.TACK_OBJECTIVE_ID ?? "";
+const PROJECT_ID = process.env.TACK_PROJECT_ID ?? "";
 const STREAM_ID = process.env.TACK_STREAM_ID ?? "";
 const FILE_SCOPE = (process.env.TACK_FILE_SCOPE ?? "")
   .split(",")
@@ -38,6 +39,7 @@ async function tackFetch(
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${AGENT_TOKEN}`,
+      ...(PROJECT_ID ? { "X-Tack-Project-ID": PROJECT_ID } : {}),
       ...(opts.headers as Record<string, string>),
     },
   });

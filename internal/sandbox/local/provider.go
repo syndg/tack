@@ -20,20 +20,45 @@ import (
 )
 
 func resolveWithin(base, requested string) (string, error) {
-	if requested == "" {
-		return base, nil
+	baseResolved, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return "", fmt.Errorf("resolving sandbox root: %w", err)
 	}
-	joined := filepath.Join(base, requested)
-	cleanBase := filepath.Clean(base)
-	cleanJoined := filepath.Clean(joined)
-	rel, err := filepath.Rel(cleanBase, cleanJoined)
+	if requested == "" {
+		return baseResolved, nil
+	}
+	candidate := filepath.Clean(filepath.Join(baseResolved, requested))
+	resolved := candidate
+	for probe := candidate; ; probe = filepath.Dir(probe) {
+		resolvedProbe, err := filepath.EvalSymlinks(probe)
+		if err == nil {
+			if probe != candidate {
+				suffix, relErr := filepath.Rel(probe, candidate)
+				if relErr != nil {
+					return "", fmt.Errorf("resolving path suffix: %w", relErr)
+				}
+				resolved = filepath.Join(resolvedProbe, suffix)
+			} else {
+				resolved = resolvedProbe
+			}
+			break
+		}
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("resolving path: %w", err)
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return "", fmt.Errorf("path escapes sandbox root: %s", requested)
+		}
+	}
+	rel, err := filepath.Rel(baseResolved, resolved)
 	if err != nil {
 		return "", fmt.Errorf("resolving path: %w", err)
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path escapes sandbox root: %s", requested)
 	}
-	return cleanJoined, nil
+	return resolved, nil
 }
 
 // validBranchRe matches branch names that start with an alphanumeric char or

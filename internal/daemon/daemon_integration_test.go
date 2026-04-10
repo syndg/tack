@@ -891,7 +891,7 @@ func registerDaemonTestProject(t *testing.T, d *Daemon, root string) {
 	}
 	configPath := filepath.Join(root, ".tack", "config.yaml")
 	if _, err := os.Stat(configPath); err != nil {
-		if err := os.WriteFile(configPath, []byte("{}\n"), 0o644); err != nil {
+		if err := os.WriteFile(configPath, []byte("sandbox:\n  provider: local\n"), 0o644); err != nil {
 			t.Fatalf("WriteFile config: %v", err)
 		}
 	}
