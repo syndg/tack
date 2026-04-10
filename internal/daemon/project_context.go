@@ -56,6 +56,7 @@ type ProjectContextManager struct {
 	baseConfig     *config.Config
 	userConfigPath string
 	daemonURL      string
+	daemonToken    string
 	logger         *slog.Logger
 
 	projectStore *db.ProjectStore
@@ -96,6 +97,7 @@ func newProjectContextManager(
 	creds *credentials.Store,
 	obs *observability.Recorder,
 	daemonURL string,
+	daemonToken string,
 	logger *slog.Logger,
 ) *ProjectContextManager {
 	userCfg := config.UserConfigPath
@@ -106,6 +108,7 @@ func newProjectContextManager(
 		baseConfig:     baseCfg,
 		userConfigPath: userCfg,
 		daemonURL:      daemonURL,
+		daemonToken:    daemonToken,
 		logger:         logger,
 		projectStore:   projectStore,
 		objectives:     objectiveStore,
@@ -320,6 +323,7 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 		PlannerModel:       cfg.EffectivePlannerModel(),
 		DeterministicModel: cfg.EffectiveSmallTaskModel(),
 		DaemonURL:          m.daemonURL,
+		DaemonToken:        m.daemonToken,
 		Lifecycle:          lifecycleMgr,
 		MergeProcessor:     mergeProcessor,
 		PlanCreator:        planningService,

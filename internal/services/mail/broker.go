@@ -79,8 +79,6 @@ func (b *Broker) Send(ctx context.Context, msg *domain.MailMessage) error {
 				Status:      "escalated",
 				Details: map[string]any{
 					"subject": msg.Subject,
-					"body":    msg.Body,
-					"payload": msg.Payload,
 				},
 			})
 		}

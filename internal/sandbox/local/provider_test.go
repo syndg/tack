@@ -217,6 +217,29 @@ func TestUploadDownload_RoundTripFiles(t *testing.T) {
 	}
 }
 
+func TestSandboxPaths_DoNotEscapeWorktree(t *testing.T) {
+	repoDir := initTestRepo(t)
+	p := newTestProvider(t, repoDir)
+	ctx := context.Background()
+
+	sb, err := p.Create(ctx, sandbox.CreateOpts{
+		Labels: map[string]string{"tack.objective": "obj-paths", "tack.role": "builder"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if _, err := sb.Exec(ctx, "pwd", sandbox.ExecOpts{WorkDir: "../.."}); err == nil {
+		t.Fatal("expected WorkDir traversal to fail")
+	}
+	if err := sb.Upload(ctx, []byte("x"), "../../escape.txt"); err == nil {
+		t.Fatal("expected Upload traversal to fail")
+	}
+	if _, err := sb.Download(ctx, "../../escape.txt"); err == nil {
+		t.Fatal("expected Download traversal to fail")
+	}
+}
+
 func TestDelete_RemovesWorktreeAndBranch(t *testing.T) {
 	repoDir := initTestRepo(t)
 	p := newTestProvider(t, repoDir)

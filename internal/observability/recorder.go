@@ -164,7 +164,7 @@ func (r *Recorder) writeJSONL(record Record) error {
 	f, ok := r.projects[projectID]
 	if !ok {
 		path := ProjectLogPath(r.logDir, projectID)
-		f, err = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		f, err = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			return fmt.Errorf("opening canonical log file: %w", err)
 		}
@@ -187,6 +187,9 @@ func (r *Recorder) publishProjected(record Record) {
 		"role":    record.Role,
 	}
 	for k, v := range record.Details {
+		if record.eventType == domain.EventAgentActivity && k == "content" {
+			continue
+		}
 		payload[k] = v
 	}
 	data, err := json.Marshal(payload)

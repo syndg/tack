@@ -40,6 +40,9 @@ var watchCmd = &cobra.Command{
 				req.Header.Set("X-Tack-Project-ID", pid)
 			}
 		}
+		if err := applyDaemonAuth(req); err != nil {
+			return err
+		}
 		req.Header.Set("Accept", "text/event-stream")
 
 		resp, err := http.DefaultClient.Do(req)

@@ -353,7 +353,7 @@ func ProjectIDPath(root string) string {
 func Default() *Config {
 	return &Config{
 		Daemon: DaemonConfig{
-			Listen:     "0.0.0.0:9800",
+			Listen:     "127.0.0.1:9800",
 			DataDir:    "~/.config/tack/data",
 			BaseBranch: "main",
 		},

@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -22,12 +24,30 @@ func (d *Daemon) handleSendMail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	projectCtx, ok := d.requireProjectContext(w, r)
+	if !ok {
+		return
+	}
 	if msg.ProjectID == "" {
-		projectCtx, ok := d.requireProjectContext(w, r)
-		if !ok {
+		msg.ProjectID = projectCtx.Project.ID
+	} else if msg.ProjectID != projectCtx.Project.ID {
+		writeError(w, http.StatusNotFound, "resource not found in targeted project")
+		return
+	}
+	if msg.Objective != "" {
+		obj, err := d.objectives.Get(r.Context(), msg.Objective)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "objective not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to validate objective")
 			return
 		}
-		msg.ProjectID = projectCtx.Project.ID
+		if obj.ProjectID != msg.ProjectID {
+			writeError(w, http.StatusNotFound, "resource not found in targeted project")
+			return
+		}
 	}
 
 	if err := d.mailBroker.Send(r.Context(), &msg); err != nil {
@@ -116,6 +136,18 @@ func (d *Daemon) handleMarkMailRead(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid message ID")
+		return
+	}
+	msg, err := d.mail.GetByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "message not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load message")
+		return
+	}
+	if !d.ensureProjectMatch(w, r, msg.ProjectID) {
 		return
 	}
 

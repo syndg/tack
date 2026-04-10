@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/syndg/tack/internal/client"
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/daemon"
+	"github.com/syndg/tack/internal/daemonauth"
 )
 
 var (
@@ -71,6 +73,11 @@ func loadUserConfigOnly() (*config.Config, error) {
 
 func newDaemonClient(cmd *cobra.Command, requireProject bool) (*client.Client, error) {
 	c := client.New(daemonURL)
+	if token, err := daemonauth.Load(); err != nil {
+		return nil, err
+	} else if token != "" {
+		c.SetAuthToken(token)
+	}
 	if !requireProject {
 		return c, nil
 	}
@@ -80,6 +87,17 @@ func newDaemonClient(cmd *cobra.Command, requireProject bool) (*client.Client, e
 	}
 	c.SetProjectID(pid)
 	return c, nil
+}
+
+func applyDaemonAuth(req *http.Request) error {
+	token, err := daemonauth.Load()
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return nil
 }
 
 func resolveTargetProjectID(cmd *cobra.Command, c *client.Client) (string, error) {

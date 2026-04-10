@@ -66,6 +66,7 @@ type Spawner struct {
 	runtimeAuth    config.RuntimeAuthConfig
 	logger         *slog.Logger
 	daemonURL      string
+	daemonToken    string
 	gitAuthorName  string
 	gitAuthorEmail string
 }
@@ -85,7 +86,12 @@ func NewSpawner(
 	daemonURL string,
 	gitAuthorName string,
 	gitAuthorEmail string,
+	daemonToken ...string,
 ) *Spawner {
+	token := ""
+	if len(daemonToken) > 0 {
+		token = daemonToken[0]
+	}
 	return &Spawner{
 		agentStore:     agentStore,
 		rt:             rt,
@@ -98,6 +104,7 @@ func NewSpawner(
 		runtimeAuth:    runtimeAuth,
 		logger:         logger,
 		daemonURL:      daemonURL,
+		daemonToken:    token,
 		gitAuthorName:  gitAuthorName,
 		gitAuthorEmail: gitAuthorEmail,
 	}
@@ -259,7 +266,12 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 		return nil, fmt.Errorf("preparing runtime credentials: %w", err)
 	}
 	envVars["TACK_DAEMON_URL"] = s.daemonURL
-	envVars["TACK_AGENT_TOKEN"] = agentToken
+	if s.daemonToken != "" {
+		envVars["TACK_DAEMON_TOKEN"] = s.daemonToken
+		envVars["TACK_AGENT_TOKEN"] = s.daemonToken
+	} else {
+		envVars["TACK_AGENT_TOKEN"] = agentToken
+	}
 	envVars["TACK_AGENT_NAME"] = agentName
 	envVars["TACK_OBJECTIVE_ID"] = req.Objective.ID
 	envVars["TACK_AGENT_ROLE"] = req.Role

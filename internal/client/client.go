@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/syndg/tack/internal/daemonauth"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/services/merge"
@@ -19,6 +20,7 @@ import (
 type Client struct {
 	baseURL    string
 	projectID  string
+	authToken  string
 	httpClient *http.Client
 }
 
@@ -38,17 +40,26 @@ type StatusResponse struct {
 
 // New creates a new Client targeting the given daemon base URL.
 func New(baseURL string) *Client {
-	return &Client{
+	c := &Client{
 		baseURL: baseURL,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
 	}
+	if token, err := daemonauth.Load(); err == nil && token != "" {
+		c.authToken = token
+	}
+	return c
 }
 
 // SetProjectID configures the default project target header.
 func (c *Client) SetProjectID(projectID string) {
 	c.projectID = projectID
+}
+
+// SetAuthToken configures bearer auth for daemon requests.
+func (c *Client) SetAuthToken(token string) {
+	c.authToken = token
 }
 
 // ResolveProjectByPath resolves a registered project from a filesystem path.
@@ -555,6 +566,9 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 	}
 	if c.projectID != "" {
 		req.Header.Set("X-Tack-Project-ID", c.projectID)
+	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
 	}
 
 	resp, err := c.httpClient.Do(req)

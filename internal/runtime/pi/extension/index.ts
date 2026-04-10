@@ -17,7 +17,7 @@ import { Type } from "@sinclair/typebox";
 // --- Environment ---
 
 const DAEMON_URL = process.env.TACK_DAEMON_URL ?? "http://127.0.0.1:9800";
-const AGENT_TOKEN = process.env.TACK_AGENT_TOKEN ?? "";
+const AGENT_TOKEN = process.env.TACK_DAEMON_TOKEN ?? process.env.TACK_AGENT_TOKEN ?? "";
 const AGENT_NAME = process.env.TACK_AGENT_NAME ?? "unknown";
 const AGENT_ROLE = process.env.TACK_AGENT_ROLE ?? "";
 const OBJECTIVE_ID = process.env.TACK_OBJECTIVE_ID ?? "";

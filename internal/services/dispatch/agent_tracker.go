@@ -233,7 +233,6 @@ func (t *agentTracker) drainAgentActivity(session *domain.AgentSession, process 
 			t.eventBus.Emit(domain.EventAgentActivity, session.ObjectiveID, session.StreamID, session.ID,
 				"kind", kind,
 				"tool", tool,
-				"content", truncateForEvent(event.Content, 500),
 				"is_error", event.IsError,
 			)
 		}

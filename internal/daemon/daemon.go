@@ -13,6 +13,7 @@ import (
 
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
+	"github.com/syndg/tack/internal/daemonauth"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/services/events"
@@ -46,6 +47,7 @@ type Daemon struct {
 	projectCtxs   *ProjectContextManager
 	creds         *credentials.Store
 	observability *observability.Recorder
+	authToken     string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -102,6 +104,11 @@ func New(cfg *config.Config) (*Daemon, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	mux := http.NewServeMux()
+	authToken, err := daemonauth.LoadOrCreate()
+	if err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("loading daemon auth token: %w", err)
+	}
 	daemonURL := deriveDaemonURL(cfg, logger)
 	projectCtxs := newProjectContextManager(
 		cfg,
@@ -120,6 +127,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 		creds,
 		recorder,
 		daemonURL,
+		authToken,
 		logger,
 	)
 
@@ -143,18 +151,20 @@ func New(cfg *config.Config) (*Daemon, error) {
 		projectCtxs:     projectCtxs,
 		creds:           creds,
 		observability:   recorder,
+		authToken:       authToken,
 		ctx:             ctx,
 		cancel:          cancel,
 		mux:             mux,
 		server: &http.Server{
 			Addr:    cfg.Daemon.Listen,
-			Handler: mux,
+			Handler: nil,
 		},
 		startTime: time.Now(),
 		logger:    logger,
 	}
 
 	d.registerRoutes()
+	d.server.Handler = d.authMiddleware(mux)
 	return d, nil
 }
 

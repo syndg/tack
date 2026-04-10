@@ -172,6 +172,8 @@ type Config struct {
 
 	// DaemonURL is the URL agents use to call back to the daemon.
 	DaemonURL string
+	// DaemonToken authenticates agent and CLI calls to the daemon.
+	DaemonToken string
 
 	// Observability records canonical operator-facing timeline data. Optional: nil disables.
 	Observability *observability.Recorder
@@ -269,7 +271,7 @@ func New(cfg Config) (*Service, error) {
 			cfg.Agents, cfg.AgentRuntime, cfg.SandboxProvider,
 			cfg.RulesEngine, cfg.ToolCurator, cfg.EventBus, cfg.Observability,
 			cfg.Credentials, cfg.RuntimeAuth, logger, cfg.DaemonURL,
-			cfg.GitAuthorName, cfg.GitAuthorEmail,
+			cfg.GitAuthorName, cfg.GitAuthorEmail, cfg.DaemonToken,
 		)
 
 		// Scheduler: stream dependency resolution and concurrency limiting.

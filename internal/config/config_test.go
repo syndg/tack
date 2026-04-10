@@ -12,7 +12,7 @@ func TestLoadMissingReturnsDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
 	}
-	if cfg.Daemon.Listen != "0.0.0.0:9800" {
+	if cfg.Daemon.Listen != "127.0.0.1:9800" {
 		t.Fatalf("unexpected default listen: %q", cfg.Daemon.Listen)
 	}
 }
@@ -275,7 +275,7 @@ func TestLayeredLoad_BothMissing(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	// Should get pure defaults
-	if cfg.Daemon.Listen != "0.0.0.0:9800" {
+	if cfg.Daemon.Listen != "127.0.0.1:9800" {
 		t.Errorf("listen = %q, want default", cfg.Daemon.Listen)
 	}
 }
@@ -285,7 +285,7 @@ func TestLayeredLoad_EmptyPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Daemon.Listen != "0.0.0.0:9800" {
+	if cfg.Daemon.Listen != "127.0.0.1:9800" {
 		t.Errorf("listen = %q, want default", cfg.Daemon.Listen)
 	}
 }

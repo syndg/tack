@@ -3,9 +3,11 @@ package daytona
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
+	pathpkg "path"
 	"regexp"
 	"strings"
 	"sync"
@@ -108,11 +110,12 @@ func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox
 	}
 
 	sb := &DaytonaSandbox{
-		sandbox: dSandbox,
-		labels:  opts.Labels,
-		envVars: opts.EnvVars,
-		workDir: p.cfg.RepoPath,
-		logger:  p.logger,
+		sandbox:       dSandbox,
+		labels:        opts.Labels,
+		envVars:       opts.EnvVars,
+		workDir:       p.cfg.RepoPath,
+		gitAuthHeader: p.gitAuthHeader(),
+		logger:        p.logger,
 	}
 
 	p.mu.Lock()
@@ -132,6 +135,38 @@ func sshToHTTPS(url string) string {
 	url = strings.TrimPrefix(url, "git@")
 	url = strings.Replace(url, ":", "/", 1)
 	return "https://" + url
+}
+
+func (p *Provider) gitAuthHeader() string {
+	if p.creds == nil {
+		return ""
+	}
+	tok, err := p.creds.GitToken("")
+	if err != nil || tok == "" {
+		return ""
+	}
+	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + tok))
+	return "Authorization: Basic " + basic
+}
+
+func resolveRemotePath(base, requested string) (string, error) {
+	if base == "" {
+		base = "/"
+	}
+	cleanBase := pathpkg.Clean(base)
+	if requested == "" {
+		return cleanBase, nil
+	}
+	var candidate string
+	if pathpkg.IsAbs(requested) {
+		candidate = pathpkg.Clean(requested)
+	} else {
+		candidate = pathpkg.Clean(pathpkg.Join(cleanBase, requested))
+	}
+	if candidate != cleanBase && !strings.HasPrefix(candidate, cleanBase+"/") {
+		return "", fmt.Errorf("path escapes sandbox root: %s", requested)
+	}
+	return candidate, nil
 }
 
 // bootstrap sets up the repo and working branch inside a freshly created sandbox.
@@ -164,20 +199,6 @@ func (p *Provider) bootstrap(ctx context.Context, sb *daytona.Sandbox, opts sand
 		p.logger.Info("bootstrap: cloning repo", "sandbox", sb.ID, "url", repoURL)
 		if err := sb.Git.Clone(ctx, repoURL, repoPath, gitOpts...); err != nil {
 			return fmt.Errorf("cloning repo: %w", err)
-		}
-	}
-
-	// Configure git CLI credentials so Exec-based push/fetch work.
-	// The Daytona Git API handles auth internally, but sandbox.Exec("git push ...")
-	// needs the token embedded in the remote URL.
-	if p.creds != nil {
-		tok, _ := p.creds.GitToken("")
-		if tok != "" {
-			authURL := strings.Replace(repoURL, "https://", fmt.Sprintf("https://x-access-token:%s@", tok), 1)
-			resp, err := sb.Process.ExecuteCommand(ctx, fmt.Sprintf("git remote set-url origin %s", authURL), options.WithCwd(repoPath))
-			if err != nil || resp.ExitCode != 0 {
-				p.logger.Warn("bootstrap: failed to set auth remote URL", "error", err)
-			}
 		}
 	}
 
@@ -235,9 +256,10 @@ func (p *Provider) Get(ctx context.Context, id string) (sandbox.Sandbox, error) 
 	}
 
 	sb = &DaytonaSandbox{
-		sandbox: dSandbox,
-		workDir: p.cfg.RepoPath,
-		logger:  p.logger,
+		sandbox:       dSandbox,
+		workDir:       p.cfg.RepoPath,
+		gitAuthHeader: p.gitAuthHeader(),
+		logger:        p.logger,
 	}
 
 	p.mu.Lock()
@@ -267,9 +289,10 @@ func (p *Provider) List(ctx context.Context, labels map[string]string) ([]sandbo
 			result = append(result, cached)
 		} else {
 			sb := &DaytonaSandbox{
-				sandbox: dSandbox,
-				labels:  labels, // API already filtered by these labels.
-				logger:  p.logger,
+				sandbox:       dSandbox,
+				labels:        labels, // API already filtered by these labels.
+				gitAuthHeader: p.gitAuthHeader(),
+				logger:        p.logger,
 			}
 			p.sandboxes[dSandbox.ID] = sb
 			result = append(result, sb)
@@ -337,11 +360,12 @@ func buildEffectiveCommand(cmd string, opts sandbox.ExecOpts) string {
 
 // DaytonaSandbox wraps a Daytona SDK sandbox to implement sandbox.Sandbox.
 type DaytonaSandbox struct {
-	sandbox *daytona.Sandbox
-	labels  map[string]string
-	envVars map[string]string
-	workDir string // default working directory (repo path after bootstrap)
-	logger  *slog.Logger
+	sandbox       *daytona.Sandbox
+	labels        map[string]string
+	envVars       map[string]string
+	workDir       string // default working directory (repo path after bootstrap)
+	gitAuthHeader string
+	logger        *slog.Logger
 }
 
 func (s *DaytonaSandbox) ID() string {
@@ -353,13 +377,31 @@ func (s *DaytonaSandbox) Status() sandbox.SandboxStatus {
 }
 
 func (s *DaytonaSandbox) Exec(ctx context.Context, cmd string, opts sandbox.ExecOpts) (sandbox.ExecResult, error) {
+	mergedEnv := make(map[string]string, len(s.envVars)+len(opts.Env)+3)
+	for k, v := range s.envVars {
+		mergedEnv[k] = v
+	}
+	for k, v := range opts.Env {
+		mergedEnv[k] = v
+	}
+	if s.gitAuthHeader != "" && strings.HasPrefix(strings.TrimSpace(cmd), "git ") {
+		mergedEnv["GIT_CONFIG_COUNT"] = "1"
+		mergedEnv["GIT_CONFIG_KEY_0"] = "http.extraHeader"
+		mergedEnv["GIT_CONFIG_VALUE_0"] = s.gitAuthHeader
+	}
 	// Build the effective command with env and workdir from ExecOpts.
-	effectiveCmd := buildEffectiveCommand(cmd, opts)
+	effectiveCmd := buildEffectiveCommand(cmd, sandbox.ExecOpts{Env: mergedEnv})
 
 	var execOpts []func(*options.ExecuteCommand)
 	workDir := opts.WorkDir
 	if workDir == "" {
 		workDir = s.workDir
+	} else {
+		resolved, err := resolveRemotePath(s.workDir, workDir)
+		if err != nil {
+			return sandbox.ExecResult{}, err
+		}
+		workDir = resolved
 	}
 	if workDir != "" {
 		execOpts = append(execOpts, options.WithCwd(workDir))
@@ -404,6 +446,12 @@ func (s *DaytonaSandbox) ExecStreaming(ctx context.Context, cmd string, opts san
 	workDir := opts.WorkDir
 	if workDir == "" {
 		workDir = s.workDir
+	} else {
+		resolved, err := resolveRemotePath(s.workDir, workDir)
+		if err != nil {
+			return nil, err
+		}
+		workDir = resolved
 	}
 
 	// Wait for the PTY WebSocket connection to be established before sending input.
@@ -449,18 +497,19 @@ func (s *DaytonaSandbox) ExecStreaming(ctx context.Context, cmd string, opts san
 }
 
 func (s *DaytonaSandbox) Upload(ctx context.Context, content []byte, path string) error {
-	// Make relative paths resolve from the repo directory.
-	if s.workDir != "" && !strings.HasPrefix(path, "/") {
-		path = s.workDir + "/" + path
+	resolved, err := resolveRemotePath(s.workDir, path)
+	if err != nil {
+		return err
 	}
-	return s.sandbox.FileSystem.UploadFile(ctx, content, path)
+	return s.sandbox.FileSystem.UploadFile(ctx, content, resolved)
 }
 
 func (s *DaytonaSandbox) Download(ctx context.Context, path string) ([]byte, error) {
-	if s.workDir != "" && !strings.HasPrefix(path, "/") {
-		path = s.workDir + "/" + path
+	resolved, err := resolveRemotePath(s.workDir, path)
+	if err != nil {
+		return nil, err
 	}
-	return s.sandbox.FileSystem.DownloadFile(ctx, path, nil)
+	return s.sandbox.FileSystem.DownloadFile(ctx, resolved, nil)
 }
 
 func (s *DaytonaSandbox) Stop(ctx context.Context) error {

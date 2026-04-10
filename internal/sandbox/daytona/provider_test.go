@@ -121,3 +121,37 @@ func TestProvider_GetFromLocalMap(t *testing.T) {
 		t.Error("expected same sandbox instance")
 	}
 }
+
+func TestResolveRemotePath(t *testing.T) {
+	tests := []struct {
+		name      string
+		base      string
+		requested string
+		want      string
+		wantErr   bool
+	}{
+		{name: "empty uses base", base: "/home/daytona/project", requested: "", want: "/home/daytona/project"},
+		{name: "relative within base", base: "/home/daytona/project", requested: "sub/file.txt", want: "/home/daytona/project/sub/file.txt"},
+		{name: "absolute within base", base: "/home/daytona/project", requested: "/home/daytona/project/sub/file.txt", want: "/home/daytona/project/sub/file.txt"},
+		{name: "relative escape rejected", base: "/home/daytona/project", requested: "../../etc/passwd", wantErr: true},
+		{name: "absolute escape rejected", base: "/home/daytona/project", requested: "/etc/passwd", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveRemotePath(tt.base, tt.requested)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveRemotePath: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("resolveRemotePath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

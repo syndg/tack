@@ -19,6 +19,23 @@ import (
 	"github.com/syndg/tack/internal/sandbox"
 )
 
+func resolveWithin(base, requested string) (string, error) {
+	if requested == "" {
+		return base, nil
+	}
+	joined := filepath.Join(base, requested)
+	cleanBase := filepath.Clean(base)
+	cleanJoined := filepath.Clean(joined)
+	rel, err := filepath.Rel(cleanBase, cleanJoined)
+	if err != nil {
+		return "", fmt.Errorf("resolving path: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes sandbox root: %s", requested)
+	}
+	return cleanJoined, nil
+}
+
 // validBranchRe matches branch names that start with an alphanumeric char or
 // "tack/" and contain only alphanumeric, hyphen, underscore, dot, and slash.
 var validBranchRe = regexp.MustCompile(`^[a-zA-Z0-9][-a-zA-Z0-9_.\/]*$`)
@@ -399,7 +416,11 @@ func (s *LocalSandbox) Exec(ctx context.Context, cmdStr string, opts sandbox.Exe
 	// Set working directory
 	workDir := s.path
 	if opts.WorkDir != "" {
-		workDir = filepath.Join(s.path, opts.WorkDir)
+		resolved, err := resolveWithin(s.path, opts.WorkDir)
+		if err != nil {
+			return sandbox.ExecResult{}, err
+		}
+		workDir = resolved
 	}
 	cmd.Dir = workDir
 
@@ -433,7 +454,11 @@ func (s *LocalSandbox) ExecStreaming(ctx context.Context, cmdStr string, opts sa
 
 	workDir := s.path
 	if opts.WorkDir != "" {
-		workDir = filepath.Join(s.path, opts.WorkDir)
+		resolved, err := resolveWithin(s.path, opts.WorkDir)
+		if err != nil {
+			return nil, err
+		}
+		workDir = resolved
 	}
 	cmd.Dir = workDir
 
@@ -506,7 +531,10 @@ func (h *localProcessHandle) Kill() error {
 
 // Upload writes content to a file within the worktree.
 func (s *LocalSandbox) Upload(ctx context.Context, content []byte, path string) error {
-	dest := filepath.Join(s.path, path)
+	dest, err := resolveWithin(s.path, path)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return fmt.Errorf("creating parent directories: %w", err)
 	}
@@ -518,7 +546,10 @@ func (s *LocalSandbox) Upload(ctx context.Context, content []byte, path string) 
 
 // Download reads a file from the worktree.
 func (s *LocalSandbox) Download(ctx context.Context, path string) ([]byte, error) {
-	src := filepath.Join(s.path, path)
+	src, err := resolveWithin(s.path, path)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return nil, fmt.Errorf("reading file: %w", err)

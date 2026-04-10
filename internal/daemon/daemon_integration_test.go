@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/syndg/tack/internal/client"
 	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/daemonauth"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 )
@@ -43,7 +45,9 @@ func TestDaemonIntegration(t *testing.T) {
 	waitForHTTP(t, "http://"+cfg.Daemon.Listen+"/health")
 
 	httpClient := &http.Client{Timeout: 5 * time.Second}
-	resp, err := httpClient.Post("http://"+cfg.Daemon.Listen+"/objectives", "application/json", bytes.NewBufferString(`{"description":"  test objective  "}`))
+	req := authedRequest(t, http.MethodPost, "http://"+cfg.Daemon.Listen+"/objectives", bytes.NewBufferString(`{"description":"  test objective  "}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST /objectives: %v", err)
 	}
@@ -117,7 +121,9 @@ func TestCreateObjectiveValidation(t *testing.T) {
 
 	waitForHTTP(t, "http://"+cfg.Daemon.Listen+"/health")
 
-	resp, err := http.Post("http://"+cfg.Daemon.Listen+"/objectives", "application/json", bytes.NewBufferString(`{"description":"   "}`))
+	req := authedRequest(t, http.MethodPost, "http://"+cfg.Daemon.Listen+"/objectives", bytes.NewBufferString(`{"description":"   "}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST /objectives: %v", err)
 	}
@@ -160,7 +166,7 @@ func TestBlueprintEndpoints(t *testing.T) {
 	baseURL := "http://" + cfg.Daemon.Listen
 	waitForHTTP(t, baseURL+"/health")
 
-	resp, err := http.Get(baseURL + "/blueprints")
+	resp, err := http.DefaultClient.Do(authedRequest(t, http.MethodGet, baseURL+"/blueprints", nil))
 	if err != nil {
 		t.Fatalf("GET /blueprints: %v", err)
 	}
@@ -177,7 +183,7 @@ func TestBlueprintEndpoints(t *testing.T) {
 		t.Fatalf("expected 2 workflows, got %d", len(workflows))
 	}
 
-	resp, err = http.Get(baseURL + "/blueprints/standard")
+	resp, err = http.DefaultClient.Do(authedRequest(t, http.MethodGet, baseURL+"/blueprints/standard", nil))
 	if err != nil {
 		t.Fatalf("GET /blueprints/{name}: %v", err)
 	}
@@ -194,7 +200,7 @@ func TestBlueprintEndpoints(t *testing.T) {
 		t.Fatalf("unexpected blueprint id: %v", blueprint["id"])
 	}
 
-	resp, err = http.Get(baseURL + "/executions")
+	resp, err = http.DefaultClient.Do(authedRequest(t, http.MethodGet, baseURL+"/executions", nil))
 	if err != nil {
 		t.Fatalf("GET /executions: %v", err)
 	}
@@ -499,7 +505,7 @@ exit 0
 	// Wait for planner agent to create the plan and execution to pause at approve step.
 	var plan planWithStreams
 	waitForCondition(t, 10*time.Second, func() bool {
-		resp, err := http.Get(baseURL + "/objectives/" + obj.ID + "/plan")
+		resp, err := http.DefaultClient.Do(authedRequest(t, http.MethodGet, baseURL+"/objectives/"+obj.ID+"/plan", nil))
 		if err != nil || resp.StatusCode != 200 {
 			return false
 		}
@@ -609,7 +615,7 @@ exit 0
 	// Wait for planner agent to create the plan.
 	var plan planWithStreams
 	waitForCondition(t, 10*time.Second, func() bool {
-		resp, err := http.Get(baseURL + "/objectives/" + obj.ID + "/plan")
+		resp, err := http.DefaultClient.Do(authedRequest(t, http.MethodGet, baseURL+"/objectives/"+obj.ID+"/plan", nil))
 		if err != nil || resp.StatusCode != 200 {
 			return false
 		}
@@ -738,7 +744,7 @@ exit 0
 	// Wait for planner agent to create the plan.
 	var plan planWithStreams
 	waitForCondition(t, 10*time.Second, func() bool {
-		resp, err := http.Get(baseURL + "/objectives/" + obj.ID + "/plan")
+		resp, err := http.DefaultClient.Do(authedRequest(t, http.MethodGet, baseURL+"/objectives/"+obj.ID+"/plan", nil))
 		if err != nil || resp.StatusCode != 200 {
 			return false
 		}
@@ -914,7 +920,9 @@ func postJSON(t *testing.T, url string, body any, wantStatus int, out any) {
 	if err != nil {
 		t.Fatalf("Marshal body: %v", err)
 	}
-	resp, err := http.Post(url, "application/json", bytes.NewReader(jsonBody))
+	req := authedRequest(t, http.MethodPost, url, bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST %s: %v", url, err)
 	}
@@ -933,7 +941,7 @@ func postJSON(t *testing.T, url string, body any, wantStatus int, out any) {
 
 func mustGetJSON[T any](t *testing.T, url string) T {
 	t.Helper()
-	resp, err := http.Get(url)
+	resp, err := http.DefaultClient.Do(authedRequest(t, http.MethodGet, url, nil))
 	if err != nil {
 		t.Fatalf("GET %s: %v", url, err)
 	}
@@ -950,6 +958,20 @@ func mustGetJSON[T any](t *testing.T, url string) T {
 		t.Fatalf("Decode GET %s: %v", url, err)
 	}
 	return out
+}
+
+func authedRequest(t *testing.T, method, url string, body io.Reader) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		t.Fatalf("new request %s %s: %v", method, url, err)
+	}
+	token, err := daemonauth.Load()
+	if err != nil {
+		t.Fatalf("load daemon token: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return req
 }
 
 // TestDaemonRestart_RediscoversLocalSandboxesAndCompletesObjective exercises the
