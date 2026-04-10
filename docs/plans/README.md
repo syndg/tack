@@ -31,6 +31,8 @@ Not every file here has the same weight. Use the status marker at the top of eac
   Planned observability refactor for a deeper operator record model.
 - `2026-04-09-feature-resurrection-benchmark-design.md`
   Deferred evaluation idea that should shape future context work.
+- `2026-04-10-adaptive-deliberation-and-dossier-design.md`
+  Product design for adaptive planning depth, dossiers, and simple UX.
 
 ## Current Architecture Background
 
