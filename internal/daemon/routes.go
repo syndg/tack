@@ -30,6 +30,7 @@ func (d *Daemon) registerRoutes() {
 	d.mux.HandleFunc("POST /plans", d.handleCreatePlan)
 	d.mux.HandleFunc("GET /plans", d.handleListPlans)
 	d.mux.HandleFunc("GET /plans/{id}", d.handleGetPlan)
+	d.mux.HandleFunc("POST /plans/{id}/quality-gates", d.handleUpdatePlanQualityGates)
 	d.mux.HandleFunc("POST /plans/{id}/approve", d.handleApprovePlan)
 	d.mux.HandleFunc("POST /plans/{id}/reject", d.handleRejectPlan)
 	d.mux.HandleFunc("GET /plans/{id}/streams", d.handleListStreams)

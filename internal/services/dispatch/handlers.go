@@ -117,6 +117,7 @@ func NewHandlers(
 //   - "dispatch_streams"   → dispatches lead agents for ready streams
 //   - "run_quality_gates"  → runs quality gates in sandbox
 //   - "signal_merge_ready" → marks streams as merge-ready and publishes EventMergeQueued
+//   - "mark_stream_merged" → marks a sub-execution stream as merged without merge queue
 //   - "mark_complete"      → transitions objective to completed
 //   - "merge_queue"        → enqueues merge_ready streams and blocks until all resolve
 //   - "create_pr"          → pushes branch and creates a GitHub PR
@@ -128,6 +129,8 @@ func (h *Handlers) HandleDeterministic(ctx context.Context, exec *blueprint.Exec
 		return h.runQualityGates(ctx, exec, step)
 	case "signal_merge_ready":
 		return h.signalMergeReady(ctx, exec)
+	case "mark_stream_merged":
+		return h.markStreamMerged(ctx, exec)
 	case "mark_complete":
 		return h.markComplete(ctx, exec)
 	case "merge_queue":
@@ -422,6 +425,22 @@ func (h *Handlers) signalStreamMergeReady(ctx context.Context, streamID, planID,
 		"stream_id", streamID,
 	)
 
+	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
+}
+
+func (h *Handlers) markStreamMerged(ctx context.Context, exec *blueprint.Execution) (blueprint.StepResult, error) {
+	if exec.StreamID == "" {
+		return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: "mark_stream_merged requires a stream sub-execution"}, nil
+	}
+	stream, err := h.streams.Get(ctx, exec.StreamID)
+	if err != nil {
+		return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: fmt.Sprintf("loading stream %s: %s", exec.StreamID, err)}, nil
+	}
+	stream.Status = domain.StreamStatusMerged
+	if err := h.streams.Update(ctx, stream); err != nil {
+		return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: fmt.Sprintf("marking stream %s merged: %s", exec.StreamID, err)}, nil
+	}
+	h.logger.Info("stream marked merged without merge queue", "stream_id", exec.StreamID, "execution_id", exec.ID)
 	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
 }
 

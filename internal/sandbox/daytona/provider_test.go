@@ -2,6 +2,7 @@ package daytona
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/syndg/tack/internal/sandbox"
@@ -153,5 +154,24 @@ func TestResolveRemotePath(t *testing.T) {
 				t.Fatalf("resolveRemotePath() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildGitCloneFallbackCommand(t *testing.T) {
+	cmd := buildGitCloneFallbackCommand("https://github.com/jesseduffield/lazygit.git", "/home/daytona/project", "Authorization: Basic abc123")
+	for _, needle := range []string{
+		"mkdir -p",
+		"git",
+		`http.extraHeader="$TACK_GIT_HTTP_EXTRA_HEADER"`,
+		"clone",
+		"https://github.com/jesseduffield/lazygit.git",
+		"/home/daytona/project",
+	} {
+		if !strings.Contains(cmd, needle) {
+			t.Fatalf("command missing %q: %s", needle, cmd)
+		}
+	}
+	if strings.Contains(cmd, "abc123") {
+		t.Fatalf("command should not embed auth secret: %s", cmd)
 	}
 }

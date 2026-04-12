@@ -1,0 +1,38 @@
+id: benchmark-build-review
+name: Benchmark build and review
+description: "Execute one benchmark work item: build, validate, review, and signal readiness for internal benchmark merging"
+
+retry:
+  profile: self_healing
+
+steps:
+  - id: build
+    type: agent
+    role: builder
+    description: Implement the benchmark work item
+    commit: auto
+    messages:
+      commit: true
+    next: lint
+
+  - id: lint
+    type: deterministic
+    action: run_quality_gates
+    retry:
+      max_attempts: 2
+    on_fail: build
+    max_fix_iterations: 3
+    next: review
+
+  - id: review
+    type: agent
+    role: reviewer
+    description: Review the benchmark implementation
+    commit: none
+    on_fail: build
+    max_fix_iterations: 3
+    next: merge_ready
+
+  - id: merge_ready
+    type: deterministic
+    action: signal_merge_ready

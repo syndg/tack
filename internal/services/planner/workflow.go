@@ -3,6 +3,7 @@ package planner
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
@@ -84,4 +85,23 @@ func (s *Service) RejectPlan(ctx context.Context, planID string) (*domain.Plan, 
 		return nil, fmt.Errorf("refreshing plan after reject: %w", err)
 	}
 	return plan, nil
+}
+
+// UpdatePlanQualityGates replaces a plan's quality gates before execution.
+func (s *Service) UpdatePlanQualityGates(ctx context.Context, planID string, qualityGates []string) (*domain.Plan, error) {
+	plan, err := s.plans.Get(ctx, planID)
+	if err != nil {
+		return nil, fmt.Errorf("getting plan: %w", err)
+	}
+	if plan.Status != domain.PlanStatusDraft && plan.Status != domain.PlanStatusPendingApproval {
+		return nil, fmt.Errorf("plan %s must be draft or pending_approval to update quality gates", planID)
+	}
+	if slices.Equal(plan.QualityGates, qualityGates) {
+		return plan, nil
+	}
+	plan.QualityGates = append([]string(nil), qualityGates...)
+	if err := s.plans.Update(ctx, plan); err != nil {
+		return nil, fmt.Errorf("updating plan quality gates: %w", err)
+	}
+	return s.plans.Get(ctx, planID)
 }

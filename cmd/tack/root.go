@@ -25,6 +25,8 @@ var (
 	projectID string
 )
 
+const defaultDaemonURL = "http://localhost:9800"
+
 var rootCmd = &cobra.Command{
 	Use:   "tack",
 	Short: "Tack - agentic workflow orchestrator",
@@ -38,7 +40,7 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "", "project config path override (default: walk up for .tack/config.yaml)")
-	rootCmd.PersistentFlags().StringVar(&daemonURL, "daemon-url", "http://localhost:9800", "daemon HTTP address")
+	rootCmd.PersistentFlags().StringVar(&daemonURL, "daemon-url", defaultDaemonURL, "daemon HTTP address")
 	rootCmd.PersistentFlags().StringVar(&projectID, "project", "", "target registered project ID or path")
 
 	rootCmd.AddCommand(daemonCmd)
@@ -71,8 +73,35 @@ func loadUserConfigOnly() (*config.Config, error) {
 	return cfg, nil
 }
 
+func normalizeDaemonAddress(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
+		return addr
+	}
+	return "http://" + addr
+}
+
+func effectiveDaemonURL() string {
+	if trimmed := strings.TrimSpace(daemonURL); trimmed != "" && trimmed != defaultDaemonURL {
+		return trimmed
+	}
+	cfg, err := loadUserConfigOnly()
+	if err == nil {
+		if listen := normalizeDaemonAddress(cfg.Daemon.Listen); listen != "" {
+			return listen
+		}
+		if external := normalizeDaemonAddress(cfg.Daemon.ExternalURL); external != "" {
+			return external
+		}
+	}
+	return daemonURL
+}
+
 func newDaemonClient(cmd *cobra.Command, requireProject bool) (*client.Client, error) {
-	c := client.New(daemonURL)
+	c := client.New(effectiveDaemonURL())
 	if token, err := daemonauth.Load(); err != nil {
 		return nil, err
 	} else if token != "" {

@@ -13,8 +13,8 @@ func TestLoadDefaults_LoadsShippedWorkflows(t *testing.T) {
 	}
 
 	ids := reg.List()
-	if len(ids) != 2 {
-		t.Fatalf("got %d workflows, want 2: %v", len(ids), ids)
+	if len(ids) != 4 {
+		t.Fatalf("got %d workflows, want 4: %v", len(ids), ids)
 	}
 }
 

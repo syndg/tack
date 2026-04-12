@@ -179,9 +179,14 @@ func (j *Janitor) prune(ctx context.Context) error {
 					continue
 				}
 			}
-		} else if !terminal {
-			// Orphaned stream branches are always safe to prune: the durable user
-			// artifact is the merge branch / PR head, not per-stream branches.
+		} else {
+			if _, active := activePrefixes[prefix]; active {
+				continue
+			}
+			if !terminal {
+				// Orphaned stream/planner branches are safe to prune only when the
+				// owning objective is no longer active.
+			}
 		}
 
 		if remoteBranches[branch] {

@@ -82,6 +82,45 @@ func TestHandleDeterministic_DispatchStreams(t *testing.T) {
 	}
 }
 
+func TestHandleDeterministic_MarkStreamMerged(t *testing.T) {
+	env := setupDispatchEnv(t)
+	ctx := context.Background()
+	env.createObjective(t, "obj-mark-merged", domain.ObjectiveStatusExecuting)
+	streams := env.createPlan(t, "plan-mark-merged", "obj-mark-merged", []string{"stream-1"})
+	advanceStreamForHandlersTest(t, env, streams[0].ID, domain.StreamStatusCompleted)
+
+	h := &Handlers{
+		scheduler:  env.scheduler,
+		plans:      env.plans,
+		streams:    env.streams,
+		objectives: env.objectives,
+		executions: env.executions,
+		agents:     env.agents,
+		eventBus:   env.eventBus,
+		lifecycle:  env.lifecycle,
+		baseBranch: "main",
+		logger:     env.logger,
+	}
+
+	exec := &blueprint.Execution{ID: "exec-mark-merged", ObjectiveID: "obj-mark-merged", StreamID: streams[0].ID}
+	step := &blueprint.Step{ID: "mark-ready", Type: blueprint.StepTypeDeterministic, Action: "mark_stream_merged"}
+
+	result, err := h.HandleDeterministic(ctx, exec, step)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != blueprint.StepStatusCompleted {
+		t.Fatalf("expected completed, got %s (error: %s)", result.Status, result.Error)
+	}
+	stream, err := env.streams.Get(ctx, streams[0].ID)
+	if err != nil {
+		t.Fatalf("Get stream: %v", err)
+	}
+	if stream.Status != domain.StreamStatusMerged {
+		t.Fatalf("stream status = %s, want merged", stream.Status)
+	}
+}
+
 type handlersTestMergeHelper struct{ mergerID string }
 
 func (m *handlersTestMergeHelper) EnqueueStream(_ context.Context, _ string) error { return nil }

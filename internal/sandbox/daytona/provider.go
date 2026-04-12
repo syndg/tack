@@ -169,6 +169,25 @@ func resolveRemotePath(base, requested string) (string, error) {
 	return candidate, nil
 }
 
+func buildGitCloneFallbackCommand(repoURL, repoPath, gitAuthHeader string) string {
+	parent := pathpkg.Dir(repoPath)
+	cloneArgs := []string{"git"}
+	if gitAuthHeader != "" {
+		cloneArgs = append(cloneArgs, "-c", `http.extraHeader="$TACK_GIT_HTTP_EXTRA_HEADER"`)
+	}
+	cloneArgs = append(cloneArgs, "clone", repoURL, repoPath)
+	quoted := make([]string, 0, len(cloneArgs)-1)
+	quoted = append(quoted, naming.ShellQuote(cloneArgs[0]))
+	for _, arg := range cloneArgs[1:] {
+		if arg == `http.extraHeader="$TACK_GIT_HTTP_EXTRA_HEADER"` {
+			quoted = append(quoted, arg)
+			continue
+		}
+		quoted = append(quoted, naming.ShellQuote(arg))
+	}
+	return fmt.Sprintf("mkdir -p %s && %s", naming.ShellQuote(parent), strings.Join(quoted, " "))
+}
+
 // bootstrap sets up the repo and working branch inside a freshly created sandbox.
 func (p *Provider) bootstrap(ctx context.Context, sb *daytona.Sandbox, opts sandbox.CreateOpts) error {
 	repoPath := p.cfg.RepoPath
@@ -198,7 +217,16 @@ func (p *Provider) bootstrap(ctx context.Context, sb *daytona.Sandbox, opts sand
 		// No snapshot: clone from scratch.
 		p.logger.Info("bootstrap: cloning repo", "sandbox", sb.ID, "url", repoURL)
 		if err := sb.Git.Clone(ctx, repoURL, repoPath, gitOpts...); err != nil {
-			return fmt.Errorf("cloning repo: %w", err)
+			p.logger.Warn("bootstrap: Daytona Git clone failed, falling back to process clone", "error", err, "url", repoURL)
+			cloneCmd := buildGitCloneFallbackCommand(repoURL, repoPath, p.gitAuthHeader())
+			execOpts := []func(*options.ExecuteCommand){}
+			if header := p.gitAuthHeader(); header != "" {
+				execOpts = append(execOpts, options.WithCommandEnv(map[string]string{"TACK_GIT_HTTP_EXTRA_HEADER": header}))
+			}
+			resp, fallbackErr := sb.Process.ExecuteCommand(ctx, cloneCmd, execOpts...)
+			if fallbackErr != nil || resp.ExitCode != 0 {
+				return fmt.Errorf("cloning repo: %w; fallback clone failed: %v: %s", err, fallbackErr, strings.TrimSpace(resp.Result))
+			}
 		}
 	}
 

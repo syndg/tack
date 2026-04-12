@@ -30,7 +30,7 @@ var watchCmd = &cobra.Command{
 	Use:   "watch",
 	Short: "Live stream of agent activity",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		eventsURL := daemonURL + "/events"
+		eventsURL := effectiveDaemonURL() + "/events"
 		req, err := http.NewRequestWithContext(cmd.Context(), http.MethodGet, eventsURL, nil)
 		if err != nil {
 			return fmt.Errorf("creating request: %w", err)
@@ -55,7 +55,7 @@ var watchCmd = &cobra.Command{
 			return fmt.Errorf("unexpected status: %d", resp.StatusCode)
 		}
 
-		fmt.Printf("Connected to %s — watching events (ctrl+c to stop)\n\n", daemonURL)
+		fmt.Printf("Connected to %s — watching events (ctrl+c to stop)\n\n", effectiveDaemonURL())
 
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {

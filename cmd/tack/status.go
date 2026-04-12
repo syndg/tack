@@ -15,18 +15,19 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show daemon status",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		url := effectiveDaemonURL()
 		c, err := newDaemonClient(cmd, false)
 		if err != nil {
 			return err
 		}
 		status, err := c.GetStatus(cmd.Context())
 		if err != nil {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Daemon not reachable at %s\n", daemonURL)
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Daemon not reachable at %s\n", url)
 			return err
 		}
 
 		fmt.Println("Tack Daemon Status")
-		fmt.Printf("  %-12s %s\n", "URL:", daemonURL)
+		fmt.Printf("  %-12s %s\n", "URL:", url)
 		fmt.Printf("  %-12s %s\n", "Uptime:", status.Uptime)
 
 		if len(status.Objectives) > 0 {

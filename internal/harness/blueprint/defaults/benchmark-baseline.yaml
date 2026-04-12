@@ -1,0 +1,45 @@
+id: benchmark-baseline
+name: Benchmark baseline workflow
+description: Plan, build, review, and complete within the frozen benchmark workspace without merging to the current default branch
+
+retry:
+  profile: balanced
+
+steps:
+  - id: plan
+    type: agent
+    role: planner
+    description: Explore benchmark codebase and decompose into work items
+    commit: none
+    next: approve
+
+  - id: approve
+    type: human
+    description: Review and approve the benchmark plan
+    next: dispatch
+
+  - id: dispatch
+    type: deterministic
+    action: dispatch_streams
+    description: Spawn sandboxes and agents per benchmark work item
+    next: execute
+
+  - id: execute
+    type: blueprint_ref
+    ref: benchmark-build-review
+    foreach: work_item
+    on_work_item_failure: escalate
+    escalation:
+      context: full
+      include_agent_history: true
+    next: merge
+
+  - id: merge
+    type: deterministic
+    action: merge_queue
+    description: Merge benchmark work item branches into the internal benchmark merge branch
+    next: complete
+
+  - id: complete
+    type: deterministic
+    action: mark_complete

@@ -135,6 +135,50 @@ func (d *Daemon) handleGetPlan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, planWithStreams{Plan: plan, Streams: streams})
 }
 
+// handleUpdatePlanQualityGates replaces a plan's quality gates before approval.
+func (d *Daemon) handleUpdatePlanQualityGates(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	planMeta, err := d.plans.Get(r.Context(), id)
+	if err != nil {
+		if isPlanNotFound(err) {
+			writeError(w, http.StatusNotFound, "plan not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to update plan quality gates")
+		return
+	}
+	if !d.ensureProjectMatch(w, r, planMeta.ProjectID) {
+		return
+	}
+	projectCtx, err := d.projectCtxs.Get(r.Context(), planMeta.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
+		return
+	}
+	var req struct {
+		QualityGates []string `json:"quality_gates"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	plan, err := projectCtx.PlanningService.UpdatePlanQualityGates(r.Context(), id, req.QualityGates)
+	if err != nil {
+		if isPlanNotFound(err) {
+			writeError(w, http.StatusNotFound, "plan not found")
+			return
+		}
+		if strings.Contains(err.Error(), "must be draft or pending_approval") {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		d.logger.Error("updating plan quality gates", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to update plan quality gates")
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
 // handleApprovePlan approves a plan through the planning workflow boundary.
 func (d *Daemon) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

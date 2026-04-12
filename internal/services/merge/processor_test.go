@@ -374,6 +374,61 @@ func TestProcessNext_SuccessfulMerge(t *testing.T) {
 	}
 }
 
+func TestPublishNewlyReadyStreams_EmitsEventBusReady(t *testing.T) {
+	f := setupProcessor(t)
+	ctx := context.Background()
+
+	obj := &domain.Objective{Description: "test", Status: domain.ObjectiveStatusExecuting}
+	if err := f.objectives.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	plan := &domain.Plan{ObjectiveID: obj.ID, QualityGates: []string{}}
+	if err := f.plans.Create(ctx, plan); err != nil {
+		t.Fatalf("Create plan: %v", err)
+	}
+
+	upstream := &domain.Stream{
+		PlanID:       plan.ID,
+		Title:        "upstream",
+		FileScope:    []string{"a/**"},
+		Dependencies: []string{},
+	}
+	if err := f.streams.Create(ctx, upstream); err != nil {
+		t.Fatalf("Create upstream stream: %v", err)
+	}
+	advanceStreamTo(t, f.streams, ctx, upstream.ID, domain.StreamStatusMerged)
+
+	downstream := &domain.Stream{
+		PlanID:       plan.ID,
+		Title:        "downstream",
+		FileScope:    []string{"b/**"},
+		Dependencies: []string{upstream.ID},
+	}
+	if err := f.streams.Create(ctx, downstream); err != nil {
+		t.Fatalf("Create downstream stream: %v", err)
+	}
+
+	sub, unsub := f.bus.Subscribe(10)
+	defer unsub()
+
+	f.processor.publishNewlyReadyStreams(ctx, plan.ID)
+
+	for {
+		select {
+		case ev := <-sub:
+			if ev.Type != domain.EventStreamReady {
+				continue
+			}
+			if ev.Stream != downstream.ID {
+				continue
+			}
+			return
+		default:
+			t.Fatal("expected EventStreamReady to be published for downstream stream")
+		}
+	}
+}
+
 func TestProcessNext_FailedGates(t *testing.T) {
 	f := setupProcessor(t)
 	ctx := context.Background()

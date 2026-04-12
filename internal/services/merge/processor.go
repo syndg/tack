@@ -822,6 +822,12 @@ func (p *Processor) publishNewlyReadyStreams(ctx context.Context, planID string)
 		return
 	}
 	for _, st := range ready {
+		if p.eventBus != nil {
+			p.eventBus.Emit(domain.EventStreamReady, "", st.ID, "",
+				"stream_id", st.ID,
+				"plan_id", planID,
+			)
+		}
 		if p.obs != nil {
 			p.obs.RecordMilestone(observability.Milestone{
 				EventType: domain.EventStreamReady,

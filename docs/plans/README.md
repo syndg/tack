@@ -33,6 +33,8 @@ Not every file here has the same weight. Use the status marker at the top of eac
   Deferred evaluation idea that should shape future context work.
 - `2026-04-10-adaptive-deliberation-and-dossier-design.md`
   Product design for adaptive planning depth, dossiers, and simple UX.
+- `2026-04-11-lazygit-benchmark-v1-design.md`
+  Concrete first benchmark spec using lazygit and a feature-resurrection slice.
 
 ## Current Architecture Background
 

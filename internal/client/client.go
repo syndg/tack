@@ -269,6 +269,27 @@ func (c *Client) GetObjectivePlan(ctx context.Context, objectiveID string) (*Pla
 	return &pr, nil
 }
 
+// UpdatePlanQualityGates replaces a plan's quality gates.
+func (c *Client) UpdatePlanQualityGates(ctx context.Context, planID string, qualityGates []string) (*domain.Plan, error) {
+	body := struct {
+		QualityGates []string `json:"quality_gates"`
+	}{QualityGates: qualityGates}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling quality gates request: %w", err)
+	}
+	resp, err := c.do(ctx, http.MethodPost, "/plans/"+planID+"/quality-gates", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("updating plan quality gates: %w", err)
+	}
+	defer closeBody(resp)
+	var plan domain.Plan
+	if err := json.NewDecoder(resp.Body).Decode(&plan); err != nil {
+		return nil, fmt.Errorf("decoding updated plan response: %w", err)
+	}
+	return &plan, nil
+}
+
 // ApprovePlan approves a plan for execution.
 func (c *Client) ApprovePlan(ctx context.Context, planID string) error {
 	resp, err := c.do(ctx, http.MethodPost, "/plans/"+planID+"/approve", nil)
