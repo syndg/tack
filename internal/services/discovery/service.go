@@ -25,6 +25,8 @@ type Service struct {
 	logger      *slog.Logger
 }
 
+const noStrongMatchesUnknown = "No strong file matches were found from deterministic objective keyword retrieval."
+
 func New(projectRoot string, objectives *db.ObjectiveStore, dossiers *db.DossierStore, rulesEngine *rules.Engine, blueprints *blueprint.Registry, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
@@ -63,6 +65,51 @@ func (s *Service) UpdateDossier(ctx context.Context, objectiveID string, dossier
 	return s.dossiers.GetByObjective(ctx, objectiveID)
 }
 
+func (s *Service) ExpandDossier(ctx context.Context, objectiveID string, request domain.DossierExpansionRequest) (*domain.Dossier, error) {
+	dossier, err := s.EnsureDossier(ctx, objectiveID)
+	if err != nil {
+		return nil, fmt.Errorf("ensuring dossier before expansion: %w", err)
+	}
+	obj, err := s.objectives.Get(ctx, objectiveID)
+	if err != nil {
+		return nil, fmt.Errorf("loading objective for dossier expansion: %w", err)
+	}
+
+	expanded := *dossier
+	expanded.RelevantFiles = cloneReferences(dossier.RelevantFiles)
+	expanded.SimilarPatterns = cloneReferences(dossier.SimilarPatterns)
+	expanded.Risks = append([]string(nil), dossier.Risks...)
+	expanded.Unknowns = append([]string(nil), dossier.Unknowns...)
+	expanded.SuggestedSeams = cloneSeams(dossier.SuggestedSeams)
+	expanded.Citations = cloneCitations(dossier.Citations)
+
+	queries := []string{obj.Description, request.Reason}
+	queries = append(queries, request.FocusAreas...)
+	queries = append(queries, request.FileHints...)
+	queries = append(queries, request.Questions...)
+	prefix := fmt.Sprintf("file_expand_%d", len(expanded.Citations)+1)
+	additionalFiles, additionalCitations := s.discoverRelevantFiles(prefix, queries...)
+	expanded.RelevantFiles = mergeReferences(expanded.RelevantFiles, additionalFiles)
+	expanded.Citations = mergeCitations(expanded.Citations, additionalCitations)
+	expanded.SimilarPatterns = deriveSimilarPatterns(expanded.RelevantFiles)
+	expanded.SuggestedSeams = deriveSuggestedSeams(expanded.RelevantFiles)
+	expanded.Unknowns = removeString(expanded.Unknowns, noStrongMatchesUnknown)
+	if len(expanded.RelevantFiles) == 0 {
+		expanded.Unknowns = appendUniqueStrings(expanded.Unknowns, noStrongMatchesUnknown)
+	}
+	expanded.Unknowns = appendUniqueStrings(expanded.Unknowns, request.Questions...)
+	if len(additionalFiles) == 0 && strings.TrimSpace(request.Reason) != "" {
+		expanded.Risks = appendUniqueStrings(expanded.Risks, fmt.Sprintf("Planner-requested dossier expansion found no new deterministic matches for: %s", strings.TrimSpace(request.Reason)))
+	}
+	expanded.Summary = buildSummary(obj.Description, expanded.BlueprintID, len(expanded.RepoPriors), expanded.RelevantFiles, expanded.SuggestedSeams)
+
+	if err := s.dossiers.Upsert(ctx, &expanded); err != nil {
+		return nil, err
+	}
+	s.logger.Info("dossier expanded", "objective_id", objectiveID, "new_relevant_files", len(additionalFiles), "focus_areas", len(request.FocusAreas))
+	return s.dossiers.GetByObjective(ctx, objectiveID)
+}
+
 func (s *Service) Generate(ctx context.Context, objectiveID string) (*domain.Dossier, error) {
 	obj, err := s.objectives.Get(ctx, objectiveID)
 	if err != nil {
@@ -83,13 +130,13 @@ func (s *Service) Generate(ctx context.Context, objectiveID string) (*domain.Dos
 	rulePriors, ruleCitations := compileRulePriors(s.rules)
 	dossier.RepoPriors = append(dossier.RepoPriors, rulePriors...)
 	dossier.Citations = append(dossier.Citations, ruleCitations...)
-	relevantFiles, relevantCitations := s.discoverRelevantFiles(obj.Description)
+	relevantFiles, relevantCitations := s.discoverRelevantFiles("file", obj.Description)
 	dossier.RelevantFiles = relevantFiles
 	dossier.Citations = append(dossier.Citations, relevantCitations...)
 	dossier.SimilarPatterns = deriveSimilarPatterns(relevantFiles)
 	dossier.SuggestedSeams = deriveSuggestedSeams(relevantFiles)
 	if len(relevantFiles) == 0 {
-		dossier.Unknowns = append(dossier.Unknowns, "No strong file matches were found from deterministic objective keyword retrieval.")
+		dossier.Unknowns = append(dossier.Unknowns, noStrongMatchesUnknown)
 	}
 	if len(rulePriors) == 0 {
 		dossier.Unknowns = append(dossier.Unknowns, "No explicit repo rules were loaded for this project context.")
@@ -164,8 +211,8 @@ func compileRulePriors(engine *rules.Engine) ([]domain.DossierPrior, []domain.Do
 	return priors, citations
 }
 
-func (s *Service) discoverRelevantFiles(description string) ([]domain.DossierReference, []domain.DossierCitation) {
-	tokens := objectiveTokens(description)
+func (s *Service) discoverRelevantFiles(citationPrefix string, texts ...string) ([]domain.DossierReference, []domain.DossierCitation) {
+	tokens := objectiveTokens(texts...)
 	if len(tokens) == 0 || strings.TrimSpace(s.projectRoot) == "" {
 		return nil, nil
 	}
@@ -211,7 +258,7 @@ func (s *Service) discoverRelevantFiles(description string) ([]domain.DossierRef
 	refs := make([]domain.DossierReference, 0, len(matches))
 	citations := make([]domain.DossierCitation, 0, len(matches))
 	for i, match := range matches {
-		cid := fmt.Sprintf("file:%d", i+1)
+		cid := fmt.Sprintf("%s:%d", citationPrefix, i+1)
 		refs = append(refs, domain.DossierReference{Path: match.path, Reason: match.reason, CitationIDs: []string{cid}})
 		citations = append(citations, domain.DossierCitation{ID: cid, Kind: "file", Target: match.path, Detail: match.reason})
 	}
@@ -286,24 +333,26 @@ func buildSummary(description, blueprintID string, priorCount int, files []domai
 	return strings.Join(parts, " ")
 }
 
-func objectiveTokens(description string) []string {
+func objectiveTokens(texts ...string) []string {
 	replacer := strings.NewReplacer("-", " ", "_", " ", "/", " ", ".", " ", ",", " ", ":", " ", "(", " ", ")", " ")
-	normalized := strings.ToLower(replacer.Replace(description))
 	stop := map[string]struct{}{"the": {}, "and": {}, "for": {}, "with": {}, "from": {}, "into": {}, "that": {}, "this": {}, "using": {}, "add": {}, "support": {}, "make": {}, "work": {}, "flow": {}, "flows": {}, "basic": {}, "recent": {}, "plain": {}, "focused": {}}
 	seen := map[string]struct{}{}
 	var out []string
-	for _, token := range strings.Fields(normalized) {
-		if len(token) < 3 {
-			continue
+	for _, text := range texts {
+		normalized := strings.ToLower(replacer.Replace(text))
+		for _, token := range strings.Fields(normalized) {
+			if len(token) < 3 {
+				continue
+			}
+			if _, ok := stop[token]; ok {
+				continue
+			}
+			if _, ok := seen[token]; ok {
+				continue
+			}
+			seen[token] = struct{}{}
+			out = append(out, token)
 		}
-		if _, ok := stop[token]; ok {
-			continue
-		}
-		if _, ok := seen[token]; ok {
-			continue
-		}
-		seen[token] = struct{}{}
-		out = append(out, token)
 	}
 	return out
 }
@@ -395,4 +444,95 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func appendUniqueStrings(existing []string, values ...string) []string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		found := false
+		for _, current := range existing {
+			if current == value {
+				found = true
+				break
+			}
+		}
+		if !found {
+			existing = append(existing, value)
+		}
+	}
+	return existing
+}
+
+func removeString(values []string, target string) []string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return values
+	}
+	out := values[:0]
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func mergeReferences(existing, incoming []domain.DossierReference) []domain.DossierReference {
+	if len(incoming) == 0 {
+		return existing
+	}
+	byPath := make(map[string]int, len(existing))
+	for i, ref := range existing {
+		byPath[ref.Path] = i
+	}
+	for _, ref := range incoming {
+		if idx, ok := byPath[ref.Path]; ok {
+			existing[idx].Reason = dedupeReasons([]string{existing[idx].Reason, ref.Reason})
+			existing[idx].CitationIDs = appendUniqueStrings(existing[idx].CitationIDs, ref.CitationIDs...)
+			continue
+		}
+		byPath[ref.Path] = len(existing)
+		existing = append(existing, ref)
+	}
+	return existing
+}
+
+func mergeCitations(existing, incoming []domain.DossierCitation) []domain.DossierCitation {
+	if len(incoming) == 0 {
+		return existing
+	}
+	seen := make(map[string]struct{}, len(existing))
+	for _, citation := range existing {
+		seen[citation.ID] = struct{}{}
+	}
+	for _, citation := range incoming {
+		if _, ok := seen[citation.ID]; ok {
+			continue
+		}
+		seen[citation.ID] = struct{}{}
+		existing = append(existing, citation)
+	}
+	return existing
+}
+
+func cloneReferences(values []domain.DossierReference) []domain.DossierReference {
+	out := make([]domain.DossierReference, len(values))
+	copy(out, values)
+	return out
+}
+
+func cloneSeams(values []domain.DossierSeam) []domain.DossierSeam {
+	out := make([]domain.DossierSeam, len(values))
+	copy(out, values)
+	return out
+}
+
+func cloneCitations(values []domain.DossierCitation) []domain.DossierCitation {
+	out := make([]domain.DossierCitation, len(values))
+	copy(out, values)
+	return out
 }

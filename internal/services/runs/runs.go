@@ -108,6 +108,8 @@ type Runs interface {
 
 type DossierEnsurer interface {
 	EnsureDossier(ctx context.Context, objectiveID string) (*domain.Dossier, error)
+	GetDossier(ctx context.Context, objectiveID string) (*domain.Dossier, error)
+	ExpandDossier(ctx context.Context, objectiveID string, request domain.DossierExpansionRequest) (*domain.Dossier, error)
 }
 
 // MergeOrchestrator is the merge-processor surface needed by the runs
@@ -306,6 +308,7 @@ func New(cfg Config) (*Service, error) {
 			Engine:        cfg.Engine,
 			Scheduler:     scheduler,
 			Spawner:       spawner,
+			Discovery:     cfg.Discovery,
 			AgentModel:    cfg.AgentModel,
 			PlannerModel:  cfg.PlannerModel,
 			Lifecycle:     cfg.Lifecycle,

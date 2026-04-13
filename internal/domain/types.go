@@ -80,6 +80,13 @@ type DossierCitation struct {
 	Detail string `json:"detail"`
 }
 
+type DossierExpansionRequest struct {
+	Reason     string   `json:"reason"`
+	FocusAreas []string `json:"focus_areas,omitempty"`
+	FileHints  []string `json:"file_hints,omitempty"`
+	Questions  []string `json:"questions,omitempty"`
+}
+
 // Plan and streams
 
 type PlanStatus string

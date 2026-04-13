@@ -28,6 +28,17 @@ func testStream() *domain.Stream {
 	}
 }
 
+func testDossier() *domain.Dossier {
+	return &domain.Dossier{
+		Summary:        "Discovery resolved likely auth files and seams.",
+		RepoPriors:     []domain.DossierPrior{{Kind: "rule", Title: "auth.md", Detail: "Keep auth checks in middleware."}},
+		RelevantFiles:  []domain.DossierReference{{Path: "src/auth/middleware.go", Reason: "path matches auth"}},
+		SuggestedSeams: []domain.DossierSeam{{Title: "src/auth", Reason: "Relevant files cluster under src/auth.", FilePaths: []string{"src/auth/middleware.go"}}},
+		Risks:          []string{"Token refresh flow is under-specified."},
+		Unknowns:       []string{"Which handlers still bypass middleware?"},
+	}
+}
+
 func builderRole() *RoleDefinition {
 	return DefaultRoles()["builder"]
 }
@@ -238,17 +249,21 @@ func TestBuildOverlay_ReviewerOutputInstructions(t *testing.T) {
 
 func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 	obj := testObjective()
-	result := BuildPlannerOverlay(obj, "use bun for JS")
+	result := BuildPlannerOverlay(obj, testDossier(), "use bun for JS")
 
 	expected := []string{
 		"# Tack Agent: planner",
 		"## Role",
 		"## Objective",
+		"## Dossier Summary",
+		"## Relevant Files",
+		"## Suggested Seams",
 		"## Project Guidance",
 		"## Instructions",
 		"streams:",
 		"acceptance_criteria:",
 		"quality_gates:",
+		"PLANNER_OUTCOME: needs_dossier_expansion",
 	}
 	for _, s := range expected {
 		if !strings.Contains(result, s) {
@@ -261,11 +276,14 @@ func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 	if !strings.Contains(result, "use bun for JS") {
 		t.Error("missing guidance")
 	}
+	if !strings.Contains(result, "Do not explore the codebase") {
+		t.Error("missing dossier-only constraint")
+	}
 }
 
 func TestBuildPlannerOverlay_EmptyGuidance_NoSection(t *testing.T) {
 	obj := testObjective()
-	result := BuildPlannerOverlay(obj, "")
+	result := BuildPlannerOverlay(obj, testDossier(), "")
 
 	if strings.Contains(result, "## Project Guidance") {
 		t.Error("should not include Project Guidance section when guidance is empty")
@@ -274,7 +292,7 @@ func TestBuildPlannerOverlay_EmptyGuidance_NoSection(t *testing.T) {
 
 func TestBuildPlannerOverlay_IncludesPlanYAMLSchema(t *testing.T) {
 	obj := testObjective()
-	result := BuildPlannerOverlay(obj, "")
+	result := BuildPlannerOverlay(obj, testDossier(), "")
 
 	// Should contain a YAML code block with the plan schema.
 	if !strings.Contains(result, "```yaml") {

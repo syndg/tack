@@ -120,6 +120,38 @@ func TestCreatePlan_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestCreatePlan_ReturnsNeedsDossierExpansion(t *testing.T) {
+	svc, objStore, _, _, _ := setupService(t)
+	ctx := context.Background()
+
+	obj := &domain.Objective{Description: "refactor auth"}
+	if err := objStore.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+
+	_, err := svc.CreatePlan(ctx, obj.ID, `PLANNER_OUTCOME: needs_dossier_expansion
+PLANNER_REASON: Missing evidence for auth entrypoints
+PLANNER_FOCUS_AREAS:
+- auth handlers
+PLANNER_FILE_HINTS:
+- src/auth/handlers/**
+PLANNER_QUESTIONS:
+- Which handlers still bypass middleware?`)
+	if err == nil {
+		t.Fatal("expected dossier expansion error")
+	}
+	expansionErr, ok := err.(*NeedsDossierExpansionError)
+	if !ok {
+		t.Fatalf("error = %T, want *NeedsDossierExpansionError", err)
+	}
+	if expansionErr.Request.Reason != "Missing evidence for auth entrypoints" {
+		t.Fatalf("reason = %q", expansionErr.Request.Reason)
+	}
+	if len(expansionErr.Request.FocusAreas) != 1 || expansionErr.Request.FocusAreas[0] != "auth handlers" {
+		t.Fatalf("focus areas = %#v", expansionErr.Request.FocusAreas)
+	}
+}
+
 func TestCreateSimplePlan_SingleStream(t *testing.T) {
 	svc, objStore, _, streamStore, _ := setupService(t)
 	ctx := context.Background()

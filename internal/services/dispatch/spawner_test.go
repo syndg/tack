@@ -240,7 +240,7 @@ func TestSpawn_UsesBuildPlannerOverlayForPlannerRole(t *testing.T) {
 	ctx := context.Background()
 
 	obj := makeSpawnObjective("obj-planner-5678")
-	req := SpawnRequest{Objective: obj, Role: "planner"}
+	req := SpawnRequest{Objective: obj, Role: "planner", Dossier: &domain.Dossier{Summary: "Planner dossier"}}
 
 	_, err := spawner.Spawn(ctx, req)
 	if err != nil {
@@ -250,6 +250,20 @@ func TestSpawn_UsesBuildPlannerOverlayForPlannerRole(t *testing.T) {
 	// BuildPlannerOverlay produces "# Tack Agent: planner" and "You are a Planner agent"
 	if !strings.Contains(rt.lastOpts.Overlay, "Planner") {
 		t.Errorf("planner overlay should contain 'Planner'\noverlay: %s", rt.lastOpts.Overlay)
+	}
+	if !strings.Contains(rt.lastOpts.Overlay, "Planner dossier") {
+		t.Fatalf("planner overlay missing dossier summary\n%s", rt.lastOpts.Overlay)
+	}
+}
+
+func TestSpawn_PlannerRequiresDossier(t *testing.T) {
+	spawner, _, _, _, _ := setupSpawnerTest(t)
+	ctx := context.Background()
+
+	obj := makeSpawnObjective("obj-planner-nodossier")
+	_, err := spawner.Spawn(ctx, SpawnRequest{Objective: obj, Role: "planner"})
+	if err == nil || !strings.Contains(err.Error(), "requires dossier") {
+		t.Fatalf("Spawn error = %v, want dossier requirement", err)
 	}
 }
 

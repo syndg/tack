@@ -48,6 +48,11 @@ type PlanCreator interface {
 	CreatePlan(ctx context.Context, objectiveID string, agentOutput string) (*domain.Plan, error)
 }
 
+type DossierProvider interface {
+	GetDossier(ctx context.Context, objectiveID string) (*domain.Dossier, error)
+	ExpandDossier(ctx context.Context, objectiveID string, request domain.DossierExpansionRequest) (*domain.Dossier, error)
+}
+
 // MailSender sends mail messages (used for escalations via the broker).
 type MailSender interface {
 	Send(ctx context.Context, msg *domain.MailMessage) error
@@ -59,6 +64,7 @@ type Config struct {
 	Engine        *blueprint.Engine       // blueprint execution engine
 	Scheduler     *Scheduler              // stream scheduling
 	Spawner       *Spawner                // agent process spawning
+	Discovery     DossierProvider         // dossier retrieval and expansion for planner steps
 	AgentModel    string                  // default model for non-planner agent steps
 	PlannerModel  string                  // default model for planner agent steps
 	Lifecycle     *lifecycle.Manager      // objective state transitions
@@ -128,6 +134,7 @@ type Coordinator struct {
 	engine        *blueprint.Engine
 	scheduler     *Scheduler
 	spawner       *Spawner
+	discovery     DossierProvider
 	lifecycle     *lifecycle.Manager
 	mergeEnqueuer MergeEnqueuer
 	planCreator   PlanCreator
@@ -161,6 +168,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		engine:        cfg.Engine,
 		scheduler:     cfg.Scheduler,
 		spawner:       cfg.Spawner,
+		discovery:     cfg.Discovery,
 		lifecycle:     cfg.Lifecycle,
 		mergeEnqueuer: cfg.MergeEnqueuer,
 		planCreator:   cfg.PlanCreator,

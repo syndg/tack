@@ -62,6 +62,10 @@ func New(
 // 3. Persists plan and streams
 // 4. Calls lifecycle.MarkPlanReady to set status to "pending_approval" and publish event
 func (s *Service) CreatePlan(ctx context.Context, objectiveID string, agentOutput string) (*domain.Plan, error) {
+	if request, ok := ParseDossierExpansionRequest(agentOutput); ok {
+		return nil, &NeedsDossierExpansionError{Request: request}
+	}
+
 	rawPlan, err := ParsePlan(agentOutput)
 	if err != nil {
 		return nil, fmt.Errorf("parsing plan: %w", err)

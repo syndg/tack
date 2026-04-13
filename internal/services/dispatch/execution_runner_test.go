@@ -17,7 +17,17 @@ import (
 	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/sandbox"
+	plannersvc "github.com/syndg/tack/internal/services/planner"
 )
+
+const plannerValidPlanYAML = `streams:
+  - title: "auth refactor"
+    description: "Refactor auth module"
+    file_scope:
+      - "src/auth/**"
+    dependencies: []
+quality_gates:
+  - "go test ./..."`
 
 func TestHandleBlueprintRefStep_SingleStreamCompletes(t *testing.T) {
 	env := setupDispatchEnv(t)
@@ -173,6 +183,51 @@ type sequenceRuntime struct {
 	lastOpts []runtime.AgentOpts
 }
 
+type sequencePlanCreator struct {
+	calls   int
+	outputs []string
+}
+
+func (s *sequencePlanCreator) CreatePlan(_ context.Context, _ string, agentOutput string) (*domain.Plan, error) {
+	s.calls++
+	s.outputs = append(s.outputs, agentOutput)
+	if request, ok := plannersvc.ParseDossierExpansionRequest(agentOutput); ok {
+		return nil, &plannersvc.NeedsDossierExpansionError{Request: request}
+	}
+	return &domain.Plan{ID: "plan-created"}, nil
+}
+
+type stubDossierProvider struct {
+	dossier     *domain.Dossier
+	expanded    *domain.Dossier
+	getCalls    int
+	expandCalls int
+	lastRequest domain.DossierExpansionRequest
+	expandErr   error
+	getErr      error
+}
+
+func (s *stubDossierProvider) GetDossier(_ context.Context, _ string) (*domain.Dossier, error) {
+	s.getCalls++
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	return s.dossier, nil
+}
+
+func (s *stubDossierProvider) ExpandDossier(_ context.Context, _ string, request domain.DossierExpansionRequest) (*domain.Dossier, error) {
+	s.expandCalls++
+	s.lastRequest = request
+	if s.expandErr != nil {
+		return nil, s.expandErr
+	}
+	if s.expanded != nil {
+		s.dossier = s.expanded
+		return s.expanded, nil
+	}
+	return s.dossier, nil
+}
+
 func (r *sequenceRuntime) Spawn(_ context.Context, _ sandbox.Sandbox, opts runtime.AgentOpts) (runtime.AgentProcess, error) {
 	r.lastOpts = append(r.lastOpts, opts)
 	idx := r.spawned
@@ -298,6 +353,70 @@ steps:
 	}
 	if !exhausted {
 		t.Fatalf("attempts = %+v, want one exhausted attempt", attempts)
+	}
+}
+
+func TestHandleAgentStep_PlannerRetriesAfterDossierExpansion(t *testing.T) {
+	env := setupDispatchEnv(t)
+	ctx := context.Background()
+	env.createObjective(t, "obj-planner-expansion", domain.ObjectiveStatusExecuting)
+
+	rt := &sequenceRuntime{results: []runtime.AgentResult{
+		{Success: true, Summary: `PLANNER_OUTCOME: needs_dossier_expansion
+PLANNER_REASON: Need auth entrypoints and middleware seams
+PLANNER_FOCUS_AREAS:
+- auth handlers
+PLANNER_FILE_HINTS:
+- src/auth/handlers/**
+PLANNER_QUESTIONS:
+- Which handlers still bypass middleware?`},
+		{Success: true, Summary: plannerValidPlanYAML},
+	}}
+	sp := newMockSandboxProvider()
+	recorder, err := observability.New(t.TempDir(), env.eventBus, slog.Default())
+	if err != nil {
+		t.Fatalf("New recorder: %v", err)
+	}
+	spawner := NewSpawner(env.agents, rt, sp, rules.NewEngine(slog.Default()), tools.NewCurator(slog.Default()), env.eventBus, recorder, nil, config.RuntimeAuthConfig{}, slog.Default(), "http://localhost:8080", "Tack", "tack@local")
+	env.coord.spawner = spawner
+	env.coord.tracker = newAgentTracker(spawner, recorder, env.eventBus, config.TimeoutConfig{}, slog.Default())
+	env.coord.planCreator = &sequencePlanCreator{}
+	env.coord.discovery = &stubDossierProvider{
+		dossier: &domain.Dossier{Summary: "Initial dossier summary", Unknowns: []string{"Need auth entrypoints"}},
+		expanded: &domain.Dossier{
+			Summary:       "Expanded dossier summary",
+			RelevantFiles: []domain.DossierReference{{Path: "src/auth/handlers/login.go", Reason: "path matches auth handlers"}},
+		},
+	}
+
+	exec := &blueprint.Execution{ID: "exec-planner-expansion", ObjectiveID: "obj-planner-expansion", StepStates: map[string]*blueprint.StepState{"plan": {StepID: "plan", Metadata: map[string]string{}}}}
+	step := &blueprint.Step{ID: "plan", Type: blueprint.StepTypeAgent, Role: "planner", Commit: "none"}
+
+	result, err := env.coord.HandleAgentStep(ctx, exec, step)
+	if err != nil {
+		t.Fatalf("HandleAgentStep: %v", err)
+	}
+	if result.Status != blueprint.StepStatusCompleted {
+		t.Fatalf("status = %s, want completed", result.Status)
+	}
+	if rt.spawned != 2 {
+		t.Fatalf("spawn count = %d, want 2", rt.spawned)
+	}
+	provider := env.coord.discovery.(*stubDossierProvider)
+	if provider.expandCalls != 1 {
+		t.Fatalf("expand calls = %d, want 1", provider.expandCalls)
+	}
+	if provider.lastRequest.Reason != "Need auth entrypoints and middleware seams" {
+		t.Fatalf("expansion reason = %q", provider.lastRequest.Reason)
+	}
+	if !strings.Contains(rt.lastOpts[0].Overlay, "Initial dossier summary") {
+		t.Fatalf("first overlay missing initial dossier\n%s", rt.lastOpts[0].Overlay)
+	}
+	if !strings.Contains(rt.lastOpts[1].Overlay, "Expanded dossier summary") {
+		t.Fatalf("second overlay missing expanded dossier\n%s", rt.lastOpts[1].Overlay)
+	}
+	if !strings.Contains(rt.lastOpts[1].Overlay, "src/auth/handlers/login.go") {
+		t.Fatalf("second overlay missing expanded file hint\n%s", rt.lastOpts[1].Overlay)
 	}
 }
 

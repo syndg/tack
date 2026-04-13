@@ -26,6 +26,7 @@ import (
 // SpawnRequest describes what agent to create.
 type SpawnRequest struct {
 	Objective    *domain.Objective
+	Dossier      *domain.Dossier
 	Stream       *domain.Stream             // nil for planner agents
 	Role         string                     // "planner", "lead", "builder", "reviewer", "scout"
 	Model        string                     // model override for this spawned agent
@@ -237,7 +238,10 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	agentName := fmt.Sprintf("%s-%s-%s", req.Role, objShort, sessShort)
 	var overlay string
 	if req.Role == "planner" {
-		overlay = agents.BuildPlannerOverlay(req.Objective, req.Guidance)
+		if req.Dossier == nil {
+			return nil, fmt.Errorf("planner spawn requires dossier")
+		}
+		overlay = agents.BuildPlannerOverlay(req.Objective, req.Dossier, req.Guidance)
 	} else {
 		overlay = agents.BuildOverlay(agents.OverlayInput{
 			AgentName:    agentName,

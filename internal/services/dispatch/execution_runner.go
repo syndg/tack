@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/syndg/tack/internal/naming"
 	"github.com/syndg/tack/internal/sandbox"
 	"github.com/syndg/tack/internal/services/agents"
+	plannersvc "github.com/syndg/tack/internal/services/planner"
 )
 
 // HandleAgentStep implements the StepHandler for agent-type blueprint steps.
@@ -91,8 +93,19 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		FixContext:   retryContextFixContext(retryContext, fixContext),
 		RetryContext: retryContext,
 	}
+	if role == string(domain.AgentRolePlanner) {
+		if c.discovery == nil {
+			return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: "planner step requires discovery service"}, nil
+		}
+		dossier, err := c.discovery.GetDossier(ctx, exec.ObjectiveID)
+		if err != nil {
+			return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: fmt.Sprintf("getting dossier for planner: %s", err)}, nil
+		}
+		spawnRequest.Dossier = dossier
+	}
 
 	var result *SpawnResult
+	plannerExpansionAttempts := 0
 	for {
 		result, err = c.spawner.Spawn(ctx, spawnRequest)
 		if err == nil {
@@ -256,6 +269,31 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 			if role == string(domain.AgentRolePlanner) && c.planCreator != nil {
 				plan, err := c.planCreator.CreatePlan(ctx, exec.ObjectiveID, cleanSummary)
 				if err != nil {
+					var expansionErr *plannersvc.NeedsDossierExpansionError
+					if errors.As(err, &expansionErr) {
+						if c.discovery == nil {
+							msg := "planner requested dossier expansion but discovery service is unavailable"
+							c.spawner.MarkFailed(ctx, result.Session, msg)
+							return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: msg}, nil
+						}
+						plannerExpansionAttempts++
+						if plannerExpansionAttempts > 2 {
+							msg := "planner requested dossier expansion too many times"
+							c.spawner.MarkFailed(ctx, result.Session, msg)
+							return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: msg}, nil
+						}
+						expanded, expandErr := c.discovery.ExpandDossier(ctx, exec.ObjectiveID, expansionErr.Request)
+						if expandErr != nil {
+							c.spawner.MarkFailed(ctx, result.Session, fmt.Sprintf("dossier expansion failed: %s", expandErr))
+							return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: fmt.Sprintf("expanding dossier from planner request: %s", expandErr)}, nil
+						}
+						spawnRequest.Dossier = expanded
+						c.spawner.MarkCompleted(ctx, result.Session, strings.TrimSpace(expansionErr.Error()))
+						if err := c.spawner.DeleteSandbox(ctx, result.Sandbox.ID()); err != nil {
+							c.logger.Warn("failed to delete planner sandbox after dossier expansion", "sandbox_id", result.Sandbox.ID(), "error", err)
+						}
+						continue
+					}
 					c.spawner.MarkFailed(ctx, result.Session, fmt.Sprintf("plan creation failed: %s", err))
 					return blueprint.StepResult{
 						Status: blueprint.StepStatusFailed,

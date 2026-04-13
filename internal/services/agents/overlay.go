@@ -220,19 +220,72 @@ quality_gates:
   - "go test ./..."
   - "go vet ./..."`
 
-// BuildPlannerOverlay generates a simplified overlay for planner agents.
-// Planners get: role, objective description, guidance, and instructions
-// for producing a structured plan with streams, scopes, and dependencies.
-func BuildPlannerOverlay(objective *domain.Objective, guidance string) string {
+// BuildPlannerOverlay generates a dossier-driven overlay for planner agents.
+// Planners must decompose from persisted discovery context and explicitly ask
+// for dossier expansion instead of exploring the repo directly.
+func BuildPlannerOverlay(objective *domain.Objective, dossier *domain.Dossier, guidance string) string {
 	var b strings.Builder
 
 	b.WriteString("# Tack Agent: planner\n\n")
 
 	b.WriteString("## Role\n")
-	b.WriteString("You are a Planner agent. Explore the codebase and decompose the objective into parallel work streams.\n\n")
+	b.WriteString("You are a Planner agent. Decompose the objective into parallel work streams using only the persisted dossier and workflow constraints.\n")
+	b.WriteString("Do not explore the codebase, inspect additional files, or do fresh repository discovery.\n\n")
 
 	b.WriteString("## Objective\n")
 	fmt.Fprintf(&b, "%s\n\n", objective.Description)
+
+	if dossier != nil {
+		if dossier.Summary != "" {
+			b.WriteString("## Dossier Summary\n")
+			fmt.Fprintf(&b, "%s\n\n", dossier.Summary)
+		}
+		if len(dossier.RepoPriors) > 0 {
+			b.WriteString("## Repo Priors\n")
+			for _, prior := range dossier.RepoPriors {
+				fmt.Fprintf(&b, "- [%s] %s: %s\n", prior.Kind, prior.Title, prior.Detail)
+			}
+			b.WriteString("\n")
+		}
+		if len(dossier.RelevantFiles) > 0 {
+			b.WriteString("## Relevant Files\n")
+			for _, ref := range dossier.RelevantFiles {
+				fmt.Fprintf(&b, "- `%s` - %s\n", ref.Path, ref.Reason)
+			}
+			b.WriteString("\n")
+		}
+		if len(dossier.SimilarPatterns) > 0 {
+			b.WriteString("## Similar Patterns\n")
+			for _, ref := range dossier.SimilarPatterns {
+				fmt.Fprintf(&b, "- `%s` - %s\n", ref.Path, ref.Reason)
+			}
+			b.WriteString("\n")
+		}
+		if len(dossier.SuggestedSeams) > 0 {
+			b.WriteString("## Suggested Seams\n")
+			for _, seam := range dossier.SuggestedSeams {
+				fmt.Fprintf(&b, "- %s - %s\n", seam.Title, seam.Reason)
+				if len(seam.FilePaths) > 0 {
+					fmt.Fprintf(&b, "  Files: %s\n", strings.Join(seam.FilePaths, ", "))
+				}
+			}
+			b.WriteString("\n")
+		}
+		if len(dossier.Risks) > 0 {
+			b.WriteString("## Risks\n")
+			for _, risk := range dossier.Risks {
+				fmt.Fprintf(&b, "- %s\n", risk)
+			}
+			b.WriteString("\n")
+		}
+		if len(dossier.Unknowns) > 0 {
+			b.WriteString("## Unknowns\n")
+			for _, unknown := range dossier.Unknowns {
+				fmt.Fprintf(&b, "- %s\n", unknown)
+			}
+			b.WriteString("\n")
+		}
+	}
 
 	if guidance != "" {
 		b.WriteString("## Project Guidance\n")
@@ -242,10 +295,19 @@ func BuildPlannerOverlay(objective *domain.Objective, guidance string) string {
 	b.WriteString("## Instructions\n")
 	b.WriteString("Produce a structured plan with:\n")
 	b.WriteString("1. Streams — parallel units of work\n")
-	b.WriteString("2. Acceptance criteria — concrete, externally observable checks for each stream\n")
-	b.WriteString("3. File scopes — which files each stream owns (use globs)\n")
-	b.WriteString("4. Dependencies — which streams must complete before others start\n")
-	b.WriteString("5. Quality gates — commands to validate each stream\n\n")
+	b.WriteString("2. Acceptance criteria - concrete, externally observable checks for each stream\n")
+	b.WriteString("3. File scopes - which files each stream owns (use globs)\n")
+	b.WriteString("4. Dependencies - which streams must complete before others start\n")
+	b.WriteString("5. Quality gates - commands to validate each stream\n\n")
+	b.WriteString("Use the dossier's suggested seams when they fit. If you override them, explain why in the affected stream descriptions.\n\n")
+	b.WriteString("If the dossier is insufficient for a trustworthy plan, do not guess and do not inspect the repository. Output this instead:\n")
+	b.WriteString("```text\n")
+	b.WriteString("PLANNER_OUTCOME: needs_dossier_expansion\n")
+	b.WriteString("PLANNER_REASON: short explanation of what is missing\n")
+	b.WriteString("PLANNER_FOCUS_AREAS:\n- area needing deeper discovery\n")
+	b.WriteString("PLANNER_FILE_HINTS:\n- candidate/path/pattern\n")
+	b.WriteString("PLANNER_QUESTIONS:\n- concrete question discovery should answer\n")
+	b.WriteString("```\n\n")
 	b.WriteString("For test, coverage, or docs streams, acceptance criteria must capture the full user-visible behavior they must prove or describe. Do not rely on later review to discover missing acceptance checks one-by-one.\n\n")
 	b.WriteString("Output your plan as YAML in the following format:\n")
 	fmt.Fprintf(&b, "```yaml\n%s\n```\n", planYAMLSchema)
