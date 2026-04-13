@@ -119,8 +119,10 @@ func defaultAction(kind domain.FailureKind) domain.RecoveryAction {
 	switch kind {
 	case domain.FailureAgentRuntimeTransient, domain.FailureSandbox, domain.FailureProviderRateLimit:
 		return domain.RecoveryActionRetrySameStep
-	case domain.FailureQualityGate, domain.FailureReviewRejection:
+	case domain.FailureQualityGate, domain.FailureReviewRejection, domain.FailureContractGap:
 		return domain.RecoveryActionRerunPreviousAgent
+	case domain.FailureContractBlocked:
+		return domain.RecoveryActionAskHumanThenResume
 	case domain.FailureMergeConflict:
 		return domain.RecoveryActionRetryMerge
 	case domain.FailurePostMergeGate:

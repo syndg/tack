@@ -192,6 +192,60 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 				c.logger.Warn("failed to clean runtime artifacts", "step", step.ID, "error", err)
 			}
 
+			if contractOutcome, ok := agents.ParseContractOutcome(cleanSummary); ok {
+				feedback := strings.TrimSpace(contractOutcome.Reason)
+				if feedback == "" {
+					feedback = cleanSummary
+				}
+				humanGuidance := ""
+				currentAttempt := 0
+				if retryContext != nil {
+					humanGuidance = retryContext.HumanGuidance
+					currentAttempt = retryContext.AttemptNumber
+				}
+				c.spawner.MarkCompleted(ctx, result.Session, cleanSummary)
+
+				switch contractOutcome.Kind {
+				case agents.ContractOutcomeBlocked:
+					attempt, _ := c.recordRecoveryAttempt(ctx, recoveryAttemptInput{
+						ProjectID:      obj.ProjectID,
+						ObjectiveID:    exec.ObjectiveID,
+						ExecutionID:    exec.ID,
+						StreamID:       exec.StreamID,
+						StepID:         step.ID,
+						CurrentAttempt: currentAttempt,
+						FailureKind:    domain.FailureContractBlocked,
+						ErrorSummary:   feedback,
+						FixContext:     feedback,
+						HumanGuidance:  humanGuidance,
+					}, retryCfg, retryOverride)
+					haltLocalRepairLoop(exec, step)
+					return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: attempt.ErrorSummary}, nil
+
+				case agents.ContractOutcomeGap:
+					applyErr := c.applyContractGapRepair(ctx, exec.ObjectiveID, stream, contractOutcome.StreamCardYAML)
+					attempt, decision := c.recordRecoveryAttempt(ctx, recoveryAttemptInput{
+						ProjectID:      obj.ProjectID,
+						ObjectiveID:    exec.ObjectiveID,
+						ExecutionID:    exec.ID,
+						StreamID:       exec.StreamID,
+						StepID:         step.ID,
+						CurrentAttempt: currentAttempt,
+						FailureKind:    domain.FailureContractGap,
+						ErrorSummary:   feedback,
+						FixContext:     feedback,
+						HumanGuidance:  humanGuidance,
+					}, retryCfg, retryOverride)
+					if applyErr != nil || decision.Action != domain.RecoveryActionRerunPreviousAgent {
+						haltLocalRepairLoop(exec, step)
+					}
+					if applyErr != nil {
+						return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: fmt.Sprintf("%s (local contract repair failed: %s)", attempt.ErrorSummary, applyErr)}, nil
+					}
+					return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: attempt.ErrorSummary}, nil
+				}
+			}
+
 			if role == string(domain.AgentRoleReviewer) {
 				if reviewOutcome, ok := agents.ParseReviewOutcome(cleanSummary); ok && !reviewOutcome.Approved {
 					c.spawner.MarkCompleted(ctx, result.Session, cleanSummary)
@@ -368,6 +422,30 @@ func mergeReviewFixContext(current, previous string) string {
 	default:
 		return current + "\n\nPrevious unresolved review feedback:\n" + previous
 	}
+}
+
+func (c *Coordinator) applyContractGapRepair(ctx context.Context, objectiveID string, stream *domain.Stream, rawYAML string) error {
+	if stream == nil {
+		return fmt.Errorf("contract gap repair requires stream context")
+	}
+	if c.discovery == nil {
+		return fmt.Errorf("contract gap repair requires discovery service")
+	}
+	dossier, err := c.discovery.GetDossier(ctx, objectiveID)
+	if err != nil {
+		return fmt.Errorf("getting dossier for contract repair: %w", err)
+	}
+	repairedCard, err := plannersvc.CompileStreamCardRepair(rawYAML, *stream, dossier)
+	if err != nil {
+		return fmt.Errorf("compiling repaired stream card: %w", err)
+	}
+	stream.Card = &repairedCard
+	stream.Description = repairedCard.Goal
+	stream.AcceptanceCriteria = append([]string(nil), repairedCard.AcceptanceCriteria...)
+	if err := c.streams.Update(ctx, stream); err != nil {
+		return fmt.Errorf("updating stream with repaired contract: %w", err)
+	}
+	return nil
 }
 
 func (c *Coordinator) modelForAgentStep(step *blueprint.Step) string {

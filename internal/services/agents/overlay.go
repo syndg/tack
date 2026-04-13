@@ -112,10 +112,22 @@ func BuildOverlay(input OverlayInput) string {
 		b.WriteString(card.SeamOverrideRationale)
 		b.WriteString("\n\n")
 	}
+	if input.Role != nil && input.Role.Name == "builder" && hasCard {
+		b.WriteString("## Contract Failure Output\n")
+		b.WriteString("If the stream card is contradictory or missing detail required to proceed safely, do not guess. End with:\n")
+		b.WriteString("`CONTRACT_OUTCOME: contract_blocked`\n")
+		b.WriteString("`CONTRACT_REASON: short explanation of the contract problem`\n\n")
+	}
 	if input.Role != nil && input.Role.Name == "reviewer" {
 		b.WriteString("## Review Output\n")
+		b.WriteString("Validate the builder against the stream card and dossier-backed constraints already in this overlay.\n")
 		b.WriteString("End your final response with `REVIEW_DECISION: approve` or `REVIEW_DECISION: reject`.\n")
-		b.WriteString("If you reject, add `REVIEW_FEEDBACK:` followed by the actionable issues the builder must fix.\n\n")
+		b.WriteString("If you reject, add `REVIEW_FEEDBACK:` followed by the actionable issues the builder must fix.\n")
+		b.WriteString("If the contract itself is missing a necessary dossier-backed requirement that was not part of the builder's contract, do not reject. End with:\n")
+		b.WriteString("`CONTRACT_OUTCOME: contract_gap`\n")
+		b.WriteString("`CONTRACT_REASON: short explanation of the missing requirement`\n")
+		b.WriteString("`CONTRACT_STREAM_CARD:` followed by a fenced YAML replacement for this stream card only with `goal`, `acceptance_criteria`, `implementation_scope`, `proof_scope`, `hard_anchors`, and optional `seam_override_rationale`.\n")
+		b.WriteString("Do not change dependencies, blocked-by edges, or file scope; Tack preserves those during local contract repair.\n\n")
 		if input.RetryContext != nil && strings.TrimSpace(input.RetryContext.LastError) != "" {
 			b.WriteString("When re-reviewing a retried stream, start from the previous review feedback in Retry Context. Confirm whether each prior issue is fixed. If you reject again, preserve still-unresolved concrete issues verbatim and only add newly discovered issues after them.\n\n")
 		}

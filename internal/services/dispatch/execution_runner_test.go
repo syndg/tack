@@ -466,6 +466,48 @@ func TestHandleAgentStep_DoesNotRetryGenericExitFailure(t *testing.T) {
 	}
 }
 
+func TestHandleAgentStep_BuilderContractBlockedRecordsTypedFailure(t *testing.T) {
+	env := setupDispatchEnv(t)
+	ctx := context.Background()
+	env.createObjective(t, "obj-contract-blocked", domain.ObjectiveStatusExecuting)
+	streams := env.createPlan(t, "plan-contract-blocked", "obj-contract-blocked", []string{"stream-1"})
+
+	rt := &sequenceRuntime{results: []runtime.AgentResult{{Success: true, Summary: "CONTRACT_OUTCOME: contract_blocked\nCONTRACT_REASON: Missing repo-backed contract for the auth/session handoff"}}}
+	sp := newMockSandboxProvider()
+	recorder, err := observability.New(t.TempDir(), env.eventBus, slog.Default())
+	if err != nil {
+		t.Fatalf("New recorder: %v", err)
+	}
+	spawner := NewSpawner(env.agents, rt, sp, rules.NewEngine(slog.Default()), tools.NewCurator(slog.Default()), env.eventBus, recorder, nil, config.RuntimeAuthConfig{}, slog.Default(), "http://localhost:8080", "Tack", "tack@local")
+	env.coord.spawner = spawner
+	env.coord.attempts = env.attempts
+	env.coord.tracker = newAgentTracker(spawner, recorder, env.eventBus, config.TimeoutConfig{}, slog.Default())
+
+	exec := &blueprint.Execution{ID: "exec-contract-blocked", BlueprintID: "build-review", ObjectiveID: "obj-contract-blocked", StreamID: streams[0].ID, StepStates: map[string]*blueprint.StepState{"build": {StepID: "build", Metadata: map[string]string{}}}}
+	step := &blueprint.Step{ID: "build", Type: blueprint.StepTypeAgent, Role: "builder", Commit: "none"}
+
+	result, err := env.coord.HandleAgentStep(ctx, exec, step)
+	if err != nil {
+		t.Fatalf("HandleAgentStep: %v", err)
+	}
+	if result.Status != blueprint.StepStatusFailed {
+		t.Fatalf("status = %s, want failed", result.Status)
+	}
+	attempts, err := env.attempts.ListByExecution(ctx, exec.ID)
+	if err != nil {
+		t.Fatalf("ListByExecution: %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempt count = %d, want 1", len(attempts))
+	}
+	if attempts[0].FailureKind != domain.FailureContractBlocked {
+		t.Fatalf("failure kind = %s, want %s", attempts[0].FailureKind, domain.FailureContractBlocked)
+	}
+	if attempts[0].Action != domain.RecoveryActionAskHumanThenResume {
+		t.Fatalf("action = %s, want %s", attempts[0].Action, domain.RecoveryActionAskHumanThenResume)
+	}
+}
+
 func TestBuildReview_RejectionLoopsBackToBuilder(t *testing.T) {
 	env := setupDispatchEnv(t)
 	ctx := context.Background()
@@ -527,6 +569,110 @@ func TestBuildReview_RejectionLoopsBackToBuilder(t *testing.T) {
 	}
 	if attempts[0].Action != domain.RecoveryActionRerunPreviousAgent {
 		t.Fatalf("action = %s, want %s", attempts[0].Action, domain.RecoveryActionRerunPreviousAgent)
+	}
+}
+
+func TestBuildReview_ContractGapRepairsCurrentStreamCardOnly(t *testing.T) {
+	env := setupDispatchEnv(t)
+	ctx := context.Background()
+	env.createObjective(t, "obj-contract-gap", domain.ObjectiveStatusExecuting)
+	streams := env.createPlan(t, "plan-contract-gap", "obj-contract-gap", []string{"stream-1", "stream-2"})
+
+	streamOne, err := env.streams.Get(ctx, streams[0].ID)
+	if err != nil {
+		t.Fatalf("Get stream-1: %v", err)
+	}
+	streamOne.Card = &domain.StreamCard{
+		Goal:                "Initial auth goal",
+		AcceptanceCriteria:  []string{"existing acceptance"},
+		ImplementationScope: []string{"src/auth/**"},
+		ProofScope:          []string{"existing proof"},
+	}
+	streamOne.Description = streamOne.Card.Goal
+	streamOne.AcceptanceCriteria = append([]string(nil), streamOne.Card.AcceptanceCriteria...)
+	if err := env.streams.Update(ctx, streamOne); err != nil {
+		t.Fatalf("Update stream-1: %v", err)
+	}
+
+	streamTwo, err := env.streams.Get(ctx, streams[1].ID)
+	if err != nil {
+		t.Fatalf("Get stream-2: %v", err)
+	}
+	streamTwo.Card = &domain.StreamCard{Goal: "Unchanged stream"}
+	streamTwo.Description = streamTwo.Card.Goal
+	if err := env.streams.Update(ctx, streamTwo); err != nil {
+		t.Fatalf("Update stream-2: %v", err)
+	}
+
+	rt := &sequenceRuntime{results: []runtime.AgentResult{
+		{Success: true, Summary: "builder pass 1"},
+		{Success: true, Summary: "CONTRACT_OUTCOME: contract_gap\nCONTRACT_REASON: Dossier requires middleware coverage that was not in the builder contract\nCONTRACT_STREAM_CARD:\n```yaml\ngoal: \"Harden auth flow\"\nacceptance_criteria:\n  - \"Requests without middleware are rejected\"\nproof_scope:\n  - \"Add regression coverage for missing middleware\"\nhard_anchors:\n  - instruction: \"Route all login handlers through auth middleware\"\n    citation_ids:\n      - \"file:1\"\n```"},
+		{Success: true, Summary: "builder pass 2"},
+		{Success: true, Summary: "REVIEW_DECISION: approve"},
+	}}
+	sp := newMockSandboxProvider()
+	recorder, err := observability.New(t.TempDir(), env.eventBus, slog.Default())
+	if err != nil {
+		t.Fatalf("New recorder: %v", err)
+	}
+	spawner := NewSpawner(env.agents, rt, sp, rules.NewEngine(slog.Default()), tools.NewCurator(slog.Default()), env.eventBus, recorder, nil, config.RuntimeAuthConfig{}, slog.Default(), "http://localhost:8080", "Tack", "tack@local")
+	env.coord.spawner = spawner
+	env.coord.discovery = &stubDossierProvider{dossier: &domain.Dossier{Summary: "Auth dossier", Citations: []domain.DossierCitation{{ID: "file:1", Kind: "file", Target: "src/auth/handlers/login.go", Detail: "Login handlers already route through auth middleware."}}}}
+	env.coord.attempts = env.attempts
+	env.coord.tracker = newAgentTracker(spawner, recorder, env.eventBus, config.TimeoutConfig{}, slog.Default())
+	handlers := NewHandlers(env.scheduler, nil, env.lifecycle, &handlersTestMergeHelper{}, env.engine, rt, env.plans, env.streams, env.objectives, env.executions, env.agents, env.attempts, sp, env.eventBus, recorder, "main", nil, config.RuntimeAuthConfig{}, "", slog.Default())
+	env.engine.RegisterHandler(blueprint.StepTypeAgent, env.coord.HandleAgentStep)
+	env.engine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
+
+	exec, err := env.engine.Start(ctx, "build-review", "obj-contract-gap")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	exec.StreamID = streams[0].ID
+	for exec.Status == "running" {
+		exec, err = env.engine.Advance(ctx, exec)
+		if err != nil {
+			t.Fatalf("Advance: %v", err)
+		}
+	}
+
+	if exec.Status != "completed" {
+		t.Fatalf("status = %s, want completed", exec.Status)
+	}
+	if rt.spawned != 4 {
+		t.Fatalf("spawn count = %d, want 4", rt.spawned)
+	}
+	for _, want := range []string{"Harden auth flow", "Requests without middleware are rejected", "src/auth/**", "Route all login handlers through auth middleware", "src/auth/handlers/login.go"} {
+		if !strings.Contains(rt.lastOpts[2].Overlay, want) {
+			t.Fatalf("builder rerun overlay missing %q\n%s", want, rt.lastOpts[2].Overlay)
+		}
+	}
+	attempts, err := env.attempts.ListByExecution(ctx, exec.ID)
+	if err != nil {
+		t.Fatalf("ListByExecution: %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempt count = %d, want 1", len(attempts))
+	}
+	if attempts[0].FailureKind != domain.FailureContractGap {
+		t.Fatalf("failure kind = %s, want %s", attempts[0].FailureKind, domain.FailureContractGap)
+	}
+	if attempts[0].Action != domain.RecoveryActionRerunPreviousAgent {
+		t.Fatalf("action = %s, want %s", attempts[0].Action, domain.RecoveryActionRerunPreviousAgent)
+	}
+	updatedStreamOne, err := env.streams.Get(ctx, streams[0].ID)
+	if err != nil {
+		t.Fatalf("Get updated stream-1: %v", err)
+	}
+	if updatedStreamOne.Card == nil || updatedStreamOne.Card.Goal != "Harden auth flow" {
+		t.Fatalf("updated stream-1 card = %#v", updatedStreamOne.Card)
+	}
+	updatedStreamTwo, err := env.streams.Get(ctx, streams[1].ID)
+	if err != nil {
+		t.Fatalf("Get updated stream-2: %v", err)
+	}
+	if updatedStreamTwo.Card == nil || updatedStreamTwo.Card.Goal != "Unchanged stream" {
+		t.Fatalf("updated stream-2 card = %#v, want unchanged", updatedStreamTwo.Card)
 	}
 }
 

@@ -262,7 +262,28 @@ func TestBuildOverlay_ReviewerOutputInstructions(t *testing.T) {
 	}
 
 	result := BuildOverlay(input)
-	for _, want := range []string{"## Review Output", "REVIEW_DECISION: approve", "REVIEW_DECISION: reject", "REVIEW_FEEDBACK:"} {
+	for _, want := range []string{"## Review Output", "REVIEW_DECISION: approve", "REVIEW_DECISION: reject", "REVIEW_FEEDBACK:", "CONTRACT_OUTCOME: contract_gap", "CONTRACT_STREAM_CARD:"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("overlay missing %q\n%s", want, result)
+		}
+	}
+}
+
+func TestBuildOverlay_BuilderContractBlockedInstructions(t *testing.T) {
+	input := OverlayInput{
+		AgentName: "builder-auth",
+		Role:      DefaultRoles()["builder"],
+		Objective: &domain.Objective{Description: "build auth flow"},
+		Stream: &domain.Stream{
+			Title: "auth stream",
+			Card: &domain.StreamCard{
+				Goal: "Harden auth flow",
+			},
+		},
+	}
+
+	result := BuildOverlay(input)
+	for _, want := range []string{"## Contract Failure Output", "CONTRACT_OUTCOME: contract_blocked", "CONTRACT_REASON:"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("overlay missing %q\n%s", want, result)
 		}

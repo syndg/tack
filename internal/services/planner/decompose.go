@@ -198,12 +198,6 @@ func ToDomain(raw *RawPlan, objectiveID string, dossier *domain.Dossier) (*domai
 
 	// Second pass: build domain.Stream values with resolved dependency IDs.
 	streams := make([]domain.Stream, len(raw.Streams))
-	citationByID := make(map[string]domain.DossierCitation)
-	if dossier != nil {
-		for _, citation := range dossier.Citations {
-			citationByID[citation.ID] = citation
-		}
-	}
 	for i, rs := range raw.Streams {
 		deps := make([]string, 0, len(rs.Dependencies))
 		blockedBy := make([]string, 0, len(rs.Dependencies))
@@ -229,17 +223,9 @@ func ToDomain(raw *RawPlan, objectiveID string, dossier *domain.Dossier) (*domai
 		if len(proofScope) == 0 {
 			proofScope = append([]string(nil), rs.AcceptanceCriteria...)
 		}
-		hardAnchors := make([]domain.StreamCardAnchor, 0, len(rs.HardAnchors))
-		for _, anchor := range rs.HardAnchors {
-			citations := make([]domain.StreamCardCitation, 0, len(anchor.CitationIDs))
-			for _, citationID := range anchor.CitationIDs {
-				citation, ok := citationByID[citationID]
-				if !ok {
-					return nil, nil, fmt.Errorf("stream %q hard_anchor %q references unknown citation %q", rs.Title, anchor.Instruction, citationID)
-				}
-				citations = append(citations, domain.StreamCardCitation{ID: citation.ID, Kind: citation.Kind, Target: citation.Target, Detail: citation.Detail})
-			}
-			hardAnchors = append(hardAnchors, domain.StreamCardAnchor{Instruction: anchor.Instruction, Citations: citations})
+		hardAnchors, err := compileHardAnchors(rs.Title, rs.HardAnchors, dossier)
+		if err != nil {
+			return nil, nil, err
 		}
 		card := &domain.StreamCard{
 			Goal:                  goal,
@@ -338,4 +324,36 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func compileHardAnchors(streamTitle string, rawAnchors []RawAnchor, dossier *domain.Dossier) ([]domain.StreamCardAnchor, error) {
+	if rawAnchors == nil {
+		return nil, nil
+	}
+	citationByID := make(map[string]domain.DossierCitation)
+	if dossier != nil {
+		for _, citation := range dossier.Citations {
+			citationByID[citation.ID] = citation
+		}
+	}
+	hardAnchors := make([]domain.StreamCardAnchor, 0, len(rawAnchors))
+	for _, anchor := range rawAnchors {
+		instruction := strings.TrimSpace(anchor.Instruction)
+		if instruction == "" {
+			return nil, fmt.Errorf("stream %q has hard_anchor missing instruction", streamTitle)
+		}
+		if len(anchor.CitationIDs) == 0 {
+			return nil, fmt.Errorf("stream %q hard_anchor %q missing citation_ids", streamTitle, instruction)
+		}
+		citations := make([]domain.StreamCardCitation, 0, len(anchor.CitationIDs))
+		for _, citationID := range anchor.CitationIDs {
+			citation, ok := citationByID[citationID]
+			if !ok {
+				return nil, fmt.Errorf("stream %q hard_anchor %q references unknown citation %q", streamTitle, instruction, citationID)
+			}
+			citations = append(citations, domain.StreamCardCitation{ID: citation.ID, Kind: citation.Kind, Target: citation.Target, Detail: citation.Detail})
+		}
+		hardAnchors = append(hardAnchors, domain.StreamCardAnchor{Instruction: instruction, Citations: citations})
+	}
+	return hardAnchors, nil
 }

@@ -475,6 +475,8 @@ const (
 	FailureAgentOutput           FailureKind = "agent_output_failure"
 	FailureQualityGate           FailureKind = "quality_gate_failure"
 	FailureReviewRejection       FailureKind = "review_rejection"
+	FailureContractBlocked       FailureKind = "contract_blocked"
+	FailureContractGap           FailureKind = "contract_gap"
 	FailureSandbox               FailureKind = "sandbox_failure"
 	FailureProviderRateLimit     FailureKind = "provider_rate_limit"
 	FailureMergeConflict         FailureKind = "merge_conflict"
