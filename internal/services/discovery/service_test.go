@@ -159,3 +159,54 @@ func TestExpandDossierAddsRequestedContext(t *testing.T) {
 		t.Fatalf("expanded updated_at = %v, initial = %v", expanded.UpdatedAt, initial.UpdatedAt)
 	}
 }
+
+func TestUpdateDossierRecordsInsight(t *testing.T) {
+	projectRoot := t.TempDir()
+	database, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer database.Close()
+	if err := database.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	ctx := context.Background()
+	projectStore := db.NewProjectStore(database.Conn())
+	project := &domain.Project{Name: "demo", RootPath: projectRoot, ConfigPath: filepath.Join(projectRoot, ".tack", "config.yaml")}
+	if err := projectStore.Upsert(ctx, project); err != nil {
+		t.Fatalf("Upsert project: %v", err)
+	}
+	objectiveStore := db.NewObjectiveStore(database.Conn())
+	objective := &domain.Objective{ProjectID: project.ID, Description: "Improve dossier edits", Blueprint: "build-review"}
+	if err := objectiveStore.Create(ctx, objective); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	dossierStore := db.NewDossierStore(database.Conn())
+	insightStore := db.NewObjectiveInsightStore(database.Conn())
+	registry := blueprint.NewRegistry()
+	if err := registry.LoadDefaults(); err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	svc := New(projectRoot, objectiveStore, dossierStore, rules.NewEngine(slog.Default()), registry, slog.Default())
+	svc.BindInsightStore(insightStore)
+	if _, err := svc.Generate(ctx, objective.ID); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	updated, err := svc.UpdateDossier(ctx, objective.ID, domain.Dossier{Summary: "Edited dossier summary", Risks: []string{"manual edit"}})
+	if err != nil {
+		t.Fatalf("UpdateDossier: %v", err)
+	}
+	if updated.Summary != "Edited dossier summary" {
+		t.Fatalf("summary = %q", updated.Summary)
+	}
+	insights, err := insightStore.ListByObjective(ctx, objective.ID, 10)
+	if err != nil {
+		t.Fatalf("ListByObjective: %v", err)
+	}
+	if len(insights) != 1 || insights[0].Kind != domain.InsightKindDossierEdit {
+		t.Fatalf("insights = %#v", insights)
+	}
+	if !strings.Contains(insights[0].Summary, "summary") || !strings.Contains(insights[0].Summary, "risks") {
+		t.Fatalf("summary = %q", insights[0].Summary)
+	}
+}

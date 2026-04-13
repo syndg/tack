@@ -93,6 +93,11 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		FixContext:   retryContextFixContext(retryContext, fixContext),
 		RetryContext: retryContext,
 	}
+	if insights, err := c.listRecentObjectiveInsights(ctx, exec.ObjectiveID, 8); err == nil {
+		spawnRequest.Insights = insights
+	} else {
+		c.logger.Warn("failed to load objective insights", "objective_id", exec.ObjectiveID, "error", err)
+	}
 	if role == string(domain.AgentRolePlanner) {
 		if c.discovery == nil {
 			return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: "planner step requires discovery service"}, nil
@@ -207,6 +212,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 
 				switch contractOutcome.Kind {
 				case agents.ContractOutcomeBlocked:
+					c.recordObjectiveInsight(ctx, domain.ObjectiveInsight{ProjectID: obj.ProjectID, ObjectiveID: exec.ObjectiveID, StreamID: exec.StreamID, ExecutionID: exec.ID, Source: domain.InsightSourceBuilder, Kind: domain.InsightKindContractBlocked, Summary: feedback, Detail: feedback, Payload: map[string]string{"step_id": step.ID}})
 					attempt, _ := c.recordRecoveryAttempt(ctx, recoveryAttemptInput{
 						ProjectID:      obj.ProjectID,
 						ObjectiveID:    exec.ObjectiveID,
@@ -223,6 +229,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 					return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: attempt.ErrorSummary}, nil
 
 				case agents.ContractOutcomeGap:
+					c.recordObjectiveInsight(ctx, domain.ObjectiveInsight{ProjectID: obj.ProjectID, ObjectiveID: exec.ObjectiveID, StreamID: exec.StreamID, ExecutionID: exec.ID, Source: domain.InsightSourceReviewer, Kind: domain.InsightKindContractGap, Summary: feedback, Detail: feedback, Payload: map[string]string{"step_id": step.ID, "stream_card_yaml": contractOutcome.StreamCardYAML}})
 					applyErr := c.applyContractGapRepair(ctx, exec.ObjectiveID, stream, contractOutcome.StreamCardYAML)
 					attempt, decision := c.recordRecoveryAttempt(ctx, recoveryAttemptInput{
 						ProjectID:      obj.ProjectID,
@@ -263,6 +270,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 					if retryContext != nil {
 						fixContext = mergeReviewFixContext(feedback, retryContext.LastError)
 					}
+					c.recordObjectiveInsight(ctx, domain.ObjectiveInsight{ProjectID: obj.ProjectID, ObjectiveID: exec.ObjectiveID, StreamID: exec.StreamID, ExecutionID: exec.ID, Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: feedback, Detail: feedback, Payload: map[string]string{"step_id": step.ID}})
 					attempt, decision := c.recordRecoveryAttempt(ctx, recoveryAttemptInput{
 						ProjectID:      obj.ProjectID,
 						ObjectiveID:    exec.ObjectiveID,
@@ -446,6 +454,28 @@ func (c *Coordinator) applyContractGapRepair(ctx context.Context, objectiveID st
 		return fmt.Errorf("updating stream with repaired contract: %w", err)
 	}
 	return nil
+}
+
+func (c *Coordinator) listRecentObjectiveInsights(ctx context.Context, objectiveID string, limit int) ([]domain.ObjectiveInsight, error) {
+	if c.insights == nil {
+		return nil, nil
+	}
+	return c.insights.ListByObjective(ctx, objectiveID, limit)
+}
+
+func (c *Coordinator) recordObjectiveInsight(ctx context.Context, insight domain.ObjectiveInsight) {
+	if c.insights == nil {
+		return
+	}
+	if strings.TrimSpace(insight.Summary) == "" {
+		insight.Summary = strings.TrimSpace(insight.Detail)
+	}
+	if strings.TrimSpace(insight.Summary) == "" {
+		return
+	}
+	if err := c.insights.Create(ctx, &insight); err != nil {
+		c.logger.Warn("failed to record objective insight", "objective_id", insight.ObjectiveID, "kind", insight.Kind, "error", err)
+	}
 }
 
 func (c *Coordinator) modelForAgentStep(step *blueprint.Step) string {

@@ -290,9 +290,39 @@ func TestBuildOverlay_BuilderContractBlockedInstructions(t *testing.T) {
 	}
 }
 
+func TestBuildOverlay_IncludesObjectiveInsights(t *testing.T) {
+	input := OverlayInput{
+		AgentName: "builder-auth",
+		Role:      DefaultRoles()["builder"],
+		Objective: &domain.Objective{Description: "build auth flow"},
+		Stream: &domain.Stream{
+			ID:    "stream-1",
+			Title: "auth stream",
+			Card:  &domain.StreamCard{Goal: "Harden auth flow"},
+		},
+		ObjectiveInsights: []domain.ObjectiveInsight{{
+			Source:  domain.InsightSourceReviewer,
+			Kind:    domain.InsightKindReviewRejection,
+			Summary: "Reviewer requested regression coverage",
+			Detail:  "Add coverage for the error path before merge.",
+		}},
+	}
+
+	result := BuildOverlay(input)
+	for _, want := range []string{"## Objective Insights", "[reviewer/review_rejection] Reviewer requested regression coverage", "Detail: Add coverage for the error path before merge."} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("overlay missing %q\n%s", want, result)
+		}
+	}
+}
+
 func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 	obj := testObjective()
-	result := BuildPlannerOverlay(obj, testDossier(), "use bun for JS")
+	result := BuildPlannerOverlay(obj, testDossier(), "use bun for JS", []domain.ObjectiveInsight{{
+		Source:  domain.InsightSourceHuman,
+		Kind:    domain.InsightKindRetryGuidance,
+		Summary: "Keep auth compatibility stable",
+	}})
 
 	expected := []string{
 		"# Tack Agent: planner",
@@ -300,6 +330,7 @@ func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 		"## Objective",
 		"## Dossier Summary",
 		"## Dossier Citations",
+		"## Objective Insights",
 		"## Relevant Files",
 		"## Suggested Seams",
 		"## Project Guidance",
@@ -328,7 +359,7 @@ func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 
 func TestBuildPlannerOverlay_EmptyGuidance_NoSection(t *testing.T) {
 	obj := testObjective()
-	result := BuildPlannerOverlay(obj, testDossier(), "")
+	result := BuildPlannerOverlay(obj, testDossier(), "", nil)
 
 	if strings.Contains(result, "## Project Guidance") {
 		t.Error("should not include Project Guidance section when guidance is empty")
@@ -337,7 +368,7 @@ func TestBuildPlannerOverlay_EmptyGuidance_NoSection(t *testing.T) {
 
 func TestBuildPlannerOverlay_IncludesPlanYAMLSchema(t *testing.T) {
 	obj := testObjective()
-	result := BuildPlannerOverlay(obj, testDossier(), "")
+	result := BuildPlannerOverlay(obj, testDossier(), "", nil)
 
 	// Should contain a YAML code block with the plan schema.
 	if !strings.Contains(result, "```yaml") {

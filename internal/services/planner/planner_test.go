@@ -36,7 +36,7 @@ func (m *mockRunController) Command(ctx context.Context, runID string, cmd domai
 }
 
 // setupService builds a complete planner.Service backed by a fresh SQLite DB.
-func setupService(t *testing.T) (*Service, *db.ObjectiveStore, *db.PlanStore, *db.StreamStore, *db.RunStore) {
+func setupService(t *testing.T) (*Service, *db.ObjectiveStore, *db.PlanStore, *db.StreamStore, *db.RunStore, *db.ObjectiveInsightStore) {
 	t.Helper()
 	d, err := db.Open(t.TempDir())
 	if err != nil {
@@ -56,6 +56,7 @@ func setupService(t *testing.T) (*Service, *db.ObjectiveStore, *db.PlanStore, *d
 	dossierStore := db.NewDossierStore(d.Conn())
 	agentStore := db.NewAgentStore(d.Conn())
 	runStore := db.NewRunStore(d.Conn())
+	insightStore := db.NewObjectiveInsightStore(d.Conn())
 	eventStore := db.NewEventStore(d.Conn())
 
 	bus := events.NewPersistentBus(eventStore, slog.Default())
@@ -63,7 +64,8 @@ func setupService(t *testing.T) (*Service, *db.ObjectiveStore, *db.PlanStore, *d
 
 	lcm := lifecycle.New(objStore, planStore, streamStore, agentStore, bus, nil, logger)
 	svc := New(planStore, streamStore, dossierStore, objStore, agentStore, lcm, bus, nil, logger, []string{"go test ./...", "go vet ./..."})
-	return svc, objStore, planStore, streamStore, runStore
+	svc.BindInsightStore(insightStore)
+	return svc, objStore, planStore, streamStore, runStore, insightStore
 }
 
 // validPlanYAML is raw YAML (no code fence) for testing CreatePlan.
@@ -83,7 +85,7 @@ quality_gates:
   - "go test ./..."`
 
 func TestCreatePlan_EndToEnd(t *testing.T) {
-	svc, objStore, planStore, streamStore, _ := setupService(t)
+	svc, objStore, planStore, streamStore, _, _ := setupService(t)
 	ctx := context.Background()
 
 	obj := &domain.Objective{Description: "refactor auth"}
@@ -125,7 +127,7 @@ func TestCreatePlan_EndToEnd(t *testing.T) {
 }
 
 func TestCreatePlan_ReturnsNeedsDossierExpansion(t *testing.T) {
-	svc, objStore, _, _, _ := setupService(t)
+	svc, objStore, _, _, _, _ := setupService(t)
 	ctx := context.Background()
 
 	obj := &domain.Objective{Description: "refactor auth"}
@@ -157,7 +159,7 @@ PLANNER_QUESTIONS:
 }
 
 func TestCreateSimplePlan_SingleStream(t *testing.T) {
-	svc, objStore, _, streamStore, _ := setupService(t)
+	svc, objStore, _, streamStore, _, _ := setupService(t)
 	ctx := context.Background()
 
 	obj := &domain.Objective{Description: "fix typo in header"}
@@ -198,7 +200,7 @@ func TestCreateSimplePlan_SingleStream(t *testing.T) {
 }
 
 func TestStartSimple_AutoApprove(t *testing.T) {
-	svc, objStore, _, _, _ := setupService(t)
+	svc, objStore, _, _, _, _ := setupService(t)
 	ctx := context.Background()
 
 	obj, plan, err := svc.StartSimple(ctx, "fix broken link", SimpleOpts{AutoApprove: true})
@@ -226,7 +228,7 @@ func TestStartSimple_AutoApprove(t *testing.T) {
 }
 
 func TestStartSimple_WithoutAutoApprove(t *testing.T) {
-	svc, _, _, _, _ := setupService(t)
+	svc, _, _, _, _, _ := setupService(t)
 	ctx := context.Background()
 
 	obj, plan, err := svc.StartSimple(ctx, "add feature", SimpleOpts{AutoApprove: false})
@@ -244,7 +246,7 @@ func TestStartSimple_WithoutAutoApprove(t *testing.T) {
 }
 
 func TestStartSimpleExecution_StartsRunWhenAutoApproved(t *testing.T) {
-	svc, _, _, _, runStore := setupService(t)
+	svc, _, _, _, runStore, _ := setupService(t)
 	ctx := context.Background()
 	controller := &mockRunController{}
 	svc.BindRunController(runStore, controller)
@@ -265,7 +267,7 @@ func TestStartSimpleExecution_StartsRunWhenAutoApproved(t *testing.T) {
 }
 
 func TestApprovePlan_ResumesBlockedRun(t *testing.T) {
-	svc, objStore, _, _, runStore := setupService(t)
+	svc, objStore, _, _, runStore, insightStore := setupService(t)
 	ctx := context.Background()
 	controller := &mockRunController{}
 	svc.BindRunController(runStore, controller)
@@ -282,7 +284,7 @@ func TestApprovePlan_ResumesBlockedRun(t *testing.T) {
 		t.Fatalf("Create run: %v", err)
 	}
 
-	plan, err = svc.ApprovePlan(ctx, plan.ID)
+	plan, err = svc.ApprovePlanWithReason(ctx, plan.ID, "Approved after validating stream boundaries")
 	if err != nil {
 		t.Fatalf("ApprovePlan: %v", err)
 	}
@@ -295,10 +297,17 @@ func TestApprovePlan_ResumesBlockedRun(t *testing.T) {
 	if controller.command.Kind != domain.CommandApprove {
 		t.Fatalf("command kind = %q, want approve", controller.command.Kind)
 	}
+	insights, err := insightStore.ListByObjective(ctx, obj.ID, 10)
+	if err != nil {
+		t.Fatalf("ListByObjective insights: %v", err)
+	}
+	if len(insights) != 1 || insights[0].Kind != domain.InsightKindPlanApproval {
+		t.Fatalf("insights = %#v", insights)
+	}
 }
 
 func TestRejectPlan_ReturnsFailedPlan(t *testing.T) {
-	svc, objStore, _, _, _ := setupService(t)
+	svc, objStore, _, _, _, _ := setupService(t)
 	ctx := context.Background()
 
 	obj := &domain.Objective{Description: "feature work"}
@@ -316,5 +325,33 @@ func TestRejectPlan_ReturnsFailedPlan(t *testing.T) {
 	}
 	if plan.Status != domain.PlanStatusFailed {
 		t.Fatalf("plan status = %q, want failed", plan.Status)
+	}
+}
+
+func TestUpdatePlanQualityGatesWithReason_RecordsInsight(t *testing.T) {
+	svc, objStore, _, _, _, insightStore := setupService(t)
+	ctx := context.Background()
+
+	obj := &domain.Objective{Description: "feature work"}
+	if err := objStore.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	plan, err := svc.CreateSimplePlan(ctx, obj.ID)
+	if err != nil {
+		t.Fatalf("CreateSimplePlan: %v", err)
+	}
+	updated, err := svc.UpdatePlanQualityGatesWithReason(ctx, plan.ID, []string{"go test ./internal/services/planner"}, "Limit validation to planner package while iterating")
+	if err != nil {
+		t.Fatalf("UpdatePlanQualityGatesWithReason: %v", err)
+	}
+	if len(updated.QualityGates) != 1 || updated.QualityGates[0] != "go test ./internal/services/planner" {
+		t.Fatalf("quality gates = %#v", updated.QualityGates)
+	}
+	insights, err := insightStore.ListByObjective(ctx, obj.ID, 10)
+	if err != nil {
+		t.Fatalf("ListByObjective insights: %v", err)
+	}
+	if len(insights) != 1 || insights[0].Kind != domain.InsightKindPlanQualityGateEdit {
+		t.Fatalf("insights = %#v", insights)
 	}
 }

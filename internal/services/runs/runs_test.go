@@ -330,7 +330,21 @@ func TestStartCreatesRunAndDelegates(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
-	svc := newTestService(t, runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc, err := New(Config{
+		Orchestrator:   orch,
+		MergeProcessor: &mockMergeService{},
+		Runs:           runStore,
+		Objectives:     objectiveStore,
+		Plans:          planStore,
+		Streams:        streamStore,
+		Executions:     executionStore,
+		Agents:         agentStore,
+		EventBus:       newTestEventBus(t, database),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	// Create an objective in "approved" state (startable).
 	obj := &domain.Objective{Description: "test start", Status: domain.ObjectiveStatusApproved}
@@ -416,14 +430,28 @@ func TestStartMarksRunFailedOnExecuteError(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{executeErr: errors.New("blueprint not found")}
-	svc := newTestService(t, runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc, err := New(Config{
+		Orchestrator:   orch,
+		MergeProcessor: &mockMergeService{},
+		Runs:           runStore,
+		Objectives:     objectiveStore,
+		Plans:          planStore,
+		Streams:        streamStore,
+		Executions:     executionStore,
+		Agents:         agentStore,
+		EventBus:       newTestEventBus(t, database),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	obj := &domain.Objective{Description: "will fail", Status: domain.ObjectiveStatusApproved}
 	if err := objectiveStore.Create(ctx, obj); err != nil {
 		t.Fatalf("creating objective: %v", err)
 	}
 
-	_, err := svc.Start(ctx, obj.ID)
+	_, err = svc.Start(ctx, obj.ID)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -687,7 +715,21 @@ func TestCommandApproveUnblocksRun(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
-	svc := newTestService(t, runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc, err := New(Config{
+		Orchestrator:   orch,
+		MergeProcessor: &mockMergeService{},
+		Runs:           runStore,
+		Objectives:     objectiveStore,
+		Plans:          planStore,
+		Streams:        streamStore,
+		Executions:     executionStore,
+		Agents:         agentStore,
+		EventBus:       newTestEventBus(t, database),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	// Setup: objective + run (blocked) + execution (waiting_human).
 	obj := &domain.Objective{Description: "approve test", Status: domain.ObjectiveStatusExecuting}
@@ -782,6 +824,7 @@ func TestCommandRetryDelegatesToCoordinator(t *testing.T) {
 	logger := slog.Default()
 
 	runStore := db.NewRunStore(conn)
+	insightStore := db.NewObjectiveInsightStore(conn)
 	objectiveStore := db.NewObjectiveStore(conn)
 	planStore := db.NewPlanStore(conn)
 	streamStore := db.NewStreamStore(conn)
@@ -789,7 +832,22 @@ func TestCommandRetryDelegatesToCoordinator(t *testing.T) {
 	agentStore := db.NewAgentStore(conn)
 
 	orch := &mockOrchestrator{}
-	svc := newTestService(t, runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+	svc, err := New(Config{
+		Orchestrator:   orch,
+		MergeProcessor: &mockMergeService{},
+		Runs:           runStore,
+		Insights:       insightStore,
+		Objectives:     objectiveStore,
+		Plans:          planStore,
+		Streams:        streamStore,
+		Executions:     executionStore,
+		Agents:         agentStore,
+		EventBus:       newTestEventBus(t, database),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	// Setup: objective + plan + failed stream with execution.
 	obj := &domain.Objective{Description: "retry test", Status: domain.ObjectiveStatusExecuting}
@@ -860,6 +918,13 @@ func TestCommandRetryDelegatesToCoordinator(t *testing.T) {
 	// Verify run transitioned back to active.
 	if snap.Status != domain.RunStatusActive {
 		t.Errorf("snap.Status = %q, want %q", snap.Status, domain.RunStatusActive)
+	}
+	insights, err := insightStore.ListByObjective(ctx, obj.ID, 10)
+	if err != nil {
+		t.Fatalf("ListByObjective insights: %v", err)
+	}
+	if len(insights) != 1 || insights[0].Kind != domain.InsightKindRetryGuidance {
+		t.Fatalf("insights = %#v", insights)
 	}
 }
 

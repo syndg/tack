@@ -12,21 +12,22 @@ import (
 
 // OverlayInput holds all inputs for constructing an agent's system overlay.
 type OverlayInput struct {
-	AgentName    string                     // e.g., "builder-auth-1"
-	Role         *RoleDefinition            // role definition for this agent
-	Objective    *domain.Objective          // the objective being executed
-	Stream       *domain.Stream             // nil for planner
-	TaskSpec     string                     // from lead or plan description
-	FileScope    []string                   // files this agent may modify
-	MatchedRules []rules.MatchedRule        // rules matched against file scope
-	CuratedTools tools.CurationResult       // resolved tool set
-	QualityGates []string                   // gate commands to run before completion
-	LeadAgent    string                     // name of this agent's lead (empty for planners)
-	Guidance     string                     // project-level guidance from .tack/config.yaml
-	CommitMode   string                     // "auto", "agent", "none" — controls commit behavior
-	Messages     *blueprint.MessageRequests // optional delivery messages to generate
-	FixContext   string                     // quality gate errors from a previous fix-loop iteration
-	RetryContext *RetryContext              // normalized recovery context for reruns
+	AgentName         string                     // e.g., "builder-auth-1"
+	Role              *RoleDefinition            // role definition for this agent
+	Objective         *domain.Objective          // the objective being executed
+	Stream            *domain.Stream             // nil for planner
+	TaskSpec          string                     // from lead or plan description
+	FileScope         []string                   // files this agent may modify
+	MatchedRules      []rules.MatchedRule        // rules matched against file scope
+	CuratedTools      tools.CurationResult       // resolved tool set
+	QualityGates      []string                   // gate commands to run before completion
+	LeadAgent         string                     // name of this agent's lead (empty for planners)
+	Guidance          string                     // project-level guidance from .tack/config.yaml
+	CommitMode        string                     // "auto", "agent", "none" — controls commit behavior
+	Messages          *blueprint.MessageRequests // optional delivery messages to generate
+	FixContext        string                     // quality gate errors from a previous fix-loop iteration
+	RetryContext      *RetryContext              // normalized recovery context for reruns
+	ObjectiveInsights []domain.ObjectiveInsight  // durable objective-local insights
 }
 
 // BuildOverlay generates the markdown system prompt overlay for an agent.
@@ -111,6 +112,22 @@ func BuildOverlay(input OverlayInput) string {
 		b.WriteString("## Seam Override Rationale\n")
 		b.WriteString(card.SeamOverrideRationale)
 		b.WriteString("\n\n")
+	}
+	if len(input.ObjectiveInsights) > 0 {
+		b.WriteString("## Objective Insights\n")
+		b.WriteString("Recent objective-local signals already learned during this run:\n")
+		for _, insight := range input.ObjectiveInsights {
+			line := fmt.Sprintf("- [%s/%s] %s", insight.Source, insight.Kind, insight.Summary)
+			if insight.StreamID != "" && (input.Stream == nil || insight.StreamID != input.Stream.ID) {
+				line += fmt.Sprintf(" (stream %s)", insight.StreamID)
+			}
+			b.WriteString(line)
+			b.WriteString("\n")
+			if detail := strings.TrimSpace(insight.Detail); detail != "" && detail != insight.Summary {
+				fmt.Fprintf(&b, "  Detail: %s\n", detail)
+			}
+		}
+		b.WriteString("\n")
 	}
 	if input.Role != nil && input.Role.Name == "builder" && hasCard {
 		b.WriteString("## Contract Failure Output\n")
@@ -293,7 +310,7 @@ quality_gates:
 // BuildPlannerOverlay generates a dossier-driven overlay for planner agents.
 // Planners must decompose from persisted discovery context and explicitly ask
 // for dossier expansion instead of exploring the repo directly.
-func BuildPlannerOverlay(objective *domain.Objective, dossier *domain.Dossier, guidance string) string {
+func BuildPlannerOverlay(objective *domain.Objective, dossier *domain.Dossier, guidance string, insights []domain.ObjectiveInsight) string {
 	var b strings.Builder
 
 	b.WriteString("# Tack Agent: planner\n\n")
@@ -362,6 +379,17 @@ func BuildPlannerOverlay(objective *domain.Objective, dossier *domain.Dossier, g
 			}
 			b.WriteString("\n")
 		}
+	}
+
+	if len(insights) > 0 {
+		b.WriteString("## Objective Insights\n")
+		for _, insight := range insights {
+			fmt.Fprintf(&b, "- [%s/%s] %s\n", insight.Source, insight.Kind, insight.Summary)
+			if detail := strings.TrimSpace(insight.Detail); detail != "" && detail != insight.Summary {
+				fmt.Fprintf(&b, "  Detail: %s\n", detail)
+			}
+		}
+		b.WriteString("\n")
 	}
 
 	if guidance != "" {

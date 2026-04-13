@@ -60,18 +60,19 @@ type MailSender interface {
 
 // Config holds all dependencies for constructing a Coordinator.
 type Config struct {
-	ProjectID     string                  // owning project for recovery filtering
-	Engine        *blueprint.Engine       // blueprint execution engine
-	Scheduler     *Scheduler              // stream scheduling
-	Spawner       *Spawner                // agent process spawning
-	Discovery     DossierProvider         // dossier retrieval and expansion for planner steps
-	AgentModel    string                  // default model for non-planner agent steps
-	PlannerModel  string                  // default model for planner agent steps
-	Lifecycle     *lifecycle.Manager      // objective state transitions
-	MergeEnqueuer MergeEnqueuer           // merge queue integration
-	PlanCreator   PlanCreator             // plan creation from planner output
-	MailSender    MailSender              // optional: nil disables mail escalation
-	Attempts      *db.AttemptStore        // optional: nil disables attempt ledger recording
+	ProjectID     string             // owning project for recovery filtering
+	Engine        *blueprint.Engine  // blueprint execution engine
+	Scheduler     *Scheduler         // stream scheduling
+	Spawner       *Spawner           // agent process spawning
+	Discovery     DossierProvider    // dossier retrieval and expansion for planner steps
+	AgentModel    string             // default model for non-planner agent steps
+	PlannerModel  string             // default model for planner agent steps
+	Lifecycle     *lifecycle.Manager // objective state transitions
+	MergeEnqueuer MergeEnqueuer      // merge queue integration
+	PlanCreator   PlanCreator        // plan creation from planner output
+	MailSender    MailSender         // optional: nil disables mail escalation
+	Attempts      *db.AttemptStore   // optional: nil disables attempt ledger recording
+	Insights      *db.ObjectiveInsightStore
 	Executions    *db.ExecutionStore      // execution persistence
 	Objectives    *db.ObjectiveStore      // objective persistence
 	Plans         *db.PlanStore           // plan persistence
@@ -140,6 +141,7 @@ type Coordinator struct {
 	planCreator   PlanCreator
 	mailSender    MailSender
 	attempts      *db.AttemptStore
+	insights      *db.ObjectiveInsightStore
 	executions    *db.ExecutionStore
 	objectives    *db.ObjectiveStore
 	plans         *db.PlanStore
@@ -174,6 +176,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		planCreator:   cfg.PlanCreator,
 		mailSender:    cfg.MailSender,
 		attempts:      cfg.Attempts,
+		insights:      cfg.Insights,
 		executions:    cfg.Executions,
 		objectives:    cfg.Objectives,
 		plans:         cfg.Plans,

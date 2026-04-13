@@ -20,9 +20,14 @@ type Service struct {
 	projectRoot string
 	objectives  *db.ObjectiveStore
 	dossiers    *db.DossierStore
+	insights    *db.ObjectiveInsightStore
 	rules       *rules.Engine
 	blueprints  *blueprint.Registry
 	logger      *slog.Logger
+}
+
+func (s *Service) BindInsightStore(insights *db.ObjectiveInsightStore) {
+	s.insights = insights
 }
 
 const noStrongMatchesUnknown = "No strong file matches were found from deterministic objective keyword retrieval."
@@ -57,12 +62,87 @@ func (s *Service) UpdateDossier(ctx context.Context, objectiveID string, dossier
 	if err != nil {
 		return nil, fmt.Errorf("loading objective for dossier update: %w", err)
 	}
+	previous, _ := s.dossiers.GetByObjective(ctx, objectiveID)
 	dossier.ObjectiveID = objectiveID
 	dossier.ProjectID = obj.ProjectID
 	if err := s.dossiers.Upsert(ctx, &dossier); err != nil {
 		return nil, err
 	}
-	return s.dossiers.GetByObjective(ctx, objectiveID)
+	updated, err := s.dossiers.GetByObjective(ctx, objectiveID)
+	if err != nil {
+		return nil, err
+	}
+	s.recordDossierEditInsight(ctx, obj.ProjectID, objectiveID, previous, updated)
+	return updated, nil
+}
+
+func (s *Service) recordDossierEditInsight(ctx context.Context, projectID, objectiveID string, before, after *domain.Dossier) {
+	if s.insights == nil || after == nil {
+		return
+	}
+	changedFields := dossierChangedFields(before, after)
+	if len(changedFields) == 0 {
+		return
+	}
+	summary := "Updated dossier fields: " + strings.Join(changedFields, ", ")
+	if err := s.insights.Create(ctx, &domain.ObjectiveInsight{
+		ProjectID:   projectID,
+		ObjectiveID: objectiveID,
+		Source:      domain.InsightSourceDiscovery,
+		Kind:        domain.InsightKindDossierEdit,
+		Summary:     summary,
+		Detail:      summary,
+		Payload:     map[string]string{"changed_fields": strings.Join(changedFields, ",")},
+	}); err != nil {
+		s.logger.Warn("recording dossier edit insight", "objective_id", objectiveID, "error", err)
+	}
+}
+
+func dossierChangedFields(before, after *domain.Dossier) []string {
+	if after == nil {
+		return nil
+	}
+	if before == nil {
+		return []string{"created"}
+	}
+	var changed []string
+	if before.Summary != after.Summary {
+		changed = append(changed, "summary")
+	}
+	if !equalStringSlices(before.Risks, after.Risks) {
+		changed = append(changed, "risks")
+	}
+	if !equalStringSlices(before.Unknowns, after.Unknowns) {
+		changed = append(changed, "unknowns")
+	}
+	if len(before.RelevantFiles) != len(after.RelevantFiles) {
+		changed = append(changed, "relevant_files")
+	}
+	if len(before.SimilarPatterns) != len(after.SimilarPatterns) {
+		changed = append(changed, "similar_patterns")
+	}
+	if len(before.SuggestedSeams) != len(after.SuggestedSeams) {
+		changed = append(changed, "suggested_seams")
+	}
+	if len(before.Citations) != len(after.Citations) {
+		changed = append(changed, "citations")
+	}
+	if len(before.RepoPriors) != len(after.RepoPriors) {
+		changed = append(changed, "repo_priors")
+	}
+	return changed
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) ExpandDossier(ctx context.Context, objectiveID string, request domain.DossierExpansionRequest) (*domain.Dossier, error) {

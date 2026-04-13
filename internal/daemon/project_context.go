@@ -71,6 +71,7 @@ type ProjectContextManager struct {
 	streams      *db.StreamStore
 	runs         *db.RunStore
 	attempts     *db.AttemptStore
+	insights     *db.ObjectiveInsightStore
 	mergeQueue   *db.MergeQueueStore
 	eventBus     *events.PersistentBus
 	mailBroker   *mailservice.Broker
@@ -95,6 +96,7 @@ func newProjectContextManager(
 	streamStore *db.StreamStore,
 	runStore *db.RunStore,
 	attemptStore *db.AttemptStore,
+	insightStore *db.ObjectiveInsightStore,
 	mergeQueueStore *db.MergeQueueStore,
 	eventBus *events.PersistentBus,
 	mailBroker *mailservice.Broker,
@@ -124,6 +126,7 @@ func newProjectContextManager(
 		streams:        streamStore,
 		runs:           runStore,
 		attempts:       attemptStore,
+		insights:       insightStore,
 		mergeQueue:     mergeQueueStore,
 		eventBus:       eventBus,
 		mailBroker:     mailBroker,
@@ -313,6 +316,8 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 	lifecycleMgr := lifecycle.New(m.objectives, m.plans, m.streams, m.agents, m.eventBus, m.obs, m.logger)
 	planningService := planner.New(m.plans, m.streams, m.dossiers, m.objectives, m.agents, lifecycleMgr, m.eventBus, m.obs, m.logger, cfg.QualityGates)
 	discoveryService := discovery.New(project.RootPath, m.objectives, m.dossiers, rulesEng, bpRegistry, m.logger)
+	planningService.BindInsightStore(m.insights)
+	discoveryService.BindInsightStore(m.insights)
 
 	toolCurator := tools.NewCurator(m.logger)
 	agentRuntime := newAgentRuntime(&cfg, m.logger)
@@ -344,6 +349,7 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 		GitAuthorEmail:     cfg.Git.AuthorEmail,
 		Runs:               m.runs,
 		Attempts:           m.attempts,
+		Insights:           m.insights,
 		Objectives:         m.objectives,
 		Plans:              m.plans,
 		Streams:            m.streams,

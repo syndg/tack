@@ -27,9 +27,14 @@ type Service struct {
 	eventBus            *events.PersistentBus
 	obs                 *observability.Recorder
 	logger              *slog.Logger
+	insights            *db.ObjectiveInsightStore
 	defaultQualityGates []string
 	runStore            *db.RunStore
 	runController       RunController
+}
+
+func (s *Service) BindInsightStore(insights *db.ObjectiveInsightStore) {
+	s.insights = insights
 }
 
 // New creates a new planning Service.

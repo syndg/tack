@@ -38,6 +38,7 @@ type SpawnRequest struct {
 	ExecutionID  string                     // sub-execution ID (used to label sandbox for branch lookup)
 	FixContext   string                     // quality gate errors from a previous fix-loop iteration
 	RetryContext *agents.RetryContext
+	Insights     []domain.ObjectiveInsight
 }
 
 // SpawnResult contains the created agent session, process, and sandbox.
@@ -241,23 +242,24 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 		if req.Dossier == nil {
 			return nil, fmt.Errorf("planner spawn requires dossier")
 		}
-		overlay = agents.BuildPlannerOverlay(req.Objective, req.Dossier, req.Guidance)
+		overlay = agents.BuildPlannerOverlay(req.Objective, req.Dossier, req.Guidance, req.Insights)
 	} else {
 		overlay = agents.BuildOverlay(agents.OverlayInput{
-			AgentName:    agentName,
-			Role:         role,
-			Objective:    req.Objective,
-			Stream:       req.Stream,
-			TaskSpec:     req.TaskSpec,
-			FileScope:    fileScope,
-			MatchedRules: matchedRules,
-			CuratedTools: curationResult,
-			LeadAgent:    req.ParentAgent,
-			Guidance:     req.Guidance,
-			CommitMode:   req.CommitMode,
-			Messages:     req.Messages,
-			FixContext:   req.FixContext,
-			RetryContext: req.RetryContext,
+			AgentName:         agentName,
+			Role:              role,
+			Objective:         req.Objective,
+			Stream:            req.Stream,
+			TaskSpec:          req.TaskSpec,
+			FileScope:         fileScope,
+			MatchedRules:      matchedRules,
+			CuratedTools:      curationResult,
+			LeadAgent:         req.ParentAgent,
+			Guidance:          req.Guidance,
+			CommitMode:        req.CommitMode,
+			Messages:          req.Messages,
+			FixContext:        req.FixContext,
+			RetryContext:      req.RetryContext,
+			ObjectiveInsights: req.Insights,
 		})
 	}
 

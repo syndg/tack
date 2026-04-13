@@ -207,6 +207,7 @@ type Config struct {
 
 	Runs       *db.RunStore
 	Attempts   *db.AttemptStore
+	Insights   *db.ObjectiveInsightStore
 	Objectives *db.ObjectiveStore
 	Plans      *db.PlanStore
 	Streams    *db.StreamStore
@@ -221,6 +222,7 @@ type Config struct {
 type Service struct {
 	runs       *db.RunStore
 	attempts   *db.AttemptStore
+	insights   *db.ObjectiveInsightStore
 	objectives *db.ObjectiveStore
 	plans      *db.PlanStore
 	streams    *db.StreamStore
@@ -316,6 +318,7 @@ func New(cfg Config) (*Service, error) {
 			PlanCreator:   cfg.PlanCreator,
 			MailSender:    cfg.MailSender,
 			Attempts:      cfg.Attempts,
+			Insights:      cfg.Insights,
 			Executions:    cfg.Executions,
 			Objectives:    cfg.Objectives,
 			Plans:         cfg.Plans,
@@ -333,6 +336,7 @@ func New(cfg Config) (*Service, error) {
 	return &Service{
 		runs:           cfg.Runs,
 		attempts:       cfg.Attempts,
+		insights:       cfg.Insights,
 		objectives:     cfg.Objectives,
 		plans:          cfg.Plans,
 		streams:        cfg.Streams,
@@ -510,6 +514,11 @@ func (s *Service) commandRetry(ctx context.Context, run *domain.Run, cmd domain.
 
 	if err := s.coordinator.Retry(ctx, stream.ExecutionID, cmd.Guidance); err != nil {
 		return domain.Snapshot{}, fmt.Errorf("retrying stream execution: %w", err)
+	}
+	if strings.TrimSpace(cmd.Guidance) != "" && s.insights != nil {
+		if err := s.insights.Create(ctx, &domain.ObjectiveInsight{ProjectID: run.ProjectID, ObjectiveID: run.ObjectiveID, StreamID: cmd.StreamID, ExecutionID: stream.ExecutionID, Source: domain.InsightSourceHuman, Kind: domain.InsightKindRetryGuidance, Summary: cmd.Guidance, Detail: cmd.Guidance, Payload: map[string]string{"command": string(cmd.Kind)}}); err != nil {
+			s.logger.Warn("recording retry guidance insight", "run_id", run.ID, "stream_id", cmd.StreamID, "error", err)
+		}
 	}
 
 	// Ensure run is marked active (it may be in partial/failed state from

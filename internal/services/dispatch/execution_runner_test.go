@@ -554,6 +554,9 @@ func TestBuildReview_RejectionLoopsBackToBuilder(t *testing.T) {
 	if !strings.Contains(rt.lastOpts[2].Overlay, "review_rejection") {
 		t.Fatalf("builder rerun missing review rejection context\n%s", rt.lastOpts[2].Overlay)
 	}
+	if !strings.Contains(rt.lastOpts[2].Overlay, "## Objective Insights") {
+		t.Fatalf("builder rerun missing objective insights\n%s", rt.lastOpts[2].Overlay)
+	}
 	if !strings.Contains(rt.lastOpts[2].Overlay, "Add a regression test for the failure path") {
 		t.Fatalf("builder rerun missing reviewer feedback\n%s", rt.lastOpts[2].Overlay)
 	}
@@ -569,6 +572,13 @@ func TestBuildReview_RejectionLoopsBackToBuilder(t *testing.T) {
 	}
 	if attempts[0].Action != domain.RecoveryActionRerunPreviousAgent {
 		t.Fatalf("action = %s, want %s", attempts[0].Action, domain.RecoveryActionRerunPreviousAgent)
+	}
+	insights, err := env.insights.ListByObjective(ctx, "obj-review-loop", 10)
+	if err != nil {
+		t.Fatalf("ListByObjective insights: %v", err)
+	}
+	if len(insights) != 1 || insights[0].Kind != domain.InsightKindReviewRejection {
+		t.Fatalf("insights = %#v, want one review rejection", insights)
 	}
 }
 

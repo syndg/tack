@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -157,12 +158,13 @@ func (d *Daemon) handleUpdatePlanQualityGates(w http.ResponseWriter, r *http.Req
 	}
 	var req struct {
 		QualityGates []string `json:"quality_gates"`
+		Reason       string   `json:"reason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	plan, err := projectCtx.PlanningService.UpdatePlanQualityGates(r.Context(), id, req.QualityGates)
+	plan, err := projectCtx.PlanningService.UpdatePlanQualityGatesWithReason(r.Context(), id, req.QualityGates, strings.TrimSpace(req.Reason))
 	if err != nil {
 		if isPlanNotFound(err) {
 			writeError(w, http.StatusNotFound, "plan not found")
@@ -200,7 +202,16 @@ func (d *Daemon) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plan, err := projectCtx.PlanningService.ApprovePlan(r.Context(), id)
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+	}
+	plan, err := projectCtx.PlanningService.ApprovePlanWithReason(r.Context(), id, strings.TrimSpace(req.Reason))
 	if err != nil {
 		switch {
 		case isPlanNotFound(err):

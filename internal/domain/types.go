@@ -444,6 +444,43 @@ type Outcome struct {
 	Summary string    `json:"summary,omitempty"`
 }
 
+type ObjectiveInsightSource string
+
+const (
+	InsightSourceReviewer  ObjectiveInsightSource = "reviewer"
+	InsightSourceBuilder   ObjectiveInsightSource = "builder"
+	InsightSourceHuman     ObjectiveInsightSource = "human"
+	InsightSourceDiscovery ObjectiveInsightSource = "discovery"
+	InsightSourcePlanner   ObjectiveInsightSource = "planner"
+)
+
+type ObjectiveInsightKind string
+
+const (
+	InsightKindReviewRejection     ObjectiveInsightKind = "review_rejection"
+	InsightKindContractGap         ObjectiveInsightKind = "contract_gap"
+	InsightKindContractBlocked     ObjectiveInsightKind = "contract_blocked"
+	InsightKindRetryGuidance       ObjectiveInsightKind = "retry_guidance"
+	InsightKindDossierEdit         ObjectiveInsightKind = "dossier_edit"
+	InsightKindPlanApproval        ObjectiveInsightKind = "plan_approval"
+	InsightKindPlanQualityGateEdit ObjectiveInsightKind = "plan_quality_gate_edit"
+)
+
+type ObjectiveInsight struct {
+	ID          string                 `json:"id"`
+	ProjectID   string                 `json:"project_id"`
+	ObjectiveID string                 `json:"objective_id"`
+	StreamID    string                 `json:"stream_id,omitempty"`
+	PlanID      string                 `json:"plan_id,omitempty"`
+	ExecutionID string                 `json:"execution_id,omitempty"`
+	Source      ObjectiveInsightSource `json:"source"`
+	Kind        ObjectiveInsightKind   `json:"kind"`
+	Summary     string                 `json:"summary"`
+	Detail      string                 `json:"detail,omitempty"`
+	Payload     map[string]string      `json:"payload,omitempty"`
+	CreatedAt   time.Time              `json:"created_at"`
+}
+
 // RunStreamState is a snapshot of a single stream within a run.
 type RunStreamState struct {
 	StreamID  string       `json:"stream_id"`
