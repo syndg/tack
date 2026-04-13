@@ -35,6 +35,8 @@ Not every file here has the same weight. Use the status marker at the top of eac
   Product design for adaptive planning depth, dossiers, and simple UX.
 - `2026-04-11-lazygit-benchmark-v1-design.md`
   Concrete first benchmark spec using lazygit and a feature-resurrection slice.
+- `context-engineering-core/README.md`
+  Entry point for the parent PRD and child slice PRDs for the current context-engineering implementation initiative.
 
 ## Current Architecture Background
 
