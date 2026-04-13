@@ -28,6 +28,7 @@ import (
 	"github.com/syndg/tack/internal/sandbox/daytona"
 	"github.com/syndg/tack/internal/sandbox/local"
 	"github.com/syndg/tack/internal/services/cleanup"
+	"github.com/syndg/tack/internal/services/discovery"
 	"github.com/syndg/tack/internal/services/events"
 	"github.com/syndg/tack/internal/services/lifecycle"
 	mailservice "github.com/syndg/tack/internal/services/mail"
@@ -44,6 +45,7 @@ type ProjectContext struct {
 	RulesEngine       *rules.Engine
 	SandboxProvider   sandbox.SandboxProvider
 	Lifecycle         *lifecycle.Manager
+	DiscoveryService  *discovery.Service
 	PlanningService   *planner.Service
 	MergeProcessor    *merge.Processor
 	RunsService       *runs.Service
@@ -65,6 +67,7 @@ type ProjectContextManager struct {
 	mail         *db.MailStore
 	executions   *db.ExecutionStore
 	plans        *db.PlanStore
+	dossiers     *db.DossierStore
 	streams      *db.StreamStore
 	runs         *db.RunStore
 	attempts     *db.AttemptStore
@@ -88,6 +91,7 @@ func newProjectContextManager(
 	mailStore *db.MailStore,
 	executionStore *db.ExecutionStore,
 	planStore *db.PlanStore,
+	dossierStore *db.DossierStore,
 	streamStore *db.StreamStore,
 	runStore *db.RunStore,
 	attemptStore *db.AttemptStore,
@@ -116,6 +120,7 @@ func newProjectContextManager(
 		mail:           mailStore,
 		executions:     executionStore,
 		plans:          planStore,
+		dossiers:       dossierStore,
 		streams:        streamStore,
 		runs:           runStore,
 		attempts:       attemptStore,
@@ -307,6 +312,7 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 	)
 	lifecycleMgr := lifecycle.New(m.objectives, m.plans, m.streams, m.agents, m.eventBus, m.obs, m.logger)
 	planningService := planner.New(m.plans, m.streams, m.objectives, m.agents, lifecycleMgr, m.eventBus, m.obs, m.logger, cfg.QualityGates)
+	discoveryService := discovery.New(project.RootPath, m.objectives, m.dossiers, rulesEng, bpRegistry, m.logger)
 
 	toolCurator := tools.NewCurator(m.logger)
 	agentRuntime := newAgentRuntime(&cfg, m.logger)
@@ -325,6 +331,7 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 		DaemonURL:          m.daemonURL,
 		DaemonToken:        m.daemonToken,
 		Lifecycle:          lifecycleMgr,
+		Discovery:          discoveryService,
 		MergeProcessor:     mergeProcessor,
 		PlanCreator:        planningService,
 		MailSender:         m.mailBroker,
@@ -357,6 +364,7 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 		RulesEngine:       rulesEng,
 		SandboxProvider:   sandboxProv,
 		Lifecycle:         lifecycleMgr,
+		DiscoveryService:  discoveryService,
 		PlanningService:   planningService,
 		MergeProcessor:    mergeProcessor,
 		RunsService:       runsService,

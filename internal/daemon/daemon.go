@@ -38,6 +38,7 @@ type Daemon struct {
 	events          *db.EventStore
 	executions      *db.ExecutionStore
 	plans           *db.PlanStore
+	dossiers        *db.DossierStore
 	streams         *db.StreamStore
 	runStore        *db.RunStore
 	attempts        *db.AttemptStore
@@ -82,6 +83,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 	eventStore := db.NewEventStore(conn)
 	executionStore := db.NewExecutionStore(conn)
 	planStore := db.NewPlanStore(conn)
+	dossierStore := db.NewDossierStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	runStore := db.NewRunStore(conn)
 	attemptStore := db.NewAttemptStore(conn)
@@ -120,6 +122,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 		mailStore,
 		executionStore,
 		planStore,
+		dossierStore,
 		streamStore,
 		runStore,
 		attemptStore,
@@ -143,6 +146,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 		events:          eventStore,
 		executions:      executionStore,
 		plans:           planStore,
+		dossiers:        dossierStore,
 		streams:         streamStore,
 		runStore:        runStore,
 		attempts:        attemptStore,

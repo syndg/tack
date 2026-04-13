@@ -106,6 +106,10 @@ type Runs interface {
 	Stop()
 }
 
+type DossierEnsurer interface {
+	EnsureDossier(ctx context.Context, objectiveID string) (*domain.Dossier, error)
+}
+
 // MergeOrchestrator is the merge-processor surface needed by the runs
 // boundary. It combines lifecycle (Start/Stop), merge-queue enqueue, and
 // merge-entry reset into a single interface. merge.Processor satisfies this.
@@ -124,6 +128,7 @@ type MergeOrchestrator interface {
 // step handlers, coordinator) — callers provide raw infrastructure only.
 type Config struct {
 	ProjectID string
+	Discovery DossierEnsurer
 
 	// Orchestrator overrides internal coordinator construction (testing only).
 	// When non-nil, the service uses this orchestrator directly and ignores
@@ -227,6 +232,7 @@ type Service struct {
 	mergeProcessor MergeOrchestrator
 	eventBus       *events.PersistentBus
 	projectID      string
+	discovery      DossierEnsurer
 
 	logger *slog.Logger
 }
@@ -333,6 +339,7 @@ func New(cfg Config) (*Service, error) {
 		mergeProcessor: cfg.MergeProcessor,
 		eventBus:       cfg.EventBus,
 		projectID:      cfg.ProjectID,
+		discovery:      cfg.Discovery,
 		logger:         logger,
 	}, nil
 }
@@ -353,6 +360,11 @@ func (s *Service) Start(ctx context.Context, objectiveID string) (domain.Snapsho
 			"objective %s cannot start execution (status: %s): %w",
 			objectiveID, obj.Status, ErrInvalidState,
 		)
+	}
+	if s.discovery != nil {
+		if _, err := s.discovery.EnsureDossier(ctx, objectiveID); err != nil {
+			return domain.Snapshot{}, fmt.Errorf("ensuring dossier for objective %s: %w", objectiveID, err)
+		}
 	}
 
 	run := &domain.Run{ObjectiveID: objectiveID}

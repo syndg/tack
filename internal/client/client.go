@@ -155,6 +155,36 @@ type CreateObjectiveOptions struct {
 	Blueprint string `json:"blueprint,omitempty"`
 }
 
+func (c *Client) GetObjectiveDossier(ctx context.Context, objectiveID string) (*domain.Dossier, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/objectives/"+objectiveID+"/dossier", nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting objective dossier: %w", err)
+	}
+	defer closeBody(resp)
+	var dossier domain.Dossier
+	if err := json.NewDecoder(resp.Body).Decode(&dossier); err != nil {
+		return nil, fmt.Errorf("decoding dossier response: %w", err)
+	}
+	return &dossier, nil
+}
+
+func (c *Client) UpdateObjectiveDossier(ctx context.Context, objectiveID string, dossier domain.Dossier) (*domain.Dossier, error) {
+	jsonBody, err := json.Marshal(dossier)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling dossier body: %w", err)
+	}
+	resp, err := c.do(ctx, http.MethodPut, "/objectives/"+objectiveID+"/dossier", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("updating objective dossier: %w", err)
+	}
+	defer closeBody(resp)
+	var updated domain.Dossier
+	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+		return nil, fmt.Errorf("decoding updated dossier response: %w", err)
+	}
+	return &updated, nil
+}
+
 // CreateObjective sends a POST /objectives request to create a new objective.
 func (c *Client) CreateObjective(ctx context.Context, description string) (*domain.Objective, error) {
 	return c.CreateObjectiveWithOptions(ctx, description, CreateObjectiveOptions{})

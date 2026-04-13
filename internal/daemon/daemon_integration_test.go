@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,8 +180,17 @@ func TestBlueprintEndpoints(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&workflows); err != nil {
 		t.Fatalf("Decode /blueprints: %v", err)
 	}
-	if len(workflows) != 2 {
-		t.Fatalf("expected 2 workflows, got %d", len(workflows))
+	if len(workflows) < 2 {
+		t.Fatalf("expected at least 2 workflows, got %d", len(workflows))
+	}
+	seen := make(map[string]bool)
+	for _, workflow := range workflows {
+		if id, ok := workflow["id"].(string); ok {
+			seen[id] = true
+		}
+	}
+	if !seen["standard"] || !seen["build-review"] {
+		t.Fatalf("expected standard and build-review blueprints, got ids: %v", seen)
 	}
 
 	resp, err = http.DefaultClient.Do(authedRequest(t, http.MethodGet, baseURL+"/blueprints/standard", nil))
@@ -263,6 +273,64 @@ func TestCreateObjectiveWithOptionsPersistsBlueprint(t *testing.T) {
 	}
 	if got.Blueprint != "build-review" {
 		t.Fatalf("persisted blueprint = %q, want build-review", got.Blueprint)
+	}
+}
+
+func TestObjectiveDossierGeneratedAndEditable(t *testing.T) {
+	cfg := config.Default()
+	cfg.Daemon.Listen = "127.0.0.1:19810"
+	cfg.Daemon.DataDir = t.TempDir()
+
+	d, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	projectRoot := t.TempDir()
+	registerDaemonTestProject(t, d, projectRoot)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- d.Start()
+	}()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = d.Shutdown(ctx)
+		<-errCh
+	}()
+
+	baseURL := "http://" + cfg.Daemon.Listen
+	waitForHTTP(t, baseURL+"/health")
+
+	c := client.New(baseURL)
+	obj, err := c.CreateObjectiveWithOptions(context.Background(), "Add command log keybindings", client.CreateObjectiveOptions{Blueprint: "build-review"})
+	if err != nil {
+		t.Fatalf("CreateObjectiveWithOptions: %v", err)
+	}
+
+	var dossier *domain.Dossier
+	waitForCondition(t, 10*time.Second, func() bool {
+		dossier, err = c.GetObjectiveDossier(context.Background(), obj.ID)
+		return err == nil && dossier != nil && strings.TrimSpace(dossier.Summary) != ""
+	})
+	if dossier.BlueprintID != "build-review" {
+		t.Fatalf("dossier blueprint = %q, want build-review", dossier.BlueprintID)
+	}
+	if len(dossier.Citations) == 0 {
+		t.Fatal("expected dossier citations")
+	}
+
+	dossier.Summary = "Edited dossier summary"
+	dossier.Risks = append(dossier.Risks, "manual edit")
+	updated, err := c.UpdateObjectiveDossier(context.Background(), obj.ID, *dossier)
+	if err != nil {
+		t.Fatalf("UpdateObjectiveDossier: %v", err)
+	}
+	if updated.Summary != "Edited dossier summary" {
+		t.Fatalf("updated summary = %q, want edited summary", updated.Summary)
+	}
+	if len(updated.Risks) == 0 || updated.Risks[len(updated.Risks)-1] != "manual edit" {
+		t.Fatalf("updated risks = %#v, want manual edit appended", updated.Risks)
 	}
 }
 

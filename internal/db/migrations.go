@@ -27,6 +27,14 @@ CREATE TABLE IF NOT EXISTS objectives (
     updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS dossiers (
+    objective_id TEXT PRIMARY KEY REFERENCES objectives(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    content TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS plans (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -153,6 +161,7 @@ CREATE TABLE IF NOT EXISTS attempts (
 
 CREATE INDEX IF NOT EXISTS idx_projects_root_path ON projects(root_path);
 CREATE INDEX IF NOT EXISTS idx_objectives_project_created ON objectives(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dossiers_project_updated ON dossiers(project_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_plans_project_created ON plans(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_plans_objective ON plans(objective_id);
 CREATE INDEX IF NOT EXISTS idx_streams_project_plan_created ON streams(project_id, plan_id, created_at ASC);
@@ -216,6 +225,7 @@ func resetSchema(db *sql.DB) error {
 		"runs",
 		"streams",
 		"plans",
+		"dossiers",
 		"objectives",
 		"projects",
 	} {
