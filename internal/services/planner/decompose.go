@@ -20,10 +20,11 @@ type RawPlan struct {
 }
 
 type RawStream struct {
-	Title        string   `yaml:"title"`
-	Description  string   `yaml:"description"`
-	FileScope    []string `yaml:"file_scope"`
-	Dependencies []string `yaml:"dependencies"` // stream titles or indices
+	Title              string   `yaml:"title"`
+	Description        string   `yaml:"description"`
+	AcceptanceCriteria []string `yaml:"acceptance_criteria"`
+	FileScope          []string `yaml:"file_scope"`
+	Dependencies       []string `yaml:"dependencies"` // stream titles or indices
 }
 
 // ParsePlan extracts a RawPlan from agent output text.
@@ -195,14 +196,15 @@ func ToDomain(raw *RawPlan, objectiveID string) (*domain.Plan, []domain.Stream) 
 		}
 
 		streams[i] = domain.Stream{
-			ID:           streamIDs[i],
-			PlanID:       plan.ID,
-			Title:        rs.Title,
-			Description:  rs.Description,
-			FileScope:    scope,
-			Dependencies: deps,
-			Status:       domain.StreamStatusPending,
-			CreatedAt:    now,
+			ID:                 streamIDs[i],
+			PlanID:             plan.ID,
+			Title:              rs.Title,
+			Description:        rs.Description,
+			AcceptanceCriteria: append([]string(nil), rs.AcceptanceCriteria...),
+			FileScope:          scope,
+			Dependencies:       deps,
+			Status:             domain.StreamStatusPending,
+			CreatedAt:          now,
 		}
 	}
 

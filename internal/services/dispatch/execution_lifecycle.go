@@ -109,7 +109,12 @@ func (c *Coordinator) Retry(ctx context.Context, failedExecID string, guidance s
 	if err != nil {
 		return fmt.Errorf("getting execution %s: %w", failedExecID, ErrNotFound)
 	}
-	if failedExec.Status != "failed" {
+	latestAttempt, err := c.latestRecoveryAttempt(ctx, failedExec.StreamID)
+	if err != nil {
+		return fmt.Errorf("loading latest recovery attempt for stream %s: %w", failedExec.StreamID, err)
+	}
+	canRestartAfterPostMergeGate := failedExec.Status == "completed" && latestAttempt != nil && latestAttempt.FailureKind == domain.FailurePostMergeGate && latestAttempt.Action == domain.RecoveryActionRestartStream
+	if failedExec.Status != "failed" && !canRestartAfterPostMergeGate {
 		return fmt.Errorf("execution %s is not failed (status: %s): %w", failedExecID, failedExec.Status, ErrInvalidState)
 	}
 	if failedExec.StreamID == "" {
@@ -138,6 +143,9 @@ func (c *Coordinator) Retry(ctx context.Context, failedExecID string, guidance s
 			lastError = state.Error
 			break
 		}
+	}
+	if lastError == "" && latestAttempt != nil {
+		lastError = strings.TrimSpace(latestAttempt.ErrorSummary)
 	}
 
 	blockedAttempt, err := c.recoveryBlockAttempt(ctx, stream.ID)

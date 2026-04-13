@@ -2,6 +2,8 @@ package domain
 
 import "time"
 
+const streamAcceptanceCriteriaMarker = "\n\n[TACK_ACCEPTANCE_CRITERIA]\n"
+
 type Project struct {
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
@@ -35,6 +37,49 @@ type Objective struct {
 	UpdatedAt    time.Time       `json:"updated_at"`
 }
 
+type Dossier struct {
+	ObjectiveID     string             `json:"objective_id"`
+	ProjectID       string             `json:"project_id"`
+	Summary         string             `json:"summary"`
+	BlueprintID     string             `json:"blueprint_id,omitempty"`
+	RepoPriors      []DossierPrior     `json:"repo_priors,omitempty"`
+	RelevantFiles   []DossierReference `json:"relevant_files,omitempty"`
+	SimilarPatterns []DossierReference `json:"similar_patterns,omitempty"`
+	Risks           []string           `json:"risks,omitempty"`
+	Unknowns        []string           `json:"unknowns,omitempty"`
+	SuggestedSeams  []DossierSeam      `json:"suggested_seams,omitempty"`
+	Citations       []DossierCitation  `json:"citations,omitempty"`
+	CreatedAt       time.Time          `json:"created_at"`
+	UpdatedAt       time.Time          `json:"updated_at"`
+}
+
+type DossierPrior struct {
+	Kind        string   `json:"kind"`
+	Title       string   `json:"title"`
+	Detail      string   `json:"detail"`
+	CitationIDs []string `json:"citation_ids,omitempty"`
+}
+
+type DossierReference struct {
+	Path        string   `json:"path"`
+	Reason      string   `json:"reason"`
+	CitationIDs []string `json:"citation_ids,omitempty"`
+}
+
+type DossierSeam struct {
+	Title       string   `json:"title"`
+	Reason      string   `json:"reason"`
+	FilePaths   []string `json:"file_paths,omitempty"`
+	CitationIDs []string `json:"citation_ids,omitempty"`
+}
+
+type DossierCitation struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Target string `json:"target"`
+	Detail string `json:"detail"`
+}
+
 // Plan and streams
 
 type PlanStatus string
@@ -59,16 +104,117 @@ type Plan struct {
 }
 
 type Stream struct {
-	ID           string       `json:"id"`
-	ProjectID    string       `json:"project_id"`
-	PlanID       string       `json:"plan_id"`
-	Title        string       `json:"title"`
-	Description  string       `json:"description"`
-	FileScope    []string     `json:"file_scope"`
-	Dependencies []string     `json:"dependencies"`
-	Status       StreamStatus `json:"status"`
-	ExecutionID  string       `json:"execution_id,omitempty"` // sub-execution driving this stream
-	CreatedAt    time.Time    `json:"created_at"`
+	ID                 string       `json:"id"`
+	ProjectID          string       `json:"project_id"`
+	PlanID             string       `json:"plan_id"`
+	Title              string       `json:"title"`
+	Description        string       `json:"description"`
+	AcceptanceCriteria []string     `json:"acceptance_criteria,omitempty"`
+	FileScope          []string     `json:"file_scope"`
+	Dependencies       []string     `json:"dependencies"`
+	Status             StreamStatus `json:"status"`
+	ExecutionID        string       `json:"execution_id,omitempty"` // sub-execution driving this stream
+	CreatedAt          time.Time    `json:"created_at"`
+}
+
+// StreamDescriptionPayload encodes acceptance criteria into the persisted
+// description field while keeping the user-facing description clean.
+func StreamDescriptionPayload(description string, acceptanceCriteria []string) string {
+	description = trimTrailingNewlines(description)
+	if len(acceptanceCriteria) == 0 {
+		return description
+	}
+	payload := description + streamAcceptanceCriteriaMarker
+	for _, item := range acceptanceCriteria {
+		if item == "" {
+			continue
+		}
+		payload += "- " + item + "\n"
+	}
+	return trimTrailingNewlines(payload)
+}
+
+// ParseStreamDescriptionPayload extracts acceptance criteria from the encoded
+// description payload.
+func ParseStreamDescriptionPayload(payload string) (string, []string) {
+	idx := indexOfAcceptanceMarker(payload)
+	if idx == -1 {
+		return trimTrailingNewlines(payload), nil
+	}
+	description := trimTrailingNewlines(payload[:idx])
+	block := payload[idx+len(streamAcceptanceCriteriaMarker):]
+	var criteria []string
+	current := ""
+	for _, line := range splitLines(block) {
+		trimmed := trimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if hasPrefix(trimmed, "- ") {
+			if current != "" {
+				criteria = append(criteria, current)
+			}
+			current = trimmed[2:]
+			continue
+		}
+		if current != "" {
+			current += " " + trimmed
+		}
+	}
+	if current != "" {
+		criteria = append(criteria, current)
+	}
+	return description, criteria
+}
+
+func indexOfAcceptanceMarker(payload string) int {
+	for i := 0; i+len(streamAcceptanceCriteriaMarker) <= len(payload); i++ {
+		if payload[i:i+len(streamAcceptanceCriteriaMarker)] == streamAcceptanceCriteriaMarker {
+			return i
+		}
+	}
+	return -1
+}
+
+func splitLines(s string) []string {
+	lines := []string{}
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			lines = append(lines, s[start:i])
+			start = i + 1
+		}
+	}
+	if start <= len(s) {
+		lines = append(lines, s[start:])
+	}
+	return lines
+}
+
+func trimTrailingNewlines(s string) string {
+	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
+func trimSpace(s string) string {
+	start := 0
+	for start < len(s) && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
+		start++
+	}
+	end := len(s)
+	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
+		end--
+	}
+	return s[start:end]
+}
+
+func hasPrefix(s, prefix string) bool {
+	if len(prefix) > len(s) {
+		return false
+	}
+	return s[:len(prefix)] == prefix
 }
 
 // Agent sessions

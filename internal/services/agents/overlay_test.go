@@ -21,6 +21,10 @@ func testStream() *domain.Stream {
 	return &domain.Stream{
 		ID:    "str-1",
 		Title: "auth module",
+		AcceptanceCriteria: []string{
+			"JWT validation passes for valid tokens",
+			"Requests without valid tokens are rejected",
+		},
 	}
 }
 
@@ -48,6 +52,7 @@ func TestBuildOverlay_AllSections(t *testing.T) {
 		"# Tack Agent: builder-auth-1",
 		"## Role",
 		"## Task",
+		"## Acceptance Criteria",
 		"## File Scope",
 		"## Quality Gates",
 		"## Communication",
@@ -76,6 +81,11 @@ func TestBuildOverlay_AllSections(t *testing.T) {
 	}
 	if !strings.Contains(result, "Implement JWT token validation") {
 		t.Error("missing task spec")
+	}
+	for _, want := range []string{"JWT validation passes for valid tokens", "Requests without valid tokens are rejected"} {
+		if !strings.Contains(result, want) {
+			t.Errorf("missing acceptance criteria %q", want)
+		}
 	}
 }
 
@@ -237,6 +247,7 @@ func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 		"## Project Guidance",
 		"## Instructions",
 		"streams:",
+		"acceptance_criteria:",
 		"quality_gates:",
 	}
 	for _, s := range expected {

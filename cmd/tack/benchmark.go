@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,6 +22,10 @@ var benchmarkPrepareWorkspace string
 var benchmarkPrepareBaseline string
 var benchmarkExecuteWorkspace string
 var benchmarkSupersedeReason string
+var benchmarkReportWrite bool
+var benchmarkReportOut string
+var benchmarkPlanQualityGateWait = 10 * time.Minute
+var benchmarkPlanQualityGatePollInterval = 2 * time.Second
 
 func benchmarkStatusFromRunSnapshot(status domain.RunStatus) string {
 	switch status {
@@ -87,9 +92,9 @@ func applyBenchmarkPlanQualityGates(ctx context.Context, c *client.Client, objec
 	if len(qualityGates) == 0 {
 		return nil
 	}
-	deadlineCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	deadlineCtx, cancel := context.WithTimeout(ctx, benchmarkPlanQualityGateWait)
 	defer cancel()
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(benchmarkPlanQualityGatePollInterval)
 	defer ticker.Stop()
 	for {
 		planResp, err := c.GetObjectivePlan(deadlineCtx, objectiveID)
@@ -105,6 +110,36 @@ func applyBenchmarkPlanQualityGates(ctx context.Context, c *client.Client, objec
 		case <-ticker.C:
 		}
 	}
+}
+
+func defaultBenchmarkReportPath(run benchmark.Run) (string, error) {
+	root, err := currentProjectRoot()
+	if err != nil {
+		return "", err
+	}
+	if root == "" {
+		root, err = os.Getwd()
+		if err != nil {
+			return "", err
+		}
+	}
+	createdAt := time.Now().UTC()
+	if parsed, err := time.Parse(time.RFC3339, run.CreatedAt); err == nil {
+		createdAt = parsed.UTC()
+	}
+	name := strings.ReplaceAll(run.BenchmarkID, ".", "-")
+	fileName := fmt.Sprintf("%s-%s-%s.md", createdAt.Format("2006-01-02"), name, run.ID)
+	return filepath.Join(root, "docs", "benchmarks", fileName), nil
+}
+
+func writeBenchmarkReport(reportPath, content string) error {
+	if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
+		return fmt.Errorf("create benchmark report directory: %w", err)
+	}
+	if err := os.WriteFile(reportPath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write benchmark report: %w", err)
+	}
+	return nil
 }
 
 var benchmarkCmd = &cobra.Command{
@@ -352,6 +387,54 @@ var benchmarkShowRunCmd = &cobra.Command{
 	},
 }
 
+var benchmarkReportCmd = &cobra.Command{
+	Use:   "report [id]",
+	Short: "Generate benchmark telemetry report for a run",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadUserConfigOnly()
+		if err != nil {
+			return err
+		}
+		run, ok, err := benchmark.FindRun(cfg.Daemon.DataDir, args[0])
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("unknown benchmark run %q", args[0])
+		}
+		_ = syncBenchmarkRun(cmd, cfg, &run)
+		report, err := benchmark.BuildReport(cfg.Daemon.DataDir, run)
+		if err != nil {
+			return err
+		}
+		markdown := benchmark.RenderReportMarkdown(report)
+		reportPath := strings.TrimSpace(benchmarkReportOut)
+		if reportPath == "" && benchmarkReportWrite {
+			reportPath, err = defaultBenchmarkReportPath(run)
+			if err != nil {
+				return err
+			}
+		}
+		if reportPath != "" {
+			if !filepath.IsAbs(reportPath) {
+				cwd, err := os.Getwd()
+				if err != nil {
+					return err
+				}
+				reportPath = filepath.Join(cwd, reportPath)
+			}
+			if err := writeBenchmarkReport(reportPath, markdown); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Wrote benchmark report to %s\n", reportPath)
+			return err
+		}
+		_, err = fmt.Fprint(cmd.OutOrStdout(), markdown)
+		return err
+	},
+}
+
 var benchmarkSupersedeCmd = &cobra.Command{
 	Use:   "supersede [run-id]",
 	Short: "Mark a benchmark run superseded by a newer design or rerun",
@@ -421,6 +504,8 @@ func init() {
 	benchmarkPrepareCmd.Flags().StringVar(&benchmarkPrepareBaseline, "baseline", "", "baseline commit override")
 	benchmarkExecuteCmd.Flags().StringVar(&benchmarkExecuteWorkspace, "workspace", "", "prepared workspace directory override")
 	benchmarkSupersedeCmd.Flags().StringVar(&benchmarkSupersedeReason, "reason", "", "reason for superseding the benchmark run")
+	benchmarkReportCmd.Flags().BoolVar(&benchmarkReportWrite, "write", false, "write benchmark report markdown to docs/benchmarks by default")
+	benchmarkReportCmd.Flags().StringVar(&benchmarkReportOut, "out", "", "write benchmark report markdown to a specific path")
 	benchmarkCmd.AddCommand(benchmarkListCmd)
 	benchmarkCmd.AddCommand(benchmarkShowCmd)
 	benchmarkCmd.AddCommand(benchmarkReadyCmd)
@@ -431,6 +516,7 @@ func init() {
 	benchmarkCmd.AddCommand(benchmarkSupersedeCmd)
 	benchmarkCmd.AddCommand(benchmarkRunsCmd)
 	benchmarkCmd.AddCommand(benchmarkShowRunCmd)
+	benchmarkCmd.AddCommand(benchmarkReportCmd)
 	benchmarkCmd.AddCommand(benchmarkCompareCmd)
 	rootCmd.AddCommand(benchmarkCmd)
 }

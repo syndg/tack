@@ -24,6 +24,7 @@ type recoveryAttemptInput struct {
 	CurrentAttempt int
 	FailureKind    domain.FailureKind
 	ErrorSummary   string
+	FixContext     string
 	HumanGuidance  string
 	MaxAttempts    int
 }
@@ -122,6 +123,7 @@ func latestRecoveryContextForAgentStep(ctx context.Context, attempts *db.Attempt
 func (c *Coordinator) recordRecoveryAttempt(ctx context.Context, in recoveryAttemptInput, cfg recovery.Config, override recovery.StepOverride) (domain.Attempt, recovery.Decision) {
 	policy := recovery.ResolvePolicy(cfg, override)
 	attemptNumber := 1
+	priorFixContext := ""
 	if in.CurrentAttempt > 0 {
 		attemptNumber = in.CurrentAttempt + 1
 	}
@@ -132,9 +134,21 @@ func (c *Coordinator) recordRecoveryAttempt(ctx context.Context, in recoveryAtte
 					if attempt.AttemptNumber >= attemptNumber {
 						attemptNumber = attempt.AttemptNumber + 1
 					}
+					if strings.TrimSpace(attempt.FixContext) != "" {
+						priorFixContext = strings.TrimSpace(attempt.FixContext)
+					} else if strings.TrimSpace(attempt.ErrorSummary) != "" {
+						priorFixContext = strings.TrimSpace(attempt.ErrorSummary)
+					}
 				}
 			}
 		}
+	}
+	fixContext := strings.TrimSpace(in.FixContext)
+	if fixContext == "" {
+		fixContext = in.ErrorSummary
+	}
+	if priorFixContext != "" {
+		fixContext = mergeReviewFixContext(fixContext, priorFixContext)
 	}
 	decision := recovery.Decide(in.FailureKind, attemptNumber, policy)
 	status := domain.AttemptStatusRecorded
@@ -159,7 +173,7 @@ func (c *Coordinator) recordRecoveryAttempt(ctx context.Context, in recoveryAtte
 		Action:        decision.Action,
 		Status:        status,
 		ErrorSummary:  in.ErrorSummary,
-		FixContext:    in.ErrorSummary,
+		FixContext:    fixContext,
 		HumanGuidance: in.HumanGuidance,
 	}
 	persistenceFatal := false

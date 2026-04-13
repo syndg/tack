@@ -192,6 +192,10 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 					if feedback == "" {
 						feedback = cleanSummary
 					}
+					fixContext := feedback
+					if retryContext != nil {
+						fixContext = mergeReviewFixContext(feedback, retryContext.LastError)
+					}
 					attempt, decision := c.recordRecoveryAttempt(ctx, recoveryAttemptInput{
 						ProjectID:      obj.ProjectID,
 						ObjectiveID:    exec.ObjectiveID,
@@ -201,6 +205,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 						CurrentAttempt: currentAttempt,
 						FailureKind:    domain.FailureReviewRejection,
 						ErrorSummary:   feedback,
+						FixContext:     fixContext,
 						HumanGuidance:  humanGuidance,
 					}, retryCfg, retryOverride)
 					if decision.Action != domain.RecoveryActionRerunPreviousAgent {
@@ -307,6 +312,23 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 			_ = c.scheduler.MarkFailed(ctx, stream.ID)
 		}
 		return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: attempt.ErrorSummary}, nil
+	}
+}
+
+func mergeReviewFixContext(current, previous string) string {
+	current = strings.TrimSpace(current)
+	previous = strings.TrimSpace(previous)
+	switch {
+	case current == "":
+		return previous
+	case previous == "":
+		return current
+	case strings.Contains(current, previous):
+		return current
+	case strings.Contains(previous, current):
+		return previous
+	default:
+		return current + "\n\nPrevious unresolved review feedback:\n" + previous
 	}
 }
 

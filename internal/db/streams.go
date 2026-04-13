@@ -88,11 +88,12 @@ func (s *StreamStore) Create(ctx context.Context, stream *domain.Stream) error {
 	if err != nil {
 		return fmt.Errorf("marshalling dependencies: %w", err)
 	}
+	description := domain.StreamDescriptionPayload(stream.Description, stream.AcceptanceCriteria)
 
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO streams (id, project_id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		stream.ID, stream.ProjectID, stream.PlanID, stream.Title, stream.Description,
+		stream.ID, stream.ProjectID, stream.PlanID, stream.Title, description,
 		string(fileScope), string(dependencies), stream.Status, stream.ExecutionID, now.Unix(),
 	)
 	if err != nil {
@@ -129,6 +130,7 @@ func (s *StreamStore) Get(ctx context.Context, id string) (*domain.Stream, error
 	if err := json.Unmarshal([]byte(dependencies), &stream.Dependencies); err != nil {
 		return nil, fmt.Errorf("unmarshalling dependencies: %w", err)
 	}
+	stream.Description, stream.AcceptanceCriteria = domain.ParseStreamDescriptionPayload(stream.Description)
 	stream.CreatedAt = time.Unix(createdAt, 0)
 	return &stream, nil
 }
@@ -163,6 +165,7 @@ func (s *StreamStore) ListByPlan(ctx context.Context, planID string) ([]domain.S
 		if err := json.Unmarshal([]byte(dependencies), &stream.Dependencies); err != nil {
 			return nil, fmt.Errorf("unmarshalling dependencies: %w", err)
 		}
+		stream.Description, stream.AcceptanceCriteria = domain.ParseStreamDescriptionPayload(stream.Description)
 		stream.CreatedAt = time.Unix(createdAt, 0)
 		streams = append(streams, stream)
 	}
@@ -257,6 +260,7 @@ func scanStreams(rows *sql.Rows) ([]domain.Stream, error) {
 		if err := json.Unmarshal([]byte(dependencies), &stream.Dependencies); err != nil {
 			return nil, fmt.Errorf("unmarshalling dependencies: %w", err)
 		}
+		stream.Description, stream.AcceptanceCriteria = domain.ParseStreamDescriptionPayload(stream.Description)
 		stream.CreatedAt = time.Unix(createdAt, 0)
 		streams = append(streams, stream)
 	}
@@ -277,10 +281,11 @@ func (s *StreamStore) Update(ctx context.Context, stream *domain.Stream) error {
 	if err != nil {
 		return fmt.Errorf("marshalling dependencies: %w", err)
 	}
+	description := domain.StreamDescriptionPayload(stream.Description, stream.AcceptanceCriteria)
 
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE streams SET title = ?, description = ?, file_scope = ?, dependencies = ?, status = ? WHERE id = ?`,
-		stream.Title, stream.Description, string(fileScope), string(dependencies), stream.Status, stream.ID,
+		stream.Title, description, string(fileScope), string(dependencies), stream.Status, stream.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("updating stream: %w", err)

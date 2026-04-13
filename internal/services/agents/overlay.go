@@ -58,10 +58,21 @@ func BuildOverlay(input OverlayInput) string {
 		fmt.Fprintf(&b, "%s\n", input.TaskSpec)
 	}
 	b.WriteString("\n")
+	if input.Stream != nil && len(input.Stream.AcceptanceCriteria) > 0 {
+		b.WriteString("## Acceptance Criteria\n")
+		b.WriteString("The work is only complete when all of the following are true:\n")
+		for _, item := range input.Stream.AcceptanceCriteria {
+			fmt.Fprintf(&b, "- %s\n", item)
+		}
+		b.WriteString("\n")
+	}
 	if input.Role != nil && input.Role.Name == "reviewer" {
 		b.WriteString("## Review Output\n")
 		b.WriteString("End your final response with `REVIEW_DECISION: approve` or `REVIEW_DECISION: reject`.\n")
 		b.WriteString("If you reject, add `REVIEW_FEEDBACK:` followed by the actionable issues the builder must fix.\n\n")
+		if input.RetryContext != nil && strings.TrimSpace(input.RetryContext.LastError) != "" {
+			b.WriteString("When re-reviewing a retried stream, start from the previous review feedback in Retry Context. Confirm whether each prior issue is fixed. If you reject again, preserve still-unresolved concrete issues verbatim and only add newly discovered issues after them.\n\n")
+		}
 	}
 
 	// 2b. Retry context (when agent is re-running after recovery)
@@ -199,6 +210,9 @@ func BuildOverlay(input OverlayInput) string {
 const planYAMLSchema = `streams:
   - title: "stream title"
     description: "what this stream does"
+    acceptance_criteria:
+      - "concrete externally observable check"
+      - "full feature surface this stream must satisfy or prove"
     file_scope:
       - "src/auth/**"
     dependencies: []  # titles of streams that must complete first
@@ -228,9 +242,11 @@ func BuildPlannerOverlay(objective *domain.Objective, guidance string) string {
 	b.WriteString("## Instructions\n")
 	b.WriteString("Produce a structured plan with:\n")
 	b.WriteString("1. Streams — parallel units of work\n")
-	b.WriteString("2. File scopes — which files each stream owns (use globs)\n")
-	b.WriteString("3. Dependencies — which streams must complete before others start\n")
-	b.WriteString("4. Quality gates — commands to validate each stream\n\n")
+	b.WriteString("2. Acceptance criteria — concrete, externally observable checks for each stream\n")
+	b.WriteString("3. File scopes — which files each stream owns (use globs)\n")
+	b.WriteString("4. Dependencies — which streams must complete before others start\n")
+	b.WriteString("5. Quality gates — commands to validate each stream\n\n")
+	b.WriteString("For test, coverage, or docs streams, acceptance criteria must capture the full user-visible behavior they must prove or describe. Do not rely on later review to discover missing acceptance checks one-by-one.\n\n")
 	b.WriteString("Output your plan as YAML in the following format:\n")
 	fmt.Fprintf(&b, "```yaml\n%s\n```\n", planYAMLSchema)
 

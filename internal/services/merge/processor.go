@@ -748,9 +748,9 @@ func (p *Processor) runPostMergeGates(ctx context.Context, sb sandbox.Sandbox, p
 	return p.gateRunner.Run(ctx, sb, gateList, false)
 }
 
-// checkObjectiveComplete logs when all streams for an objective have been merged.
-// Objective status transitions are driven by the blueprint engine (mark_complete),
-// not by the merge processor, to avoid races.
+// checkObjectiveComplete upgrades a partial objective to completed once all
+// streams are merged. For still-executing objectives, completion remains owned
+// by the blueprint engine to avoid racing the initial execution lifecycle.
 func (p *Processor) checkObjectiveComplete(ctx context.Context, objectiveID string) error {
 	plan, err := p.plans.GetByObjective(ctx, objectiveID)
 	if err != nil {
@@ -771,6 +771,28 @@ func (p *Processor) checkObjectiveComplete(ctx context.Context, objectiveID stri
 	p.logger.Info("all streams merged for objective",
 		"objective_id", objectiveID,
 	)
+	obj, err := p.objectives.Get(ctx, objectiveID)
+	if err != nil {
+		return fmt.Errorf("getting objective for completion check: %w", err)
+	}
+	if obj.Status != domain.ObjectiveStatusPartial {
+		return nil
+	}
+	if err := p.objectives.UpdateStatus(ctx, objectiveID, domain.ObjectiveStatusCompleted); err != nil {
+		return fmt.Errorf("updating partial objective to completed: %w", err)
+	}
+	if p.obs != nil {
+		p.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventObjectiveUpdated,
+			ProjectID:   obj.ProjectID,
+			ObjectiveID: objectiveID,
+			Status:      string(domain.ObjectiveStatusCompleted),
+			Details: map[string]any{
+				"from": string(obj.Status),
+				"to":   string(domain.ObjectiveStatusCompleted),
+			},
+		})
+	}
 	return nil
 }
 

@@ -39,9 +39,35 @@ The successful run used the benchmark-spec quality gates, not planner-generated 
 
 This matters because earlier benchmark runs were invalidated by broad repo-wide gates that were red on the frozen baseline.
 
+## Captured Telemetry
+
+Telemetry for this run can now be generated directly from daemon SQLite via `tack benchmark report f5ed7a9e-8c7a-4caf-8c16-dbd59d747eda` against the preserved `local11` benchmark data.
+
+- Streams: `3 total`, `3 merged`, `0 failed`, `0 non-terminal`
+- Stream executions: `4`
+- Builder sessions: `10`
+- Reviewer sessions: `10`
+- Recovery ledger entries: `8`
+- Review rejections: `8`
+- Automatic recovery decisions: `6`
+- Human escalations: `1`
+- Human resumes: `1`
+- Human guidance provided: `1`
+- Human guidance required: `yes`
+- Merge attempts: `3`
+- Started: `2026-04-12T14:44:46Z`
+- Finished: `2026-04-12T15:24:12Z`
+- Duration: `39m26s`
+
+### Stream Telemetry
+
+- `3623dad6-f15c-49dc-8340-4c98f5ea03e5` `Narrow reflog undo core to plain commit and checkout`: `2` executions, `5` review rejections, `3` automatic recovery decisions, `1` human escalation, `1` human-guided resume, `1` merge attempt, duration `21m2s`
+- `1ae11234-36b4-423a-adb0-76a4432da78c` `Exercise supported and unsupported undo flows in integration tests`: `1` execution, `1` review rejection, `1` automatic recovery decision, `0` human escalations, `1` merge attempt, duration `11m17s`
+- `ccbcf4a5-d87b-4843-985c-cafa5bfe0abd` `Update user-facing docs and copy for the benchmark slice`: `1` execution, `2` review rejections, `2` automatic recovery decisions, `0` human escalations, `1` merge attempt, duration `16m27s`
+
 ## Manual Score
 
-This score is manual. Tack does not yet have an automated rubric scorer or final benchmark report generator.
+This score is still manual. The telemetry counts above are now auto-generated from daemon state, but rubric scoring remains manual.
 
 ### 1. Behavioral correctness: 2/2
 
@@ -83,28 +109,11 @@ This score is manual. Tack does not yet have an automated rubric scorer or final
 
 ## Evidence Summary
 
-### Stream progression
-
-- Stream 1 initially failed review several times, then hit `ask_human_then_resume`.
-- A guided retry resumed at `1776006220`.
-- Stream 1 merged at `1776006464`.
-- Streams 2 and 3 unblocked immediately and ran in parallel.
-- Stream 2 merged at `1776007143`.
-- Stream 3 merged at `1776007452`.
-
-### Recovery / intervention count
-
-Recorded recovery attempts for this objective:
-
-- Stream 1:
-  - 2 review rejections with automatic builder reruns
-  - 1 exhausted review rejection leading to human guidance
-  - 1 guided resume record
-  - 1 additional review rejection after resume, then successful completion
-- Stream 2:
-  - 1 review rejection with automatic builder rerun
-- Stream 3:
-  - 2 review rejections with automatic builder reruns
+- Stream 1 required `2` full stream executions before merge.
+- Stream 1 accumulated `5` recorded review rejections, `3` automatic recovery decisions, `1` exhausted human escalation, and `1` guided resume.
+- Streams 2 and 3 unblocked immediately after stream 1 merged and each completed in a single stream execution.
+- Stream 2 accumulated `1` review rejection and `1` automatic recovery decision before merging.
+- Stream 3 accumulated `2` review rejections and `2` automatic recovery decisions before merging.
 
 ### Key benchmark-system observations
 
@@ -118,9 +127,7 @@ Without those harness fixes, this run shape either stalled or failed for benchma
 
 ## Important Caveat
 
-The persisted benchmark run record in `benchmarks/runs.json` was still stale at the time of reporting and did not reflect the completed daemon-side outcome. The authoritative result for this report comes from the daemon SQLite state and final event stream, not the stale benchmark run JSON.
-
-That mismatch should be fixed in the benchmark record sync path before relying on `benchmark show-run` as the final source of truth.
+The original write-up for this run was produced while benchmark run JSON sync was still buggy. The telemetry counts in this updated document come from the new benchmark report path over daemon SQLite state, which now preserves the full recovery history cleanly even when the older markdown narrative was approximate.
 
 ## Conclusion
 

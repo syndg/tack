@@ -8,7 +8,7 @@ import (
 )
 
 func TestParsePlan_WithCodeBlock(t *testing.T) {
-	output := "Here is the plan:\n\n```yaml\nstreams:\n  - title: \"auth service\"\n    description: \"Handle auth\"\n    file_scope:\n      - \"src/auth/**\"\n    dependencies: []\nquality_gates:\n  - \"go test ./...\"\n```\nDone."
+	output := "Here is the plan:\n\n```yaml\nstreams:\n  - title: \"auth service\"\n    description: \"Handle auth\"\n    acceptance_criteria:\n      - \"reject invalid JWTs\"\n    file_scope:\n      - \"src/auth/**\"\n    dependencies: []\nquality_gates:\n  - \"go test ./...\"\n```\nDone."
 
 	plan, err := ParsePlan(output)
 	if err != nil {
@@ -19,6 +19,9 @@ func TestParsePlan_WithCodeBlock(t *testing.T) {
 	}
 	if plan.Streams[0].Title != "auth service" {
 		t.Errorf("title = %q, want \"auth service\"", plan.Streams[0].Title)
+	}
+	if len(plan.Streams[0].AcceptanceCriteria) != 1 || plan.Streams[0].AcceptanceCriteria[0] != "reject invalid JWTs" {
+		t.Errorf("acceptance_criteria = %v", plan.Streams[0].AcceptanceCriteria)
 	}
 	if len(plan.QualityGates) != 1 || plan.QualityGates[0] != "go test ./..." {
 		t.Errorf("quality_gates = %v, want [\"go test ./...\"]", plan.QualityGates)
@@ -150,7 +153,7 @@ func TestDetectCycles_NoCycles(t *testing.T) {
 func TestToDomain_GeneratesIDs(t *testing.T) {
 	raw := &RawPlan{
 		Streams: []RawStream{
-			{Title: "s1", FileScope: []string{"src/**"}, Dependencies: []string{}},
+			{Title: "s1", AcceptanceCriteria: []string{"prove the happy path"}, FileScope: []string{"src/**"}, Dependencies: []string{}},
 			{Title: "s2", FileScope: []string{"lib/**"}, Dependencies: []string{"1"}},
 		},
 		QualityGates: []string{"go test"},
@@ -175,6 +178,9 @@ func TestToDomain_GeneratesIDs(t *testing.T) {
 	}
 	if s1.PlanID != plan.ID || s2.PlanID != plan.ID {
 		t.Error("streams should reference the plan ID")
+	}
+	if len(s1.AcceptanceCriteria) != 1 || s1.AcceptanceCriteria[0] != "prove the happy path" {
+		t.Errorf("s1.AcceptanceCriteria = %v", s1.AcceptanceCriteria)
 	}
 
 	// s2 depends on s1 — dependency title "s1" should be resolved to s1.ID.

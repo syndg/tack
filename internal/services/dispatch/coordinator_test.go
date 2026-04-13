@@ -508,6 +508,80 @@ func TestRetry_ResumesBlockedRecoveryWithGuidance(t *testing.T) {
 	}
 }
 
+func TestRetry_RestartsCompletedExecutionAfterPostMergeGateFailure(t *testing.T) {
+	env := setupTestCoordinator(t)
+	ctx := context.Background()
+	env.coord.ctx = ctx
+
+	env.createObjective(t, "obj-post-merge")
+	plan := &domain.Plan{ID: "plan-post-merge", ObjectiveID: "obj-post-merge", Status: domain.PlanStatusExecuting, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := env.plans.Create(ctx, plan); err != nil {
+		t.Fatalf("creating plan: %v", err)
+	}
+	stream := &domain.Stream{ID: "stream-post-merge", PlanID: plan.ID, Title: "post merge stream", Status: domain.StreamStatusFailed, CreatedAt: time.Now()}
+	if err := env.streams.Create(ctx, stream); err != nil {
+		t.Fatalf("creating stream: %v", err)
+	}
+	completedExec := &blueprint.Execution{
+		ID:          "exec-post-merge-completed",
+		BlueprintID: "build-review",
+		ObjectiveID: "obj-post-merge",
+		StreamID:    stream.ID,
+		ParentID:    "exec-parent",
+		Status:      "completed",
+		StepStates:  map[string]*blueprint.StepState{"build": {StepID: "build", Status: blueprint.StepStatusCompleted, Output: "done"}},
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	if err := env.executions.Create(ctx, completedExec); err != nil {
+		t.Fatalf("creating completed execution: %v", err)
+	}
+	if err := env.streams.UpdateExecutionID(ctx, stream.ID, completedExec.ID); err != nil {
+		t.Fatalf("linking completed execution: %v", err)
+	}
+	attempt := &domain.Attempt{
+		ObjectiveID:   completedExec.ObjectiveID,
+		StreamID:      stream.ID,
+		MergeEntryID:  "merge-post-merge",
+		AttemptNumber: 1,
+		MaxAttempts:   3,
+		FailureKind:   domain.FailurePostMergeGate,
+		Action:        domain.RecoveryActionRestartStream,
+		Status:        domain.AttemptStatusRecorded,
+		ErrorSummary:  "post-merge-gate-3: generated integration test is missing from test_list.go",
+	}
+	if err := env.attempts.Create(ctx, attempt); err != nil {
+		t.Fatalf("creating post-merge attempt: %v", err)
+	}
+
+	if err := env.coord.Retry(ctx, completedExec.ID, ""); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+
+	updatedStream, err := env.streams.Get(ctx, stream.ID)
+	if err != nil {
+		t.Fatalf("loading stream: %v", err)
+	}
+	if updatedStream.ExecutionID == completedExec.ID || updatedStream.ExecutionID == "" {
+		t.Fatalf("stream execution id = %q, want new retry execution", updatedStream.ExecutionID)
+	}
+	retryExec, err := env.executions.Get(ctx, updatedStream.ExecutionID)
+	if err != nil {
+		t.Fatalf("loading retry execution: %v", err)
+	}
+
+	var fixContext string
+	for _, state := range retryExec.StepStates {
+		if state != nil && state.Metadata != nil && state.Metadata["fix_context"] != "" {
+			fixContext = state.Metadata["fix_context"]
+			break
+		}
+	}
+	if !strings.Contains(fixContext, "post-merge-gate-3") {
+		t.Fatalf("fix_context missing post-merge gate failure: %q", fixContext)
+	}
+}
+
 // --- Stop flow tests ---
 
 func TestStop_CancelsRetryGoroutines(t *testing.T) {

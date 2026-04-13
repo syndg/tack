@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,11 +10,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/syndg/tack/internal/benchmark"
+	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/harness/blueprint"
 )
 
 func resetBenchmarkTestState() {
@@ -23,6 +27,10 @@ func resetBenchmarkTestState() {
 	benchmarkPrepareWorkspace = ""
 	benchmarkPrepareBaseline = ""
 	benchmarkExecuteWorkspace = ""
+	benchmarkReportWrite = false
+	benchmarkReportOut = ""
+	benchmarkPlanQualityGateWait = 10 * time.Minute
+	benchmarkPlanQualityGatePollInterval = 2 * time.Second
 	daemonURL = "http://localhost:9800"
 	projectID = ""
 }
@@ -755,6 +763,344 @@ func TestBenchmarkShowRunUnknownReturnsClearError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `unknown benchmark run "missing-run"`) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBenchmarkReportDisplaysTelemetry(t *testing.T) {
+	resetBenchmarkTestState()
+	dataDir := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("daemon:\n  data_dir: "+dataDir+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	t.Setenv("TACK_USER_CONFIG_PATH", configPath)
+
+	database, err := db.Open(dataDir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer database.Close()
+	if err := database.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	ctx := context.Background()
+	projectStore := db.NewProjectStore(database.Conn())
+	projectRoot := t.TempDir()
+	project := &domain.Project{Name: "bench", RootPath: projectRoot, ConfigPath: projectRoot}
+	if err := projectStore.Upsert(ctx, project); err != nil {
+		t.Fatalf("Upsert project: %v", err)
+	}
+	objectiveStore := db.NewObjectiveStore(database.Conn())
+	objective := &domain.Objective{ID: "obj-report", ProjectID: project.ID, Description: "report objective", Status: domain.ObjectiveStatusCompleted}
+	if err := objectiveStore.Create(ctx, objective); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	planStore := db.NewPlanStore(database.Conn())
+	plan := &domain.Plan{ID: "plan-report", ProjectID: project.ID, ObjectiveID: objective.ID, Status: domain.PlanStatusCompleted, QualityGates: []string{"go test ./pkg/gui/... -count=1"}}
+	if err := planStore.Create(ctx, plan); err != nil {
+		t.Fatalf("Create plan: %v", err)
+	}
+	streamStore := db.NewStreamStore(database.Conn())
+	stream := &domain.Stream{ID: "stream-report", ProjectID: project.ID, PlanID: plan.ID, Title: "Stream report", Status: domain.StreamStatusMerged}
+	if err := streamStore.Create(ctx, stream); err != nil {
+		t.Fatalf("Create stream: %v", err)
+	}
+	runStore := db.NewRunStore(database.Conn())
+	daemonRun := &domain.Run{ID: "daemon-report", ProjectID: project.ID, ObjectiveID: objective.ID, Status: domain.RunStatusCompleted}
+	if err := runStore.Create(ctx, daemonRun); err != nil {
+		t.Fatalf("Create run: %v", err)
+	}
+	execStore := db.NewExecutionStore(database.Conn())
+	now := time.Now().Add(-10 * time.Minute).UTC().Truncate(time.Second)
+	topExec := &blueprint.Execution{ID: "exec-top-report", ProjectID: project.ID, BlueprintID: "benchmark-baseline", ObjectiveID: objective.ID, CurrentStep: "execute", StepStates: map[string]*blueprint.StepState{}, Status: "completed", CreatedAt: now, UpdatedAt: now.Add(5 * time.Minute)}
+	if err := execStore.Create(ctx, topExec); err != nil {
+		t.Fatalf("Create top exec: %v", err)
+	}
+	subExec := &blueprint.Execution{ID: "exec-sub-report", ProjectID: project.ID, BlueprintID: "benchmark-baseline", ObjectiveID: objective.ID, ParentID: topExec.ID, StreamID: stream.ID, CurrentStep: "merge", StepStates: map[string]*blueprint.StepState{}, Status: "completed", CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(4 * time.Minute)}
+	if err := execStore.Create(ctx, subExec); err != nil {
+		t.Fatalf("Create sub exec: %v", err)
+	}
+	agentStore := db.NewAgentStore(database.Conn())
+	for _, session := range []*domain.AgentSession{
+		{ProjectID: project.ID, ObjectiveID: objective.ID, StreamID: stream.ID, Role: domain.AgentRoleBuilder, Status: "completed"},
+		{ProjectID: project.ID, ObjectiveID: objective.ID, StreamID: stream.ID, Role: domain.AgentRoleReviewer, Status: "completed"},
+	} {
+		if err := agentStore.Create(ctx, session); err != nil {
+			t.Fatalf("Create agent session: %v", err)
+		}
+	}
+	mergeStore := db.NewMergeQueueStore(database.Conn())
+	entry := &domain.MergeEntry{ID: "merge-report", ProjectID: project.ID, StreamID: stream.ID, PlanID: plan.ID, ObjectiveID: objective.ID, Branch: "branch", Status: domain.MergeStatusMerged, CreatedAt: now.Add(4 * time.Minute).Unix(), UpdatedAt: now.Add(5 * time.Minute).Unix()}
+	if err := mergeStore.Enqueue(ctx, entry); err != nil {
+		t.Fatalf("Enqueue merge entry: %v", err)
+	}
+	if err := mergeStore.UpdateStatus(ctx, entry.ID, entry.Status, 0, "", ""); err != nil {
+		t.Fatalf("Update merge entry: %v", err)
+	}
+
+	run, ok := benchmark.PrepareRun("lazygit.command-log-nav-keybindings", "", "")
+	if !ok {
+		t.Fatal("expected built-in benchmark spec")
+	}
+	run.ID = "bench-report"
+	run.RunID = daemonRun.ID
+	run.ProjectID = project.ID
+	run.ObjectiveID = objective.ID
+	run.Status = "completed"
+	if err := benchmark.SaveRun(dataDir, run); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	rootCmd.SetOut(stdout)
+	rootCmd.SetErr(stderr)
+	rootCmd.SetArgs([]string{"benchmark", "report", run.ID})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("report Execute: %v\nstderr: %s", err, stderr.String())
+	}
+	output := stdout.String()
+	for _, needle := range []string{
+		"# Benchmark Telemetry",
+		"- Benchmark run: `" + run.ID + "`",
+		"- Streams: `1 total`, `1 merged`, `0 failed`, `0 non-terminal`",
+		"- Builder sessions: `1`",
+		"- Reviewer sessions: `1`",
+		"- Merge attempts: `1`",
+	} {
+		if !strings.Contains(output, needle) {
+			t.Fatalf("output missing %q:\n%s", needle, output)
+		}
+	}
+}
+
+func TestBenchmarkReportWriteCreatesCanonicalMarkdownFile(t *testing.T) {
+	resetBenchmarkTestState()
+	dataDir := t.TempDir()
+	projectRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".tack"), 0o755); err != nil {
+		t.Fatalf("MkdirAll .tack: %v", err)
+	}
+	configPath := filepath.Join(projectRoot, ".tack", "config.yaml")
+	if err := os.WriteFile(configPath, []byte("daemon:\n  data_dir: "+dataDir+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	t.Setenv("TACK_USER_CONFIG_PATH", configPath)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	defer func() {
+		if chdirErr := os.Chdir(oldwd); chdirErr != nil {
+			t.Fatalf("restore cwd: %v", chdirErr)
+		}
+	}()
+	if err := os.Chdir(projectRoot); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	database, err := db.Open(dataDir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer database.Close()
+	if err := database.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	ctx := context.Background()
+	projectStore := db.NewProjectStore(database.Conn())
+	project := &domain.Project{Name: "bench", RootPath: projectRoot, ConfigPath: configPath}
+	if err := projectStore.Upsert(ctx, project); err != nil {
+		t.Fatalf("Upsert project: %v", err)
+	}
+	objectiveStore := db.NewObjectiveStore(database.Conn())
+	objective := &domain.Objective{ID: "obj-write", ProjectID: project.ID, Description: "write objective", Status: domain.ObjectiveStatusCompleted}
+	if err := objectiveStore.Create(ctx, objective); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	planStore := db.NewPlanStore(database.Conn())
+	plan := &domain.Plan{ID: "plan-write", ProjectID: project.ID, ObjectiveID: objective.ID, Status: domain.PlanStatusCompleted, QualityGates: []string{"go test ./pkg/gui/... -count=1"}}
+	if err := planStore.Create(ctx, plan); err != nil {
+		t.Fatalf("Create plan: %v", err)
+	}
+	streamStore := db.NewStreamStore(database.Conn())
+	stream := &domain.Stream{ID: "stream-write", ProjectID: project.ID, PlanID: plan.ID, Title: "Stream write", Status: domain.StreamStatusMerged}
+	if err := streamStore.Create(ctx, stream); err != nil {
+		t.Fatalf("Create stream: %v", err)
+	}
+	runStore := db.NewRunStore(database.Conn())
+	daemonRun := &domain.Run{ID: "daemon-write", ProjectID: project.ID, ObjectiveID: objective.ID, Status: domain.RunStatusCompleted}
+	if err := runStore.Create(ctx, daemonRun); err != nil {
+		t.Fatalf("Create run: %v", err)
+	}
+	execStore := db.NewExecutionStore(database.Conn())
+	now := time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC)
+	topExec := &blueprint.Execution{ID: "exec-top-write", ProjectID: project.ID, BlueprintID: "benchmark-baseline", ObjectiveID: objective.ID, CurrentStep: "execute", StepStates: map[string]*blueprint.StepState{}, Status: "completed", CreatedAt: now, UpdatedAt: now.Add(2 * time.Minute)}
+	if err := execStore.Create(ctx, topExec); err != nil {
+		t.Fatalf("Create top exec: %v", err)
+	}
+	subExec := &blueprint.Execution{ID: "exec-sub-write", ProjectID: project.ID, BlueprintID: "benchmark-baseline", ObjectiveID: objective.ID, ParentID: topExec.ID, StreamID: stream.ID, CurrentStep: "merge", StepStates: map[string]*blueprint.StepState{}, Status: "completed", CreatedAt: now.Add(10 * time.Second), UpdatedAt: now.Add(90 * time.Second)}
+	if err := execStore.Create(ctx, subExec); err != nil {
+		t.Fatalf("Create sub exec: %v", err)
+	}
+
+	run, ok := benchmark.PrepareRun("lazygit.command-log-nav-keybindings", "", "")
+	if !ok {
+		t.Fatal("expected built-in benchmark spec")
+	}
+	run.ID = "bench-write"
+	run.RunID = daemonRun.ID
+	run.ProjectID = project.ID
+	run.ObjectiveID = objective.ID
+	run.Status = "completed"
+	run.CreatedAt = now.Format(time.RFC3339)
+	if err := benchmark.SaveRun(dataDir, run); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	rootCmd.SetOut(stdout)
+	rootCmd.SetErr(stderr)
+	rootCmd.SetArgs([]string{"benchmark", "report", run.ID, "--write"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("report --write Execute: %v\nstderr: %s", err, stderr.String())
+	}
+	expectedPath := filepath.Join(projectRoot, "docs", "benchmarks", "2026-04-13-lazygit-command-log-nav-keybindings-bench-write.md")
+	if !strings.Contains(stdout.String(), expectedPath) {
+		t.Fatalf("stdout missing path %q:\n%s", expectedPath, stdout.String())
+	}
+	raw, err := os.ReadFile(expectedPath)
+	if err != nil {
+		t.Fatalf("ReadFile report: %v", err)
+	}
+	content := string(raw)
+	for _, needle := range []string{
+		"# Benchmark Telemetry",
+		"- Benchmark run: `bench-write`",
+		"- Streams: `1 total`, `1 merged`, `0 failed`, `0 non-terminal`",
+	} {
+		if !strings.Contains(content, needle) {
+			t.Fatalf("report missing %q:\n%s", needle, content)
+		}
+	}
+}
+
+func TestBenchmarkExecuteWaitsForDelayedPlanBeforeApplyingQualityGates(t *testing.T) {
+	resetBenchmarkTestState()
+	repoDir, baseline := createBenchmarkFixtureRepo(t)
+	workspace := filepath.Join(t.TempDir(), "prepared")
+	if err := exec.Command("git", "clone", repoDir, workspace).Run(); err != nil {
+		t.Fatalf("clone fixture repo: %v", err)
+	}
+	checkout := exec.Command("git", "checkout", baseline)
+	checkout.Dir = workspace
+	if out, err := checkout.CombinedOutput(); err != nil {
+		t.Fatalf("checkout baseline: %v\n%s", err, string(out))
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, ".tack"), 0o755); err != nil {
+		t.Fatalf("MkdirAll .tack: %v", err)
+	}
+	preflightRaw, err := json.MarshalIndent(benchmark.PreflightReport{
+		BenchmarkID:  "lazygit.undo-basic-commit-checkout",
+		Workspace:    workspace,
+		Baseline:     "43106b6c7fbe8c69cebb02f8fc80cb060faddeee",
+		Head:         baseline,
+		QualityGates: []string{"go test ./pkg/gui/controllers -count=1", "go test ./pkg/commands/git_commands -count=1"},
+		Clean:        true,
+		Passed:       true,
+		ValidatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}, "", "  ")
+	if err != nil {
+		t.Fatalf("Marshal preflight: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".tack", "benchmark-preflight.json"), preflightRaw, 0o644); err != nil {
+		t.Fatalf("WriteFile benchmark preflight: %v", err)
+	}
+
+	dataDir := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("daemon:\n  data_dir: "+dataDir+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	t.Setenv("TACK_USER_CONFIG_PATH", configPath)
+	benchmarkPlanQualityGateWait = 5 * time.Second
+	benchmarkPlanQualityGatePollInterval = 10 * time.Millisecond
+
+	var planReads atomic.Int32
+	var qualityGatesUpdated atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/projects/resolve"):
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		case r.Method == http.MethodGet && r.URL.Path == "/objectives/obj-delayed/plan":
+			if planReads.Add(1) < 3 {
+				http.Error(w, `{"error":"plan not found"}`, http.StatusNotFound)
+				return
+			}
+			resp := struct {
+				Plan    domain.Plan     `json:"plan"`
+				Streams []domain.Stream `json:"streams"`
+			}{
+				Plan:    domain.Plan{ID: "plan-delayed", ProjectID: "proj-delayed", ObjectiveID: "obj-delayed"},
+				Streams: []domain.Stream{},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.Method == http.MethodGet && r.URL.Path == "/objectives/obj-delayed/run":
+			snap := domain.Snapshot{RunID: "run-delayed", ProjectID: "proj-delayed", ObjectiveID: "obj-delayed", Status: domain.RunStatusActive}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(snap)
+		case r.Method == http.MethodPost && r.URL.Path == "/plans/plan-delayed/quality-gates":
+			qualityGatesUpdated.Store(true)
+			var req struct {
+				QualityGates []string `json:"quality_gates"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode quality gates request: %v", err)
+			}
+			if len(req.QualityGates) != 2 || req.QualityGates[0] != "go test ./pkg/gui/controllers -count=1" || req.QualityGates[1] != "go test ./pkg/commands/git_commands -count=1" {
+				t.Fatalf("unexpected benchmark quality gates: %v", req.QualityGates)
+			}
+			plan := domain.Plan{ID: "plan-delayed", ProjectID: "proj-delayed", ObjectiveID: "obj-delayed", QualityGates: req.QualityGates}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(plan)
+		case r.Method == http.MethodPost && r.URL.Path == "/projects/register":
+			project := domain.Project{ID: "proj-delayed", RootPath: workspace, ConfigPath: filepath.Join(workspace, ".tack", "config.yaml"), CreatedAt: time.Now(), UpdatedAt: time.Now()}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(project)
+		case r.Method == http.MethodPost && r.URL.Path == "/objectives":
+			obj := domain.Objective{ID: "obj-delayed", ProjectID: "proj-delayed", Description: "delayed plan", Status: domain.ObjectiveStatusPlanning, Blueprint: "benchmark-baseline", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(obj)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	rootCmd.SetOut(stdout)
+	rootCmd.SetErr(stderr)
+	rootCmd.SetArgs([]string{"benchmark", "run", "lazygit.undo-basic-commit-checkout"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("run Execute: %v\nstderr: %s", err, stderr.String())
+	}
+	runOutput := stdout.String()
+	runID := strings.TrimSpace(strings.SplitN(runOutput[strings.Index(runOutput, "Created benchmark run ")+len("Created benchmark run "):], "\n", 2)[0])
+
+	stdout.Reset()
+	stderr.Reset()
+	rootCmd.SetArgs([]string{"--daemon-url", server.URL, "benchmark", "execute", runID, "--workspace", workspace})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("execute Execute: %v\nstderr: %s", err, stderr.String())
+	}
+	if !qualityGatesUpdated.Load() {
+		t.Fatal("expected delayed benchmark quality gates override")
+	}
+	if got := planReads.Load(); got < 3 {
+		t.Fatalf("expected repeated plan polling, got %d reads", got)
 	}
 }
 

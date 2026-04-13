@@ -10,6 +10,22 @@ import (
 )
 
 func (c *Coordinator) recoveryBlockAttempt(ctx context.Context, streamID string) (*domain.Attempt, error) {
+	latest, err := c.latestRecoveryAttempt(ctx, streamID)
+	if err != nil || latest == nil {
+		return nil, err
+	}
+	if latest.Action != domain.RecoveryActionAskHumanThenResume {
+		return nil, nil
+	}
+	switch latest.Status {
+	case domain.AttemptStatusBlocked, domain.AttemptStatusExhausted:
+		return latest, nil
+	default:
+		return nil, nil
+	}
+}
+
+func (c *Coordinator) latestRecoveryAttempt(ctx context.Context, streamID string) (*domain.Attempt, error) {
 	if c.attempts == nil || streamID == "" {
 		return nil, nil
 	}
@@ -21,15 +37,7 @@ func (c *Coordinator) recoveryBlockAttempt(ctx context.Context, streamID string)
 		return nil, nil
 	}
 	latest := attempts[len(attempts)-1]
-	if latest.Action != domain.RecoveryActionAskHumanThenResume {
-		return nil, nil
-	}
-	switch latest.Status {
-	case domain.AttemptStatusBlocked, domain.AttemptStatusExhausted:
-		return &latest, nil
-	default:
-		return nil, nil
-	}
+	return &latest, nil
 }
 
 func buildRetryFixContext(lastError string, blocked *domain.Attempt, guidance string) string {

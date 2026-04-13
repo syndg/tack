@@ -411,6 +411,70 @@ func TestBuildReview_RejectionLoopsBackToBuilder(t *testing.T) {
 	}
 }
 
+func TestBuildReview_PreservesPriorConcreteFeedbackInBlockedReviewFixContext(t *testing.T) {
+	env := setupDispatchEnv(t)
+	ctx := context.Background()
+	env.createObjective(t, "obj-review-preserve", domain.ObjectiveStatusExecuting)
+	streams := env.createPlan(t, "plan-review-preserve", "obj-review-preserve", []string{"stream-1"})
+
+	rt := &sequenceRuntime{results: []runtime.AgentResult{
+		{Success: true, Summary: "builder pass 1"},
+		{Success: true, Summary: "REVIEW_DECISION: reject\nREVIEW_FEEDBACK:\nUse ScrollDownExtraBy so command log paging reads buffered lines"},
+		{Success: true, Summary: "builder pass 2"},
+		{Success: true, Summary: "REVIEW_DECISION: reject\nREVIEW_FEEDBACK:\nAdd command-log-specific keybindings and preserve existing interactions"},
+		{Success: true, Summary: "builder pass 3"},
+		{Success: true, Summary: "REVIEW_DECISION: reject\nREVIEW_FEEDBACK:\nAdd command-log-specific keybindings and preserve existing interactions"},
+	}}
+	sp := newMockSandboxProvider()
+	recorder, err := observability.New(t.TempDir(), env.eventBus, slog.Default())
+	if err != nil {
+		t.Fatalf("New recorder: %v", err)
+	}
+	spawner := NewSpawner(env.agents, rt, sp, rules.NewEngine(slog.Default()), tools.NewCurator(slog.Default()), env.eventBus, recorder, nil, config.RuntimeAuthConfig{}, slog.Default(), "http://localhost:8080", "Tack", "tack@local")
+	env.coord.spawner = spawner
+	env.coord.attempts = env.attempts
+	env.coord.tracker = newAgentTracker(spawner, recorder, env.eventBus, config.TimeoutConfig{}, slog.Default())
+	handlers := NewHandlers(env.scheduler, nil, env.lifecycle, &handlersTestMergeHelper{}, env.engine, rt, env.plans, env.streams, env.objectives, env.executions, env.agents, env.attempts, sp, env.eventBus, recorder, "main", nil, config.RuntimeAuthConfig{}, "", slog.Default())
+	env.engine.RegisterHandler(blueprint.StepTypeAgent, env.coord.HandleAgentStep)
+	env.engine.RegisterHandler(blueprint.StepTypeDeterministic, handlers.HandleDeterministic)
+
+	exec, err := env.engine.Start(ctx, "build-review", "obj-review-preserve")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	exec.StreamID = streams[0].ID
+	for exec.Status == "running" {
+		exec, err = env.engine.Advance(ctx, exec)
+		if err != nil {
+			t.Fatalf("Advance: %v", err)
+		}
+	}
+
+	if exec.Status != "failed" {
+		t.Fatalf("status = %s, want failed", exec.Status)
+	}
+	attempts, err := env.attempts.ListByExecution(ctx, exec.ID)
+	if err != nil {
+		t.Fatalf("ListByExecution: %v", err)
+	}
+	if len(attempts) != 3 {
+		t.Fatalf("attempt count = %d, want 3", len(attempts))
+	}
+	blocked := attempts[2]
+	if blocked.Action != domain.RecoveryActionAskHumanThenResume {
+		t.Fatalf("action = %s, want %s", blocked.Action, domain.RecoveryActionAskHumanThenResume)
+	}
+	if !strings.Contains(blocked.FixContext, "Add command-log-specific keybindings") {
+		t.Fatalf("fix context missing latest feedback:\n%s", blocked.FixContext)
+	}
+	if !strings.Contains(blocked.FixContext, "Use ScrollDownExtraBy") {
+		t.Fatalf("fix context missing prior concrete feedback:\n%s", blocked.FixContext)
+	}
+	if strings.Contains(blocked.ErrorSummary, "Use ScrollDownExtraBy") {
+		t.Fatalf("error summary should remain latest rejection only:\n%s", blocked.ErrorSummary)
+	}
+}
+
 func streamStatuses(streams []domain.Stream) string {
 	var s string
 	for _, st := range streams {

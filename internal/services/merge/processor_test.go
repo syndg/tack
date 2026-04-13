@@ -764,10 +764,12 @@ func TestCheckObjectiveComplete(t *testing.T) {
 	f := setupProcessor(t)
 	ctx := context.Background()
 
-	obj := &domain.Objective{Description: "test", Status: domain.ObjectiveStatusExecuting}
+	obj := &domain.Objective{Description: "test", Status: domain.ObjectiveStatusPartial}
 	f.objectives.Create(ctx, obj)
 	plan := &domain.Plan{ObjectiveID: obj.ID, QualityGates: []string{}}
 	f.plans.Create(ctx, plan)
+	sub, unsub := f.bus.Subscribe(10)
+	defer unsub()
 
 	// Create two streams, both merged.
 	s1 := &domain.Stream{
@@ -786,14 +788,30 @@ func TestCheckObjectiveComplete(t *testing.T) {
 		t.Fatalf("checkObjectiveComplete: %v", err)
 	}
 
-	// Verify objective status is unchanged — the merge processor no longer
-	// transitions objectives; the blueprint engine (mark_complete) does that.
+	// Verify partial objective is upgraded once all streams are merged.
 	got, err := f.objectives.Get(ctx, obj.ID)
 	if err != nil {
 		t.Fatalf("Get objective: %v", err)
 	}
-	if got.Status != domain.ObjectiveStatusExecuting {
-		t.Errorf("objective status = %q, want %q (unchanged)", got.Status, domain.ObjectiveStatusExecuting)
+	if got.Status != domain.ObjectiveStatusCompleted {
+		t.Errorf("objective status = %q, want %q", got.Status, domain.ObjectiveStatusCompleted)
+	}
+	for {
+		select {
+		case ev := <-sub:
+			if ev.Type != domain.EventObjectiveUpdated {
+				continue
+			}
+			if ev.Objective != obj.ID {
+				continue
+			}
+			if !strings.Contains(ev.Payload, `"to":"completed"`) {
+				t.Fatalf("objective update payload = %s, want completed transition", ev.Payload)
+			}
+			return
+		default:
+			t.Fatal("expected objective updated event when partial objective completed")
+		}
 	}
 }
 
