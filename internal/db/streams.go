@@ -89,12 +89,16 @@ func (s *StreamStore) Create(ctx context.Context, stream *domain.Stream) error {
 		return fmt.Errorf("marshalling dependencies: %w", err)
 	}
 	description := domain.StreamDescriptionPayload(stream.Description, stream.AcceptanceCriteria)
+	card, err := marshalStreamCard(stream.Card)
+	if err != nil {
+		return err
+	}
 
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO streams (id, project_id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO streams (id, project_id, plan_id, title, description, stream_card, file_scope, dependencies, status, execution_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		stream.ID, stream.ProjectID, stream.PlanID, stream.Title, description,
-		string(fileScope), string(dependencies), stream.Status, stream.ExecutionID, now.Unix(),
+		card, string(fileScope), string(dependencies), stream.Status, stream.ExecutionID, now.Unix(),
 	)
 	if err != nil {
 		return fmt.Errorf("inserting stream: %w", err)
@@ -105,17 +109,17 @@ func (s *StreamStore) Create(ctx context.Context, stream *domain.Stream) error {
 // Get retrieves a stream by ID.
 func (s *StreamStore) Get(ctx context.Context, id string) (*domain.Stream, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, project_id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at
+		`SELECT id, project_id, plan_id, title, description, stream_card, file_scope, dependencies, status, execution_id, created_at
 		 FROM streams WHERE id = ?`, id,
 	)
 
 	var stream domain.Stream
-	var fileScope, dependencies string
+	var fileScope, dependencies, card string
 	var createdAt int64
 
 	err := row.Scan(
 		&stream.ID, &stream.ProjectID, &stream.PlanID, &stream.Title, &stream.Description,
-		&fileScope, &dependencies, &stream.Status, &stream.ExecutionID, &createdAt,
+		&card, &fileScope, &dependencies, &stream.Status, &stream.ExecutionID, &createdAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -131,6 +135,10 @@ func (s *StreamStore) Get(ctx context.Context, id string) (*domain.Stream, error
 		return nil, fmt.Errorf("unmarshalling dependencies: %w", err)
 	}
 	stream.Description, stream.AcceptanceCriteria = domain.ParseStreamDescriptionPayload(stream.Description)
+	stream.Card, err = unmarshalStreamCard(card)
+	if err != nil {
+		return nil, err
+	}
 	stream.CreatedAt = time.Unix(createdAt, 0)
 	return &stream, nil
 }
@@ -138,7 +146,7 @@ func (s *StreamStore) Get(ctx context.Context, id string) (*domain.Stream, error
 // ListByPlan returns all streams for a plan, ordered by created_at asc.
 func (s *StreamStore) ListByPlan(ctx context.Context, planID string) ([]domain.Stream, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, project_id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at
+		`SELECT id, project_id, plan_id, title, description, stream_card, file_scope, dependencies, status, execution_id, created_at
 		 FROM streams WHERE plan_id = ? ORDER BY created_at ASC`, planID,
 	)
 	if err != nil {
@@ -149,12 +157,12 @@ func (s *StreamStore) ListByPlan(ctx context.Context, planID string) ([]domain.S
 	var streams []domain.Stream
 	for rows.Next() {
 		var stream domain.Stream
-		var fileScope, dependencies string
+		var fileScope, dependencies, card string
 		var createdAt int64
 
 		if err := rows.Scan(
 			&stream.ID, &stream.ProjectID, &stream.PlanID, &stream.Title, &stream.Description,
-			&fileScope, &dependencies, &stream.Status, &stream.ExecutionID, &createdAt,
+			&card, &fileScope, &dependencies, &stream.Status, &stream.ExecutionID, &createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning stream: %w", err)
 		}
@@ -166,6 +174,11 @@ func (s *StreamStore) ListByPlan(ctx context.Context, planID string) ([]domain.S
 			return nil, fmt.Errorf("unmarshalling dependencies: %w", err)
 		}
 		stream.Description, stream.AcceptanceCriteria = domain.ParseStreamDescriptionPayload(stream.Description)
+		parsedCard, err := unmarshalStreamCard(card)
+		if err != nil {
+			return nil, err
+		}
+		stream.Card = parsedCard
 		stream.CreatedAt = time.Unix(createdAt, 0)
 		streams = append(streams, stream)
 	}
@@ -179,7 +192,7 @@ func (s *StreamStore) ListByPlan(ctx context.Context, planID string) ([]domain.S
 // ListByProject returns streams for a single project ordered by creation time.
 func (s *StreamStore) ListByProject(ctx context.Context, projectID string) ([]domain.Stream, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, project_id, plan_id, title, description, file_scope, dependencies, status, execution_id, created_at
+		`SELECT id, project_id, plan_id, title, description, stream_card, file_scope, dependencies, status, execution_id, created_at
 		 FROM streams WHERE project_id = ? ORDER BY created_at ASC`, projectID,
 	)
 	if err != nil {
@@ -245,11 +258,12 @@ func scanStreams(rows *sql.Rows) ([]domain.Stream, error) {
 		var stream domain.Stream
 		var fileScope string
 		var dependencies string
+		var card string
 		var createdAt int64
 
 		if err := rows.Scan(
 			&stream.ID, &stream.ProjectID, &stream.PlanID, &stream.Title, &stream.Description,
-			&fileScope, &dependencies, &stream.Status, &stream.ExecutionID, &createdAt,
+			&card, &fileScope, &dependencies, &stream.Status, &stream.ExecutionID, &createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning stream: %w", err)
 		}
@@ -261,6 +275,11 @@ func scanStreams(rows *sql.Rows) ([]domain.Stream, error) {
 			return nil, fmt.Errorf("unmarshalling dependencies: %w", err)
 		}
 		stream.Description, stream.AcceptanceCriteria = domain.ParseStreamDescriptionPayload(stream.Description)
+		parsedCard, err := unmarshalStreamCard(card)
+		if err != nil {
+			return nil, err
+		}
+		stream.Card = parsedCard
 		stream.CreatedAt = time.Unix(createdAt, 0)
 		streams = append(streams, stream)
 	}
@@ -282,10 +301,14 @@ func (s *StreamStore) Update(ctx context.Context, stream *domain.Stream) error {
 		return fmt.Errorf("marshalling dependencies: %w", err)
 	}
 	description := domain.StreamDescriptionPayload(stream.Description, stream.AcceptanceCriteria)
+	card, err := marshalStreamCard(stream.Card)
+	if err != nil {
+		return err
+	}
 
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE streams SET title = ?, description = ?, file_scope = ?, dependencies = ?, status = ? WHERE id = ?`,
-		stream.Title, description, string(fileScope), string(dependencies), stream.Status, stream.ID,
+		`UPDATE streams SET title = ?, description = ?, stream_card = ?, file_scope = ?, dependencies = ?, status = ? WHERE id = ?`,
+		stream.Title, description, card, string(fileScope), string(dependencies), stream.Status, stream.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("updating stream: %w", err)
@@ -352,4 +375,26 @@ func (s *StreamStore) ListReady(ctx context.Context, planID string) ([]domain.St
 		}
 	}
 	return ready, nil
+}
+
+func marshalStreamCard(card *domain.StreamCard) (string, error) {
+	if card == nil {
+		return "", nil
+	}
+	raw, err := json.Marshal(card)
+	if err != nil {
+		return "", fmt.Errorf("marshalling stream_card: %w", err)
+	}
+	return string(raw), nil
+}
+
+func unmarshalStreamCard(raw string) (*domain.StreamCard, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var card domain.StreamCard
+	if err := json.Unmarshal([]byte(raw), &card); err != nil {
+		return nil, fmt.Errorf("unmarshalling stream_card: %w", err)
+	}
+	return &card, nil
 }

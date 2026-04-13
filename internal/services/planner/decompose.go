@@ -20,11 +20,21 @@ type RawPlan struct {
 }
 
 type RawStream struct {
-	Title              string   `yaml:"title"`
-	Description        string   `yaml:"description"`
-	AcceptanceCriteria []string `yaml:"acceptance_criteria"`
-	FileScope          []string `yaml:"file_scope"`
-	Dependencies       []string `yaml:"dependencies"` // stream titles or indices
+	Title                 string      `yaml:"title"`
+	Goal                  string      `yaml:"goal"`
+	Description           string      `yaml:"description"`
+	AcceptanceCriteria    []string    `yaml:"acceptance_criteria"`
+	ImplementationScope   []string    `yaml:"implementation_scope"`
+	ProofScope            []string    `yaml:"proof_scope"`
+	HardAnchors           []RawAnchor `yaml:"hard_anchors"`
+	SeamOverrideRationale string      `yaml:"seam_override_rationale"`
+	FileScope             []string    `yaml:"file_scope"`
+	Dependencies          []string    `yaml:"dependencies"` // stream titles or indices
+}
+
+type RawAnchor struct {
+	Instruction string   `yaml:"instruction"`
+	CitationIDs []string `yaml:"citation_ids"`
 }
 
 // ParsePlan extracts a RawPlan from agent output text.
@@ -126,6 +136,14 @@ func ValidatePlan(plan *RawPlan) error {
 			}
 			errs = append(errs, fmt.Sprintf("stream %q missing file_scope", name))
 		}
+		for _, anchor := range s.HardAnchors {
+			if strings.TrimSpace(anchor.Instruction) == "" {
+				errs = append(errs, fmt.Sprintf("stream %q has hard_anchor missing instruction", s.Title))
+			}
+			if len(anchor.CitationIDs) == 0 {
+				errs = append(errs, fmt.Sprintf("stream %q hard_anchor %q missing citation_ids", s.Title, anchor.Instruction))
+			}
+		}
 	}
 
 	if len(errs) > 0 {
@@ -153,8 +171,8 @@ func ValidatePlan(plan *RawPlan) error {
 
 // ToDomain converts a RawPlan to domain Plan + Streams.
 // Generates IDs, resolves dependency titles or indices to stream IDs,
-// sets initial statuses.
-func ToDomain(raw *RawPlan, objectiveID string) (*domain.Plan, []domain.Stream) {
+// hydrates stream cards, and sets initial statuses.
+func ToDomain(raw *RawPlan, objectiveID string, dossier *domain.Dossier) (*domain.Plan, []domain.Stream, error) {
 	now := time.Now()
 
 	plan := &domain.Plan{
@@ -180,10 +198,18 @@ func ToDomain(raw *RawPlan, objectiveID string) (*domain.Plan, []domain.Stream) 
 
 	// Second pass: build domain.Stream values with resolved dependency IDs.
 	streams := make([]domain.Stream, len(raw.Streams))
+	citationByID := make(map[string]domain.DossierCitation)
+	if dossier != nil {
+		for _, citation := range dossier.Citations {
+			citationByID[citation.ID] = citation
+		}
+	}
 	for i, rs := range raw.Streams {
 		deps := make([]string, 0, len(rs.Dependencies))
+		blockedBy := make([]string, 0, len(rs.Dependencies))
 		for _, depRef := range rs.Dependencies {
 			if depTitle, ok := resolveDependencyTitle(depRef, raw.Streams); ok {
+				blockedBy = append(blockedBy, depTitle)
 				if depID, ok := titleToID[depTitle]; ok {
 					deps = append(deps, depID)
 				}
@@ -194,12 +220,43 @@ func ToDomain(raw *RawPlan, objectiveID string) (*domain.Plan, []domain.Stream) 
 		if scope == nil {
 			scope = []string{}
 		}
+		goal := firstNonEmpty(rs.Goal, rs.Description)
+		implementationScope := append([]string(nil), rs.ImplementationScope...)
+		if len(implementationScope) == 0 {
+			implementationScope = append([]string(nil), scope...)
+		}
+		proofScope := append([]string(nil), rs.ProofScope...)
+		if len(proofScope) == 0 {
+			proofScope = append([]string(nil), rs.AcceptanceCriteria...)
+		}
+		hardAnchors := make([]domain.StreamCardAnchor, 0, len(rs.HardAnchors))
+		for _, anchor := range rs.HardAnchors {
+			citations := make([]domain.StreamCardCitation, 0, len(anchor.CitationIDs))
+			for _, citationID := range anchor.CitationIDs {
+				citation, ok := citationByID[citationID]
+				if !ok {
+					return nil, nil, fmt.Errorf("stream %q hard_anchor %q references unknown citation %q", rs.Title, anchor.Instruction, citationID)
+				}
+				citations = append(citations, domain.StreamCardCitation{ID: citation.ID, Kind: citation.Kind, Target: citation.Target, Detail: citation.Detail})
+			}
+			hardAnchors = append(hardAnchors, domain.StreamCardAnchor{Instruction: anchor.Instruction, Citations: citations})
+		}
+		card := &domain.StreamCard{
+			Goal:                  goal,
+			BlockedBy:             blockedBy,
+			AcceptanceCriteria:    append([]string(nil), rs.AcceptanceCriteria...),
+			ImplementationScope:   implementationScope,
+			ProofScope:            proofScope,
+			HardAnchors:           hardAnchors,
+			SeamOverrideRationale: strings.TrimSpace(rs.SeamOverrideRationale),
+		}
 
 		streams[i] = domain.Stream{
 			ID:                 streamIDs[i],
 			PlanID:             plan.ID,
 			Title:              rs.Title,
-			Description:        rs.Description,
+			Description:        goal,
+			Card:               card,
 			AcceptanceCriteria: append([]string(nil), rs.AcceptanceCriteria...),
 			FileScope:          scope,
 			Dependencies:       deps,
@@ -208,7 +265,7 @@ func ToDomain(raw *RawPlan, objectiveID string) (*domain.Plan, []domain.Stream) 
 		}
 	}
 
-	return plan, streams
+	return plan, streams, nil
 }
 
 // DetectCycles checks the dependency graph for cycles using DFS.
@@ -272,4 +329,13 @@ func resolveDependencyTitle(ref string, streams []RawStream) (string, bool) {
 		return "", false
 	}
 	return streams[idx-1].Title, true
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

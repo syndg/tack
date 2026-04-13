@@ -20,6 +20,7 @@ import (
 type Service struct {
 	plans               *db.PlanStore
 	streams             *db.StreamStore
+	dossiers            *db.DossierStore
 	objectives          *db.ObjectiveStore
 	agentStore          *db.AgentStore
 	lifecycle           *lifecycle.Manager
@@ -35,6 +36,7 @@ type Service struct {
 func New(
 	plans *db.PlanStore,
 	streams *db.StreamStore,
+	dossiers *db.DossierStore,
 	objectives *db.ObjectiveStore,
 	agentStore *db.AgentStore,
 	lifecycle *lifecycle.Manager,
@@ -46,6 +48,7 @@ func New(
 	return &Service{
 		plans:               plans,
 		streams:             streams,
+		dossiers:            dossiers,
 		objectives:          objectives,
 		agentStore:          agentStore,
 		lifecycle:           lifecycle,
@@ -75,7 +78,17 @@ func (s *Service) CreatePlan(ctx context.Context, objectiveID string, agentOutpu
 		return nil, fmt.Errorf("validating plan: %w", err)
 	}
 
-	plan, streams := ToDomain(rawPlan, objectiveID)
+	var dossier *domain.Dossier
+	if s.dossiers != nil {
+		dossier, err = s.dossiers.GetByObjective(ctx, objectiveID)
+		if err != nil && !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "no rows in result set") {
+			return nil, fmt.Errorf("loading dossier for plan creation: %w", err)
+		}
+	}
+	plan, streams, err := ToDomain(rawPlan, objectiveID, dossier)
+	if err != nil {
+		return nil, fmt.Errorf("compiling plan: %w", err)
+	}
 	plan.QualityGates = sanitizeQualityGates(plan.QualityGates)
 
 	if err := s.plans.Create(ctx, plan); err != nil {
@@ -153,6 +166,7 @@ func (s *Service) CreateSimplePlan(ctx context.Context, objectiveID string) (*do
 		PlanID:       plan.ID,
 		Title:        obj.Description,
 		Description:  obj.Description,
+		Card:         &domain.StreamCard{Goal: obj.Description, ImplementationScope: []string{"**/*"}, ProofScope: []string{obj.Description}},
 		FileScope:    []string{"**/*"},
 		Dependencies: []string{},
 		Status:       domain.StreamStatusPending,

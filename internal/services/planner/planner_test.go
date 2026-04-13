@@ -53,6 +53,7 @@ func setupService(t *testing.T) (*Service, *db.ObjectiveStore, *db.PlanStore, *d
 	objStore := db.NewObjectiveStore(d.Conn())
 	planStore := db.NewPlanStore(d.Conn())
 	streamStore := db.NewStreamStore(d.Conn())
+	dossierStore := db.NewDossierStore(d.Conn())
 	agentStore := db.NewAgentStore(d.Conn())
 	runStore := db.NewRunStore(d.Conn())
 	eventStore := db.NewEventStore(d.Conn())
@@ -61,7 +62,7 @@ func setupService(t *testing.T) (*Service, *db.ObjectiveStore, *db.PlanStore, *d
 	logger := slog.Default()
 
 	lcm := lifecycle.New(objStore, planStore, streamStore, agentStore, bus, nil, logger)
-	svc := New(planStore, streamStore, objStore, agentStore, lcm, bus, nil, logger, []string{"go test ./...", "go vet ./..."})
+	svc := New(planStore, streamStore, dossierStore, objStore, agentStore, lcm, bus, nil, logger, []string{"go test ./...", "go vet ./..."})
 	return svc, objStore, planStore, streamStore, runStore
 }
 
@@ -108,6 +109,9 @@ func TestCreatePlan_EndToEnd(t *testing.T) {
 	}
 	if len(streams) != 2 {
 		t.Errorf("streams = %d, want 2", len(streams))
+	}
+	if streams[0].Card == nil || streams[0].Card.Goal != "Refactor auth module" {
+		t.Fatalf("stream card = %#v, want hydrated card", streams[0].Card)
 	}
 
 	// Verify plan is retrievable with correct status.
@@ -181,6 +185,9 @@ func TestCreateSimplePlan_SingleStream(t *testing.T) {
 	}
 	if len(streams[0].FileScope) != 1 || streams[0].FileScope[0] != "**/*" {
 		t.Errorf("file_scope = %v, want [\"**/*\"]", streams[0].FileScope)
+	}
+	if streams[0].Card == nil || streams[0].Card.Goal != obj.Description {
+		t.Fatalf("card = %#v, want simple stream card", streams[0].Card)
 	}
 	if streams[0].Title != obj.Description {
 		t.Errorf("stream title = %q, want %q", streams[0].Title, obj.Description)

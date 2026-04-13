@@ -21,6 +21,17 @@ func testStream() *domain.Stream {
 	return &domain.Stream{
 		ID:    "str-1",
 		Title: "auth module",
+		Card: &domain.StreamCard{
+			Goal:                "Implement JWT middleware enforcement",
+			BlockedBy:           []string{"auth discovery"},
+			AcceptanceCriteria:  []string{"JWT validation passes for valid tokens", "Requests without valid tokens are rejected"},
+			ImplementationScope: []string{"src/auth/*.go"},
+			ProofScope:          []string{"go test ./internal/auth"},
+			HardAnchors: []domain.StreamCardAnchor{{
+				Instruction: "Keep auth checks in middleware",
+				Citations:   []domain.StreamCardCitation{{ID: "rule:1", Kind: "rule", Target: ".tack/rules/auth.md", Detail: "Keep auth checks in middleware."}},
+			}},
+		},
 		AcceptanceCriteria: []string{
 			"JWT validation passes for valid tokens",
 			"Requests without valid tokens are rejected",
@@ -36,6 +47,7 @@ func testDossier() *domain.Dossier {
 		SuggestedSeams: []domain.DossierSeam{{Title: "src/auth", Reason: "Relevant files cluster under src/auth.", FilePaths: []string{"src/auth/middleware.go"}}},
 		Risks:          []string{"Token refresh flow is under-specified."},
 		Unknowns:       []string{"Which handlers still bypass middleware?"},
+		Citations:      []domain.DossierCitation{{ID: "rule:1", Kind: "rule", Target: ".tack/rules/auth.md", Detail: "Keep auth checks in middleware."}},
 	}
 }
 
@@ -63,7 +75,11 @@ func TestBuildOverlay_AllSections(t *testing.T) {
 		"# Tack Agent: builder-auth-1",
 		"## Role",
 		"## Task",
+		"## Blocked By",
 		"## Acceptance Criteria",
+		"## Implementation Scope",
+		"## Proof Scope",
+		"## Hard Anchors",
 		"## File Scope",
 		"## Quality Gates",
 		"## Communication",
@@ -92,6 +108,12 @@ func TestBuildOverlay_AllSections(t *testing.T) {
 	}
 	if !strings.Contains(result, "Implement JWT token validation") {
 		t.Error("missing task spec")
+	}
+	if !strings.Contains(result, "Keep auth checks in middleware") {
+		t.Error("missing hard anchor")
+	}
+	if !strings.Contains(result, "rule:1") {
+		t.Error("missing hard anchor citation")
 	}
 	for _, want := range []string{"JWT validation passes for valid tokens", "Requests without valid tokens are rejected"} {
 		if !strings.Contains(result, want) {
@@ -256,11 +278,13 @@ func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 		"## Role",
 		"## Objective",
 		"## Dossier Summary",
+		"## Dossier Citations",
 		"## Relevant Files",
 		"## Suggested Seams",
 		"## Project Guidance",
 		"## Instructions",
 		"streams:",
+		"hard_anchors:",
 		"acceptance_criteria:",
 		"quality_gates:",
 		"PLANNER_OUTCOME: needs_dossier_expansion",

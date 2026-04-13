@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS streams (
     plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
+    stream_card TEXT NOT NULL DEFAULT '',
     file_scope TEXT NOT NULL DEFAULT '[]',
     dependencies TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'pending',
@@ -192,6 +193,23 @@ func RunMigrations(db *sql.DB) error {
 	}
 	if _, err := db.ExecContext(context.Background(), `UPDATE agent_sessions SET role = 'builder' WHERE role = 'worker'`); err != nil {
 		return fmt.Errorf("normalizing agent session roles: %w", err)
+	}
+	if err := addColumnIfMissing(db, "streams", "stream_card", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("ensuring stream card column: %w", err)
+	}
+	return nil
+}
+
+func addColumnIfMissing(db *sql.DB, table, column, definition string) error {
+	hasColumn, err := columnExists(db, table, column)
+	if err != nil {
+		return err
+	}
+	if hasColumn {
+		return nil
+	}
+	if _, err := db.ExecContext(context.Background(), fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {
+		return fmt.Errorf("adding %s.%s: %w", table, column, err)
 	}
 	return nil
 }

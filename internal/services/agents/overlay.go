@@ -51,20 +51,66 @@ func BuildOverlay(input OverlayInput) string {
 	// 2. Task description
 	b.WriteString("## Task\n")
 	fmt.Fprintf(&b, "Objective: %s\n", input.Objective.Description)
+	var card domain.StreamCard
+	hasCard := false
 	if input.Stream != nil {
 		fmt.Fprintf(&b, "Stream: %s\n", input.Stream.Title)
+		card = input.Stream.EffectiveCard()
+		hasCard = true
+		if strings.TrimSpace(card.Goal) != "" {
+			fmt.Fprintf(&b, "Goal: %s\n", card.Goal)
+		}
 	}
 	if input.TaskSpec != "" {
 		fmt.Fprintf(&b, "%s\n", input.TaskSpec)
 	}
 	b.WriteString("\n")
-	if input.Stream != nil && len(input.Stream.AcceptanceCriteria) > 0 {
+	if hasCard && len(card.BlockedBy) > 0 {
+		b.WriteString("## Blocked By\n")
+		for _, dep := range card.BlockedBy {
+			fmt.Fprintf(&b, "- %s\n", dep)
+		}
+		b.WriteString("\n")
+	}
+	if hasCard && len(card.AcceptanceCriteria) > 0 {
 		b.WriteString("## Acceptance Criteria\n")
 		b.WriteString("The work is only complete when all of the following are true:\n")
-		for _, item := range input.Stream.AcceptanceCriteria {
+		for _, item := range card.AcceptanceCriteria {
 			fmt.Fprintf(&b, "- %s\n", item)
 		}
 		b.WriteString("\n")
+	}
+	if hasCard && len(card.ImplementationScope) > 0 {
+		b.WriteString("## Implementation Scope\n")
+		b.WriteString("Implement only within these bounded areas:\n")
+		for _, item := range card.ImplementationScope {
+			fmt.Fprintf(&b, "- %s\n", item)
+		}
+		b.WriteString("\n")
+	}
+	if hasCard && len(card.ProofScope) > 0 {
+		b.WriteString("## Proof Scope\n")
+		b.WriteString("Your completion notes and validation should cover:\n")
+		for _, item := range card.ProofScope {
+			fmt.Fprintf(&b, "- %s\n", item)
+		}
+		b.WriteString("\n")
+	}
+	if hasCard && len(card.HardAnchors) > 0 {
+		b.WriteString("## Hard Anchors\n")
+		b.WriteString("These are hard implementation constraints from planning. Do not reinterpret them away.\n")
+		for _, anchor := range card.HardAnchors {
+			fmt.Fprintf(&b, "- %s\n", anchor.Instruction)
+			for _, citation := range anchor.Citations {
+				fmt.Fprintf(&b, "  Evidence: [%s] %s %s - %s\n", citation.ID, citation.Kind, citation.Target, citation.Detail)
+			}
+		}
+		b.WriteString("\n")
+	}
+	if hasCard && strings.TrimSpace(card.SeamOverrideRationale) != "" {
+		b.WriteString("## Seam Override Rationale\n")
+		b.WriteString(card.SeamOverrideRationale)
+		b.WriteString("\n\n")
 	}
 	if input.Role != nil && input.Role.Name == "reviewer" {
 		b.WriteString("## Review Output\n")
@@ -199,6 +245,9 @@ func BuildOverlay(input OverlayInput) string {
 
 	// 9. Constraints
 	b.WriteString("## Constraints\n")
+	if hasCard {
+		b.WriteString("- Execute the stream card narrowly; do not reinterpret architecture beyond the contract\n")
+	}
 	b.WriteString("- Do NOT modify files outside your scope\n")
 	b.WriteString("- Do NOT push to git (Tack handles merging)\n")
 	b.WriteString("- Do NOT install new dependencies without escalating\n")
@@ -209,10 +258,19 @@ func BuildOverlay(input OverlayInput) string {
 // planYAMLSchema is the YAML format a planner agent must output.
 const planYAMLSchema = `streams:
   - title: "stream title"
-    description: "what this stream does"
+    goal: "single clear execution goal"
     acceptance_criteria:
       - "concrete externally observable check"
       - "full feature surface this stream must satisfy or prove"
+    implementation_scope:
+      - "bounded implementation area or file glob"
+    proof_scope:
+      - "tests, checks, or evidence this stream must provide"
+    hard_anchors:
+      - instruction: "repo-specific implementation constraint"
+        citation_ids:
+          - "file:1"
+    seam_override_rationale: "why this stream overrides a suggested dossier seam"
     file_scope:
       - "src/auth/**"
     dependencies: []  # titles of streams that must complete first
@@ -285,6 +343,13 @@ func BuildPlannerOverlay(objective *domain.Objective, dossier *domain.Dossier, g
 			}
 			b.WriteString("\n")
 		}
+		if len(dossier.Citations) > 0 {
+			b.WriteString("## Dossier Citations\n")
+			for _, citation := range dossier.Citations {
+				fmt.Fprintf(&b, "- [%s] %s %s - %s\n", citation.ID, citation.Kind, citation.Target, citation.Detail)
+			}
+			b.WriteString("\n")
+		}
 	}
 
 	if guidance != "" {
@@ -296,9 +361,12 @@ func BuildPlannerOverlay(objective *domain.Objective, dossier *domain.Dossier, g
 	b.WriteString("Produce a structured plan with:\n")
 	b.WriteString("1. Streams — parallel units of work\n")
 	b.WriteString("2. Acceptance criteria - concrete, externally observable checks for each stream\n")
-	b.WriteString("3. File scopes - which files each stream owns (use globs)\n")
-	b.WriteString("4. Dependencies - which streams must complete before others start\n")
-	b.WriteString("5. Quality gates - commands to validate each stream\n\n")
+	b.WriteString("3. Implementation scope - what code surface the stream may change\n")
+	b.WriteString("4. Proof scope - what evidence the stream must provide\n")
+	b.WriteString("5. Hard anchors - repo-specific constraints, each with dossier citation_ids\n")
+	b.WriteString("6. File scopes - which files each stream owns (use globs)\n")
+	b.WriteString("7. Dependencies - which streams must complete before others start\n")
+	b.WriteString("8. Quality gates - commands to validate each stream\n\n")
 	b.WriteString("Use the dossier's suggested seams when they fit. If you override them, explain why in the affected stream descriptions.\n\n")
 	b.WriteString("If the dossier is insufficient for a trustworthy plan, do not guess and do not inspect the repository. Output this instead:\n")
 	b.WriteString("```text\n")

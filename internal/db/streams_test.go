@@ -55,6 +55,7 @@ func TestStreamStore_Get_RoundTrip(t *testing.T) {
 		PlanID:       plan.ID,
 		Title:        "my stream",
 		Description:  "does things",
+		Card:         &domain.StreamCard{Goal: "do the thing", ProofScope: []string{"go test ./..."}, HardAnchors: []domain.StreamCardAnchor{{Instruction: "stay in middleware", Citations: []domain.StreamCardCitation{{ID: "rule:1", Detail: "middleware rule"}}}}},
 		FileScope:    []string{"src/**/*.go"},
 		Dependencies: []string{"dep-placeholder-id"},
 	}
@@ -80,6 +81,12 @@ func TestStreamStore_Get_RoundTrip(t *testing.T) {
 	}
 	if got.PlanID != plan.ID {
 		t.Errorf("PlanID = %q, want %q", got.PlanID, plan.ID)
+	}
+	if got.Card == nil || got.Card.Goal != "do the thing" {
+		t.Fatalf("Card = %#v, want persisted card", got.Card)
+	}
+	if len(got.Card.HardAnchors) != 1 || got.Card.HardAnchors[0].Citations[0].ID != "rule:1" {
+		t.Fatalf("hard anchors = %#v", got.Card.HardAnchors)
 	}
 }
 

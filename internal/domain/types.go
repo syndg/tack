@@ -116,12 +116,48 @@ type Stream struct {
 	PlanID             string       `json:"plan_id"`
 	Title              string       `json:"title"`
 	Description        string       `json:"description"`
+	Card               *StreamCard  `json:"card,omitempty"`
 	AcceptanceCriteria []string     `json:"acceptance_criteria,omitempty"`
 	FileScope          []string     `json:"file_scope"`
 	Dependencies       []string     `json:"dependencies"`
 	Status             StreamStatus `json:"status"`
 	ExecutionID        string       `json:"execution_id,omitempty"` // sub-execution driving this stream
 	CreatedAt          time.Time    `json:"created_at"`
+}
+
+type StreamCard struct {
+	Goal                  string             `json:"goal"`
+	BlockedBy             []string           `json:"blocked_by,omitempty"`
+	AcceptanceCriteria    []string           `json:"acceptance_criteria,omitempty"`
+	ImplementationScope   []string           `json:"implementation_scope,omitempty"`
+	ProofScope            []string           `json:"proof_scope,omitempty"`
+	HardAnchors           []StreamCardAnchor `json:"hard_anchors,omitempty"`
+	SeamOverrideRationale string             `json:"seam_override_rationale,omitempty"`
+}
+
+type StreamCardAnchor struct {
+	Instruction string               `json:"instruction"`
+	Citations   []StreamCardCitation `json:"citations,omitempty"`
+}
+
+type StreamCardCitation struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind,omitempty"`
+	Target string `json:"target,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+func (s Stream) EffectiveCard() StreamCard {
+	if s.Card != nil {
+		return *s.Card
+	}
+	card := StreamCard{
+		Goal:                s.Description,
+		AcceptanceCriteria:  append([]string(nil), s.AcceptanceCriteria...),
+		ImplementationScope: append([]string(nil), s.FileScope...),
+		ProofScope:          append([]string(nil), s.AcceptanceCriteria...),
+	}
+	return card
 }
 
 // StreamDescriptionPayload encodes acceptance criteria into the persisted

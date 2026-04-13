@@ -311,7 +311,7 @@ func (m *ProjectContextManager) load(project *domain.Project) (*ProjectContext, 
 		m.logger,
 	)
 	lifecycleMgr := lifecycle.New(m.objectives, m.plans, m.streams, m.agents, m.eventBus, m.obs, m.logger)
-	planningService := planner.New(m.plans, m.streams, m.objectives, m.agents, lifecycleMgr, m.eventBus, m.obs, m.logger, cfg.QualityGates)
+	planningService := planner.New(m.plans, m.streams, m.dossiers, m.objectives, m.agents, lifecycleMgr, m.eventBus, m.obs, m.logger, cfg.QualityGates)
 	discoveryService := discovery.New(project.RootPath, m.objectives, m.dossiers, rulesEng, bpRegistry, m.logger)
 
 	toolCurator := tools.NewCurator(m.logger)

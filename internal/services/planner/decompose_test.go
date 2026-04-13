@@ -80,6 +80,23 @@ func TestValidatePlan_MissingFileScope(t *testing.T) {
 	}
 }
 
+func TestValidatePlan_HardAnchorRequiresCitation(t *testing.T) {
+	plan := &RawPlan{
+		Streams: []RawStream{{
+			Title:       "auth",
+			FileScope:   []string{"src/auth/**"},
+			HardAnchors: []RawAnchor{{Instruction: "Keep middleware ownership"}},
+		}},
+	}
+	err := ValidatePlan(plan)
+	if err == nil {
+		t.Fatal("expected error for missing anchor citations")
+	}
+	if !strings.Contains(err.Error(), "missing citation_ids") {
+		t.Fatalf("error = %q, want missing citation_ids", err)
+	}
+}
+
 func TestValidatePlan_DanglingDependency(t *testing.T) {
 	plan := &RawPlan{
 		Streams: []RawStream{
@@ -159,7 +176,10 @@ func TestToDomain_GeneratesIDs(t *testing.T) {
 		QualityGates: []string{"go test"},
 	}
 
-	plan, streams := ToDomain(raw, "obj-123")
+	plan, streams, err := ToDomain(raw, "obj-123", nil)
+	if err != nil {
+		t.Fatalf("ToDomain: %v", err)
+	}
 
 	if plan.ID == "" {
 		t.Error("plan ID should be generated")
@@ -199,12 +219,47 @@ func TestToDomain_InitialStatuses(t *testing.T) {
 		},
 	}
 
-	plan, streams := ToDomain(raw, "obj-456")
+	plan, streams, err := ToDomain(raw, "obj-456", nil)
+	if err != nil {
+		t.Fatalf("ToDomain: %v", err)
+	}
 
 	if plan.Status != "draft" {
 		t.Errorf("plan status = %q, want draft", plan.Status)
 	}
 	if streams[0].Status != domain.StreamStatusPending {
 		t.Errorf("stream status = %q, want pending", streams[0].Status)
+	}
+}
+
+func TestToDomain_HydratesStreamCardAnchors(t *testing.T) {
+	raw := &RawPlan{Streams: []RawStream{{
+		Title:                 "auth",
+		Goal:                  "Refactor auth entrypoints",
+		AcceptanceCriteria:    []string{"login still succeeds"},
+		ImplementationScope:   []string{"src/auth/**"},
+		ProofScope:            []string{"go test ./internal/auth"},
+		FileScope:             []string{"src/auth/**"},
+		HardAnchors:           []RawAnchor{{Instruction: "Keep auth checks in middleware", CitationIDs: []string{"rule:1"}}},
+		SeamOverrideRationale: "Split handlers away from middleware to reduce contention",
+	}}}
+	dossier := &domain.Dossier{Citations: []domain.DossierCitation{{ID: "rule:1", Kind: "rule", Target: ".tack/rules/auth.md", Detail: "Keep auth checks in middleware."}}}
+
+	_, streams, err := ToDomain(raw, "obj-card", dossier)
+	if err != nil {
+		t.Fatalf("ToDomain: %v", err)
+	}
+	card := streams[0].Card
+	if card == nil {
+		t.Fatal("expected stream card")
+	}
+	if card.Goal != "Refactor auth entrypoints" {
+		t.Fatalf("goal = %q", card.Goal)
+	}
+	if len(card.HardAnchors) != 1 || len(card.HardAnchors[0].Citations) != 1 {
+		t.Fatalf("hard anchors = %#v", card.HardAnchors)
+	}
+	if card.HardAnchors[0].Citations[0].ID != "rule:1" {
+		t.Fatalf("citation id = %q", card.HardAnchors[0].Citations[0].ID)
 	}
 }
