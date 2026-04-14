@@ -28,6 +28,22 @@ func Compile(insights []domain.ObjectiveInsight, streamID string) []domain.Strea
 	return patches
 }
 
+func Merge(groups ...[]domain.StreamCardPatch) []domain.StreamCardPatch {
+	var merged []domain.StreamCardPatch
+	seen := map[string]struct{}{}
+	for _, group := range groups {
+		for _, patch := range group {
+			key := strings.ToLower(strings.TrimSpace(patch.Instruction + "\n" + patch.Rationale + "\n" + patch.ScopeNote + "\n" + patch.CandidateID))
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged = append(merged, patch)
+		}
+	}
+	return merged
+}
+
 func insightToPatch(insight domain.ObjectiveInsight, streamID string) (domain.StreamCardPatch, bool) {
 	text := strings.TrimSpace(insight.Summary)
 	rationale := strings.TrimSpace(insight.Detail)

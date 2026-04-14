@@ -161,6 +161,48 @@ func TestCreatePlan_AttachesContractPatchesToStreamCards(t *testing.T) {
 	}
 }
 
+func TestCreatePlan_AutoAppliesRepeatedCandidatesToAllStreams(t *testing.T) {
+	svc, objStore, _, streamStore, _, insightStore := setupService(t)
+	ctx := context.Background()
+
+	obj := &domain.Objective{Description: "refactor auth"}
+	if err := objStore.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	for _, streamID := range []string{"stream-a", "stream-b"} {
+		if err := insightStore.Create(ctx, &domain.ObjectiveInsight{
+			ObjectiveID: obj.ID,
+			StreamID:    streamID,
+			Source:      domain.InsightSourceReviewer,
+			Kind:        domain.InsightKindReviewRejection,
+			Summary:     "Keep auth middleware coverage explicit",
+		}); err != nil {
+			t.Fatalf("Create repeated insight: %v", err)
+		}
+	}
+
+	plan, err := svc.CreatePlan(ctx, obj.ID, validPlanYAML)
+	if err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+	streams, err := streamStore.ListByPlan(ctx, plan.ID)
+	if err != nil {
+		t.Fatalf("ListByPlan: %v", err)
+	}
+	for _, stream := range streams {
+		found := false
+		for _, patch := range stream.Card.ContractPatches {
+			if patch.CandidateID != "" && patch.Instruction == "Preserve this previously rejected requirement: Keep auth middleware coverage explicit" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("stream %q missing auto-applied candidate patch: %#v", stream.Title, stream.Card.ContractPatches)
+		}
+	}
+}
+
 func TestCreatePlan_ReturnsNeedsDossierExpansion(t *testing.T) {
 	svc, objStore, _, _, _, _ := setupService(t)
 	ctx := context.Background()

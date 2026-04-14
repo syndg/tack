@@ -94,6 +94,23 @@ func DeriveCandidates(projectID, objectiveID string, insights []domain.Objective
 	return out
 }
 
+func AutoAppliedPatches(projectID, objectiveID string, insights []domain.ObjectiveInsight) []domain.StreamCardPatch {
+	candidates := DeriveCandidates(projectID, objectiveID, insights)
+	patches := make([]domain.StreamCardPatch, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Target == domain.CodificationTargetQualityGate {
+			continue
+		}
+		patches = append(patches, domain.StreamCardPatch{
+			Instruction:   candidate.Instruction,
+			Rationale:     candidate.Rationale,
+			CandidateID:   candidate.ID,
+			EvidenceCount: candidate.EvidenceCount,
+		})
+	}
+	return patches
+}
+
 func classifyTarget(kind domain.ObjectiveInsightKind) domain.CodificationCandidateTarget {
 	switch kind {
 	case domain.InsightKindPlanQualityGateEdit:

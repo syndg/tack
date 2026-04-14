@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/syndg/tack/internal/codification"
 	"github.com/syndg/tack/internal/contractpatch"
 	"github.com/syndg/tack/internal/domain"
 	"gopkg.in/yaml.v3"
@@ -55,7 +56,11 @@ func CompileStreamCardRepair(rawYAML string, stream domain.Stream, dossier *doma
 	if strings.TrimSpace(card.Goal) == "" {
 		return domain.StreamCard{}, fmt.Errorf("repaired stream card missing goal")
 	}
-	card.ContractPatches = contractpatch.Compile(insights, stream.ID)
+	objectiveID := ""
+	if dossier != nil {
+		objectiveID = dossier.ObjectiveID
+	}
+	card.ContractPatches = contractpatch.Merge(contractpatch.Compile(insights, stream.ID), codification.AutoAppliedPatches(stream.ProjectID, objectiveID, insights))
 
 	return card, nil
 }

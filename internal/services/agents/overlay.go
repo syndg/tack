@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/syndg/tack/internal/codification"
 	"github.com/syndg/tack/internal/contractpatch"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
@@ -117,10 +118,19 @@ func BuildOverlay(input OverlayInput) string {
 	patches := card.ContractPatches
 	if len(patches) == 0 {
 		streamID := ""
+		projectID := ""
+		objectiveID := ""
+		if input.Objective != nil {
+			projectID = input.Objective.ProjectID
+			objectiveID = input.Objective.ID
+		}
 		if input.Stream != nil {
 			streamID = input.Stream.ID
 		}
-		patches = contractpatch.Compile(input.ObjectiveInsights, streamID)
+		patches = contractpatch.Merge(
+			contractpatch.Compile(input.ObjectiveInsights, streamID),
+			codification.AutoAppliedPatches(projectID, objectiveID, input.ObjectiveInsights),
+		)
 	}
 	if len(patches) > 0 {
 		writeContractPatches(&b, patches, "Treat these as additive contract clarifications already learned during this objective.")
@@ -394,7 +404,7 @@ func BuildPlannerOverlay(objective *domain.Objective, dossier *domain.Dossier, g
 	}
 
 	if len(insights) > 0 {
-		if patches := contractpatch.Compile(insights, ""); len(patches) > 0 {
+		if patches := contractpatch.Merge(contractpatch.Compile(insights, ""), codification.AutoAppliedPatches(objective.ProjectID, objective.ID, insights)); len(patches) > 0 {
 			writeContractPatches(&b, patches, "Use these derived constraints when decomposing or repairing stream cards; prefer them over rediscovering the same contract corrections.")
 		}
 		b.WriteString("## Objective Insights\n")
@@ -453,7 +463,14 @@ func writeContractPatches(b *strings.Builder, patches []domain.StreamCardPatch, 
 		}
 		b.WriteString(line)
 		b.WriteString("\n")
-		fmt.Fprintf(b, "  Derived from: [%s/%s]\n", patch.Source, patch.Kind)
+		if patch.CandidateID != "" {
+			fmt.Fprintf(b, "  Derived from: [codification_candidate/%s]\n", patch.CandidateID)
+			if patch.EvidenceCount > 0 {
+				fmt.Fprintf(b, "  Evidence count: %d\n", patch.EvidenceCount)
+			}
+		} else {
+			fmt.Fprintf(b, "  Derived from: [%s/%s]\n", patch.Source, patch.Kind)
+		}
 		if patch.Rationale != "" && patch.Rationale != patch.Instruction {
 			fmt.Fprintf(b, "  Rationale: %s\n", patch.Rationale)
 		}

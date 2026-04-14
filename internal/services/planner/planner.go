@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/syndg/tack/internal/codification"
 	"github.com/syndg/tack/internal/contractpatch"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
@@ -98,7 +99,7 @@ func (s *Service) CreatePlan(ctx context.Context, objectiveID string, agentOutpu
 	if insights, err := s.listObjectiveInsights(ctx, objectiveID); err != nil {
 		s.logger.Warn("loading objective insights for plan creation", "objective_id", objectiveID, "error", err)
 	} else {
-		applyContractPatchesToStreams(streams, insights)
+		applyContractPatchesToStreams(plan.ProjectID, objectiveID, streams, insights)
 	}
 	plan.QualityGates = sanitizeQualityGates(plan.QualityGates)
 
@@ -186,7 +187,7 @@ func (s *Service) CreateSimplePlan(ctx context.Context, objectiveID string) (*do
 	if insights, err := s.listObjectiveInsights(ctx, objectiveID); err != nil {
 		s.logger.Warn("loading objective insights for simple plan", "objective_id", objectiveID, "error", err)
 	} else {
-		stream.Card.ContractPatches = contractpatch.Compile(insights, stream.ID)
+		stream.Card.ContractPatches = contractpatch.Merge(contractpatch.Compile(insights, stream.ID), codification.AutoAppliedPatches(obj.ProjectID, objectiveID, insights))
 	}
 
 	if err := s.streams.Create(ctx, stream); err != nil {
@@ -280,11 +281,12 @@ func (s *Service) listObjectiveInsights(ctx context.Context, objectiveID string)
 	return s.insights.ListByObjective(ctx, objectiveID, 0)
 }
 
-func applyContractPatchesToStreams(streams []domain.Stream, insights []domain.ObjectiveInsight) {
+func applyContractPatchesToStreams(projectID, objectiveID string, streams []domain.Stream, insights []domain.ObjectiveInsight) {
+	autoApplied := codification.AutoAppliedPatches(projectID, objectiveID, insights)
 	for i := range streams {
 		if streams[i].Card == nil {
 			continue
 		}
-		streams[i].Card.ContractPatches = contractpatch.Compile(insights, streams[i].ID)
+		streams[i].Card.ContractPatches = contractpatch.Merge(contractpatch.Compile(insights, streams[i].ID), autoApplied)
 	}
 }

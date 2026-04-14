@@ -137,11 +137,13 @@ type StreamCard struct {
 }
 
 type StreamCardPatch struct {
-	Instruction string                 `json:"instruction"`
-	Rationale   string                 `json:"rationale,omitempty"`
-	Source      ObjectiveInsightSource `json:"source,omitempty"`
-	Kind        ObjectiveInsightKind   `json:"kind,omitempty"`
-	ScopeNote   string                 `json:"scope_note,omitempty"`
+	Instruction   string                 `json:"instruction"`
+	Rationale     string                 `json:"rationale,omitempty"`
+	Source        ObjectiveInsightSource `json:"source,omitempty"`
+	Kind          ObjectiveInsightKind   `json:"kind,omitempty"`
+	ScopeNote     string                 `json:"scope_note,omitempty"`
+	CandidateID   string                 `json:"candidate_id,omitempty"`
+	EvidenceCount int                    `json:"evidence_count,omitempty"`
 }
 
 type StreamCardAnchor struct {

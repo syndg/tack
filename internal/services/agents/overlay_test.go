@@ -339,6 +339,26 @@ func TestDeriveContractPatches_FiltersOtherStreamsAndDeduplicates(t *testing.T) 
 	}
 }
 
+func TestBuildOverlay_AutoAppliesRepeatedObjectiveCandidates(t *testing.T) {
+	stream := testStream()
+	stream.ID = "stream-1"
+	result := BuildOverlay(OverlayInput{
+		AgentName: "builder-auth-1",
+		Objective: testObjective(),
+		Stream:    stream,
+		Role:      builderRole(),
+		ObjectiveInsights: []domain.ObjectiveInsight{
+			{StreamID: "stream-2", Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "Keep auth middleware coverage explicit"},
+			{StreamID: "stream-3", Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "Keep auth middleware coverage explicit"},
+		},
+	})
+	for _, want := range []string{"[codification_candidate/", "Evidence count: 2", "Preserve this previously rejected requirement: Keep auth middleware coverage explicit"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("overlay missing %q\n%s", want, result)
+		}
+	}
+}
+
 func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 	obj := testObjective()
 	result := BuildPlannerOverlay(obj, testDossier(), "use bun for JS", []domain.ObjectiveInsight{{

@@ -42,3 +42,18 @@ func TestDeriveCandidates_IgnoresSingletonSignals(t *testing.T) {
 		t.Fatalf("candidate count = %d, want 0: %#v", len(candidates), candidates)
 	}
 }
+
+func TestAutoAppliedPatches_UsesRepeatedNonQualityGateCandidates(t *testing.T) {
+	patches := AutoAppliedPatches("proj-1", "obj-1", []domain.ObjectiveInsight{
+		{ObjectiveID: "obj-1", Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "Keep auth middleware coverage explicit"},
+		{ObjectiveID: "obj-1", Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "Keep auth middleware coverage explicit"},
+		{ObjectiveID: "obj-1", Source: domain.InsightSourcePlanner, Kind: domain.InsightKindPlanQualityGateEdit, Summary: "Add focused auth regression gate"},
+		{ObjectiveID: "obj-1", Source: domain.InsightSourcePlanner, Kind: domain.InsightKindPlanQualityGateEdit, Summary: "Add focused auth regression gate"},
+	})
+	if len(patches) != 1 {
+		t.Fatalf("patch count = %d, want 1: %#v", len(patches), patches)
+	}
+	if patches[0].CandidateID == "" || patches[0].EvidenceCount != 2 {
+		t.Fatalf("patch = %+v", patches[0])
+	}
+}
