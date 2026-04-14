@@ -364,7 +364,7 @@ func Default() *Config {
 			BaseBranch: "main",
 		},
 		Sandbox: SandboxConfig{
-			Provider: "daytona",
+			Provider: "local",
 			DefaultResources: ResourceConfig{
 				CPU:    2,
 				Memory: 2048,
@@ -374,7 +374,7 @@ func Default() *Config {
 			AutoDeleteMinutes: 1440,
 		},
 		Agents: AgentsConfig{
-			Runtime:            "claude-code",
+			Runtime:            "pi",
 			MaxConcurrent:      8,
 			MaxDepth:           2,
 			StaggerDelayMs:     500,

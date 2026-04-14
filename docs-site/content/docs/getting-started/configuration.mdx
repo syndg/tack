@@ -1,9 +1,11 @@
 ---
-title: Configuration
-description: Configure Tack for your project with .tack/config.yaml
+title: Configuration Guide
+description: A walkthrough of Tack's config sections and how to customize them.
 ---
 
-Tack uses a layered config system. You do not need to write config by hand — `tack init` generates it interactively. This page explains what each section does so you can customize it.
+Tack uses a layered config system. You do not need to write config by hand — `tack init` generates it interactively. This page walks you through what each section does so you can customize it.
+
+For a complete field-by-field reference with all defaults, see the [Configuration Reference](/docs/reference/config).
 
 ## Config Layers
 
@@ -34,7 +36,7 @@ Controls where agents execute. The two options are local git worktrees and remot
 
 ```yaml
 sandbox:
-  provider: local
+  provider: local  # best-supported option; use daytona for remote isolation
 ```
 
 Use `local` for development speed (agents run on your machine in separate worktrees). Use `daytona` for isolation (agents run in remote VMs).
@@ -70,9 +72,9 @@ Controls how agents run: which runtime, how many at once, and timeout limits.
 
 ```yaml
 agents:
-  runtime: pi               # pi or claude-code
-  max_concurrent: 4          # Max parallel agents
-  stagger_delay_ms: 1000     # Delay between agent spawns
+  runtime: pi               # best-supported runtime; claude-code also available
+  max_concurrent: 8          # Max parallel agents
+  stagger_delay_ms: 500      # Delay between agent spawns
   timeouts:
     default:
       max_duration_minutes: 30
@@ -89,21 +91,7 @@ Timeouts prevent agents from running forever. `max_duration_minutes` is total wa
 
 ### Runtime Auth
 
-Controls how credentials get from Tack into the running agent:
-
-```yaml
-runtime_auth:
-  mode: tack           # tack or native
-  runtime: pi
-  provider: anthropic
-  method: api_key
-  credential_ref: anthropic
-```
-
-- `mode: tack` — Tack manages credentials and injects them into sandboxes
-- `mode: native` — the runtime uses its own auth (e.g., your `ANTHROPIC_API_KEY` env var)
-
-Native mode only works with local sandboxes. Remote sandboxes need Tack mode so credentials can be injected.
+Controls how credentials get from Tack into the running agent. Two modes: **tack** (Tack manages and injects credentials) and **native** (the runtime uses your local environment). See [Credentials & Auth](/docs/guides/credentials) for the full setup.
 
 ### Models
 
@@ -111,10 +99,10 @@ Which LLM models to use for different purposes:
 
 ```yaml
 models:
-  default: claude-opus-4-1
-  agent: claude-opus-4-1
-  planner: claude-opus-4-1
-  small_tasks: claude-sonnet-4-6
+  default: gpt-5.4
+  agent: gpt-5.4
+  planner: gpt-5.4
+  small_tasks: gpt-5.4-mini
 ```
 
 - `default` — fallback for any role not explicitly set
@@ -174,7 +162,7 @@ git:
 ### Interactive
 
 ```bash
-tack config set models.default claude-opus-4-1
+tack config set models.default gpt-5.4
 tack config set sandbox.provider local
 tack config remove sandbox.daytona.snapshot
 ```

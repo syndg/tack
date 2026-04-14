@@ -13,19 +13,15 @@ The daemon is machine-wide and reads the user config layer. Open a new terminal 
 
 ## Submit an Objective
 
-```bash
-tack plan "Refactor the auth module to use JWT"
-```
-
-Tack creates an objective for the current registered project and starts the run. Under the default `standard` blueprint, the planner explores the codebase and decomposes the objective into streams with file scopes and dependencies.
-
-For your first objective, start with something small and scoped:
+Start with something small and scoped:
 
 ```bash
 tack plan "Add a health check endpoint at GET /health that returns 200 OK"
 ```
 
 This is a good first objective because it is small enough to complete quickly, specific about what to build, and easy to verify.
+
+Tack creates an objective for the current registered project and starts the run. Discovery explores the codebase, the planner decomposes the objective into streams with file scopes and dependencies, and presents the plan for your review.
 
 ## Review the Plan
 
@@ -104,7 +100,7 @@ tack mail <agent-name>                       # See what the agent needs
 tack mail send <agent-name> "Hint" "Try..." --objective <id>
 ```
 
-See [Recovery & Retries](/docs/guides/recovery) for the full recovery workflow.
+See [Recovery & Retries](/docs/concepts/recovery) for the full recovery workflow.
 
 ## Choose a Blueprint Explicitly
 
@@ -114,7 +110,7 @@ If you want a non-default workflow, pick a blueprint by `id`:
 tack plan "Fix the typo in the README" --blueprint standard
 ```
 
-Blueprint IDs are project-scoped and resolved from the current registry. See [Blueprints](/docs/concepts/blueprints) for how blueprints work.
+Blueprint IDs are resolved from the loaded blueprint registry, including shipped defaults plus any user or project overrides. See [Blueprints](/docs/concepts/blueprints) for how blueprints work.
 
 ## Common Issues
 

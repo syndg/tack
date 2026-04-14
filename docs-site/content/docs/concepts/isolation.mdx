@@ -23,7 +23,7 @@ Each agent works in its own isolated sandbox. Agents never see each other's chan
 
 ### When to Use Local
 
-Local sandboxes use git worktrees on your machine. They are fast because there is no network overhead, no VM startup, and files use copy-on-write where available.
+Local sandboxes use git worktrees (separate checkouts of the same repository, each on its own branch) to isolate agents. They are fast because there is no network overhead, no VM startup, and files use copy-on-write where available.
 
 Use local when:
 - You are developing and iterating quickly

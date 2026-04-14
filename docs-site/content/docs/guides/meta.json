@@ -1,4 +1,4 @@
 {
   "title": "Guides",
-  "pages": ["rules", "writing-objectives", "custom-blueprints", "daytona", "recovery", "credentials", "observability", "troubleshooting"]
+  "pages": ["writing-objectives", "rules", "custom-blueprints", "credentials", "daytona", "observability", "troubleshooting"]
 }

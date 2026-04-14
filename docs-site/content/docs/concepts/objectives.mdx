@@ -18,7 +18,7 @@ The default workflow:
 objective created → discovery runs → dossier produced → planner runs → plan ready → human approval → execution → merge → PR
 ```
 
-Before planning, Tack runs a discovery step that explores the codebase and produces a context dossier with cited references and suggested seams. The planner consumes this dossier to produce better decompositions.
+Before planning, Tack runs a discovery step that explores the codebase and produces a [context dossier](/docs/concepts/discovery) with cited references and suggested seams. The planner consumes this dossier to produce better decompositions.
 
 See [Writing Good Objectives](/docs/guides/writing-objectives) for patterns and examples that produce better plans.
 
@@ -27,11 +27,11 @@ See [Writing Good Objectives](/docs/guides/writing-objectives) for patterns and 
 When you submit an objective, Tack first runs discovery to produce a context dossier, then spawns a planner agent. The planner:
 
 1. **Consumes the dossier** — cited repo context and suggested seams from discovery
-2. **Explores your codebase** to validate and supplement the dossier findings
-2. **Identifies what needs to change** to fulfill the objective
-3. **Decomposes the objective** into independent streams that can run in parallel
-4. **Assigns file scopes** — glob patterns defining which files each stream can modify
-5. **Sets dependencies** — ordering constraints between streams when changes must happen sequentially
+2. **Uses the dossier as its source of truth** and requests dossier expansion when the current context is insufficient
+3. **Identifies what needs to change** to fulfill the objective
+4. **Decomposes the objective** into independent streams that can run in parallel
+5. **Assigns file scopes** — glob patterns defining which files each stream can modify
+6. **Sets dependencies** — ordering constraints between streams when changes must happen sequentially
 
 The planner outputs a structured plan that Tack validates and presents for your review.
 

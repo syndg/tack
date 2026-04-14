@@ -3,11 +3,7 @@ title: Introduction
 description: One objective in. Reviewed, tested, merged code out.
 ---
 
-Tack is an open-source harness for deterministic, repository-aware agentic code execution. It is not just another agent orchestrator. You describe what you want built, and Tack turns that objective into a bounded workflow: planning, isolated execution, deterministic checks, recovery, merge, and PR creation.
-
-You go from being the developer to being the team lead.
-
-The agents are workers. Tack is the programmable harness around them.
+Tack turns a natural-language objective into a reviewed, tested, merged pull request. You describe what you want built. Tack handles the rest: planning, parallel execution, quality gates, recovery, merge, and PR creation.
 
 ```bash
 $ tack plan "Add pagination to all list endpoints and a PATCH /expenses/:id endpoint"
@@ -23,53 +19,52 @@ Plan approved. Execution will begin.
 Objective completed. PR created: github.com/you/project/pull/42
 ```
 
+## Quick Start
+
+```bash
+git clone https://github.com/syndg/tack.git && cd tack && go build -o tack ./cmd/tack/
+cd your-project
+tack daemon &  # background the daemon
+tack init
+tack plan "Add a health check endpoint at GET /health"
+```
+
+See the [getting started guide](/docs/getting-started) for the full walkthrough.
+
+## How It Works
+
+```
+Objective → Discovery → Plan → Approval → Parallel Agents → Merge → PR
+```
+
+1. You submit an objective
+2. Tack explores your codebase and produces a context summary
+3. A planner decomposes the objective into parallel work streams
+4. You review and approve the plan
+5. Agents build, test, and review each stream in isolated worktrees
+6. Tack merges everything and creates a PR
+
+Each step is either **deterministic** (quality gates, merge, scheduling) or **agentic** (discovery, planning, building, reviewing). [Blueprints](/docs/concepts/blueprints) (YAML workflow definitions) control which is which.
+
+See [How It Works](/docs/concepts) for the full pipeline diagram.
+
 ## Why Tack
 
-**The harness matters more than the model.** Tack treats the model as a worker and the harness as the product: blueprints, scoped rules, quality gates, merge policy, isolation, escalation, and observability are deterministic infrastructure you control.
+The harness matters more than the model. Everything in Tack that isn't an LLM decision is deterministic infrastructure you control: blueprints, quality gates, scoped rules, file scope enforcement, merge ordering, recovery policy. The LLM is the worker. Tack is the harness.
 
-Everything in Tack that isn't an LLM decision is deterministic infrastructure: the blueprint engine, quality gates, merge queue, scoped rules, file scope enforcement, timeout management. The LLM is the horse. Tack is the equipment.
+Tack solves six real problems:
 
-Tack is trying to make repositories legible to agents and make agent execution reliable through infrastructure, not vibes.
-
-## Current Shape
-
-- **Daemon-first.** `tack daemon` is a machine-wide service.
-- **Project-scoped.** Each repo gets a stable `project_id`, local `.tack/` config, rules, and blueprints.
-- **Context-engineered.** Discovery produces cited dossiers before planning. Contract patches and codification candidates accumulate during execution.
-- **Blueprint-driven.** Workflow steps are explicit YAML state machines, not hidden prompts.
-- **Isolation-first.** Agents run in separate worktrees or remote sandboxes.
-- **Deterministic where it matters.** Quality gates, merge ordering, scoped rules, and retries are infrastructure concerns.
-- **Recovery-aware.** Gate failures, reviewer rejection, and restart recovery are first-class parts of the workflow.
-
-## Recovery Model
-
-Tack records recovery attempts durably and uses them to drive reruns.
-
-- Quality gate failures rerun the builder with gate output attached
-- Reviewer rejection reruns the builder with reviewer feedback attached
-- Transient runtime failures retry the same step in place
-- Exhausted retries can block for human guidance instead of failing permanently
-- Human-guided retries survive daemon restarts and resume from the correct point
-
-## What Exists Today
-
-- machine-wide daemon with project-scoped execution
-- discovery and context dossiers before planning
-- dossier-driven planning with contract patches and codification candidates
-- explicit blueprints, isolated sandboxes, and deterministic quality gates
-- planner -> approval -> build/review -> merge flow
-- recovery-aware execution with watch/log/mail surfaces
-- benchmark-driven evaluation against real open-source projects
-
-## Where Tack Is Going
-
-Tack's next focus is **harness hardening** and **operator experience** — better inspectability, richer validation modes, and cross-objective learning. The goal is not more workers. It is making the harness more reliable and the results more visible.
+- **Objectives are underspecified** — Tack explores your codebase before planning
+- **Planning is serial** — Tack decomposes into parallel streams automatically
+- **Execution is uncoordinated** — agents run in isolated worktrees with scoped file access
+- **You must be present** — `tack daemon` runs in the background; you review results
+- **Failures stall progress** — quality-gate and review failures trigger automatic recovery
+- **Merging is manual** — Tack integrates branches with tiered conflict resolution
 
 ## What Tack Is Not
 
-- **Not just another agent orchestrator.** Spawning workers is table stakes. The differentiator is the harness around them.
-- **Not an agent framework.** Pi and Claude Code do the thinking. Tack shapes the workflow around them.
+- **Not an agent framework.** [Pi](https://github.com/anthropics/pi) and Claude Code do the thinking. Tack shapes the workflow around them.
 - **Not a sandbox provider.** Local worktrees, Daytona, Docker provide isolation. Tack manages their lifecycle.
 - **Not an IDE.** Agents edit code. You review their work.
 - **Not a CI system.** Tack runs quality gates locally in sandboxes. CI is your existing pipeline.
-- **Not locked to any model.** Bring your own runtime, provider, and model.
+- **Not locked to any model.** Choose your runtime, provider, and model.

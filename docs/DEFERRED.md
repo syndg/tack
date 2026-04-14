@@ -24,7 +24,6 @@ For current product behavior, start with `docs-site/content/docs/` and `docs/REA
 
 ### Config defaults drift from design doc
 - **Details:** Several `internal/config/config.go` defaults diverge from design doc:
-  - `Agents.Runtime` is `"claude-code"` (design doc says Pi)
   - `Planning.DefaultMode` is `"collaborative"` (design doc uses `"interactive"` / `"auto"`)
   - `Tools.MaxPerAgent` is `20` (design doc says `15`)
   - `QualityGates` defaults are `["lint", "test", "build"]` (design doc uses bun commands)

@@ -12,7 +12,7 @@ A stream is a unit of parallel work within a plan. Each stream has:
 - **File scope** — glob patterns defining which files the stream can modify
 - **Dependencies** — other streams that must complete before this one starts
 
-Streams are the operator-facing execution unit. Each stream carries a persisted execution contract derived from discovery and dossier findings, with contract patches that accumulate as the objective progresses.
+Streams are the operator-facing execution unit. Each stream carries a task description derived from the discovery dossier. When a builder or reviewer encounters issues, Tack adjusts guidance for subsequent retry attempts within the same objective.
 
 ## Parallel Execution
 
@@ -58,3 +58,10 @@ pending → executing → completed → merge_ready → merging → merged
                   ↘                                        ↗
                   failed ──────────── (retry) ── pending ─┘
 ```
+
+## See Also
+
+- [Quality Gates](/docs/concepts/quality-gates) — how gate failures are attributed to streams
+- [Recovery & Retries](/docs/concepts/recovery) — what happens when a stream fails
+- [Merge Queue](/docs/concepts/merge-queue) — how merged streams are integrated
+- [Isolation & Sandboxes](/docs/concepts/isolation) — how streams are isolated from each other

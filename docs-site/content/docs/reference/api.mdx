@@ -3,7 +3,7 @@ title: HTTP API
 description: REST API reference for the Tack daemon.
 ---
 
-The daemon exposes a REST API on the configured listen address (default `0.0.0.0:9800`).
+The daemon exposes a REST API on the configured listen address (default `127.0.0.1:9800`).
 
 ## Project Targeting
 
@@ -45,6 +45,8 @@ If exactly one project is registered, Tack can infer the target. Otherwise the r
 | `POST` | `/objectives` | Create a new objective |
 | `GET` | `/objectives` | List all objectives |
 | `GET` | `/objectives/:id` | Get objective by ID |
+| `GET` | `/objectives/:id/dossier` | Get the discovery dossier for an objective |
+| `PUT` | `/objectives/:id/dossier` | Update the dossier for an objective |
 | `GET` | `/objectives/:id/plan` | Get plan for objective |
 | `POST` | `/objectives/:id/execute` | Trigger execution |
 | `GET` | `/objectives/:id/run` | Get the latest run snapshot for the objective |

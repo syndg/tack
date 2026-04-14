@@ -190,7 +190,7 @@ type initWizardResult struct {
 }
 
 func runInitWizard(ctx context.Context, store *credentials.Store) (initWizardResult, error) {
-	var result initWizardResult
+	result := initWizardResult{Runtime: "pi", SandboxProvider: "local"}
 	if err := huh.NewSelect[string]().
 		Title("Setup mode").
 		Options(

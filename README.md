@@ -42,11 +42,10 @@ Tack solves six problems:
 git clone https://github.com/syndg/tack.git
 cd tack && go build -o tack ./cmd/tack/
 
-# Initialize a project
-cd your-project && tack init
-
-# Start the daemon (separate terminal)
-tack daemon
+# Start the daemon, then initialize a project
+cd your-project
+tack daemon &
+tack init
 
 # Submit an objective
 tack plan "Add a health check endpoint at GET /health that returns 200 OK"
@@ -99,9 +98,11 @@ Each step is either **deterministic** (quality gates, merge, scheduling, recover
 |------|-------------|
 | **Discovery** | Explores the codebase, produces a cited context dossier for the objective |
 | **Planner** | Consumes the dossier, decomposes the objective into parallel streams with file scopes |
+| **Scout** | Optional pre-build investigation of specific files or patterns |
 | **Builder** | Implements a stream's task in an isolated worktree |
 | **Reviewer** | Reviews the implementation for correctness and quality |
-| **Merger** | Integrates stream branches, runs post-merge quality gates |
+
+The merge processor (integrating stream branches and running post-merge quality gates) is a deterministic step, not an agent role.
 
 ### Isolation Model
 
@@ -115,7 +116,7 @@ Each agent works in its own git worktree. File scope is enforced. Agents never s
 
 Discovery runs before planning. It produces a context dossier with cited repo context and suggested seams. The planner consumes that dossier to create better decompositions. When the dossier is insufficient, the planner can request expansion.
 
-During execution, contract failures are typed and drive local repair. Repeated insights derive contract patches that are auto-applied within the objective. Codification candidates accumulate for later review.
+During execution, quality-gate and review failures are typed and drive automatic repair. When a builder or reviewer identifies a recurring issue, Tack captures that insight and uses it to adjust guidance for subsequent attempts within the same objective.
 
 ### File-Attribution Quality Gates
 
@@ -241,6 +242,7 @@ See the [full security audit](docs/security-audit-2026-04-10.md) for details.
 | `tack show <plan-id>` | Show plan details with streams |
 | `tack approve <plan-id>` | Approve a plan for execution |
 | `tack reject <plan-id>` | Reject a plan |
+| `tack exec <objective-id>` | Manually trigger execution |
 | `tack status` | Show daemon status |
 | `tack agents` | List active agent sessions |
 | `tack watch` | Live stream of agent activity |

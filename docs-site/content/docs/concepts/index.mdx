@@ -11,7 +11,7 @@ Tack takes an objective (a description of what you want built), plans how to bre
 Objective
     │
     ▼
-  Discovery ──► Context Dossier (cited repo context, suggested seams)
+  Discovery ──► Context [Dossier](/docs/concepts/discovery) (cited repo context, suggested seams)
     │
     ▼
   Planner ──► Plan (streams, file scopes, dependencies)
@@ -46,11 +46,13 @@ The key insight: Tack's product surface is the deterministic harness around the 
 
 | Role | What it does | When It Runs |
 |------|-------------|-------------|
-| **Discovery** | Explores the codebase, produces a cited context dossier with suggested seams | First, before planning |
+| **Discovery** | Explores the codebase, produces a cited context dossier | First, before planning — see [Discovery & Dossiers](/docs/concepts/discovery) |
 | **Planner** | Consumes the dossier, decomposes the objective into parallel streams with file scopes and dependencies | After discovery |
+| **Scout** | Optional pre-build investigation of specific files or patterns | Before builder, if the blueprint includes it |
 | **Builder** | Implements the stream's task in an isolated sandbox, commits changes | After plan approval |
 | **Reviewer** | Reviews the implementation for correctness and quality | After builder passes quality gates |
-| **Merger** | Integrates ready streams and runs post-merge checks | After streams signal merge_ready |
+
+The merge processor is a deterministic step, not an agent. It integrates ready streams and runs post-merge checks. See [Merge Queue](/docs/concepts/merge-queue).
 
 ## Key Principles
 

@@ -16,7 +16,7 @@ Tack does not implement its own AI agent. It orchestrates existing agent runtime
 
 ### Pi
 
-Pi is an open-source agent runtime maintained by Anthropic. It supports bidirectional JSON-RPC communication, which lets Tack enforce file scope boundaries at the tool level and exchange structured messages in real time.
+Pi is an [open-source agent runtime](https://github.com/anthropics/pi) maintained by Anthropic. It supports bidirectional JSON-RPC communication, which lets Tack enforce file scope boundaries at the tool level and exchange structured messages in real time.
 
 **Use Pi when:**
 - You want deterministic file scope enforcement (agents physically cannot edit files outside their scope)
@@ -37,8 +37,8 @@ Pi is an open-source agent runtime maintained by Anthropic. It supports bidirect
 agents:
   runtime: pi
   pi:
-    provider: anthropic
-    model: claude-opus-4-1
+    provider: openai-codex
+    model: gpt-5.4
     thinking_level: medium
 ```
 
@@ -68,35 +68,14 @@ runtime_auth:
   runtime: claude-code
 ```
 
-## Authentication Modes
+## Authentication
 
 Every runtime needs to authenticate with an LLM provider. Tack supports two modes:
 
-### Native Mode
+- **Native mode** — the runtime uses your local environment (e.g., `ANTHROPIC_API_KEY`). Works with local sandboxes only.
+- **Tack mode** — Tack manages credentials and injects them into the sandbox. Required for remote sandboxes.
 
-The runtime uses its own built-in authentication. You configure credentials directly with the runtime (e.g., `ANTHROPIC_API_KEY` in your environment). Tack does not manage or inject credentials.
-
-```yaml
-runtime_auth:
-  mode: native
-```
-
-Native mode works best with local sandboxes where the runtime can read your environment directly. It does not work with remote sandboxes like Daytona because the sandbox does not have access to your local environment.
-
-### Tack Mode
-
-Tack manages credentials and injects them into the sandbox before the agent starts. This is required for remote sandboxes and useful when you want Tack to be the single source of truth for all credentials.
-
-```yaml
-runtime_auth:
-  mode: tack
-  runtime: pi
-  provider: anthropic
-  method: api_key
-  credential_ref: anthropic
-```
-
-With Tack mode, credentials are stored in `~/.config/tack/credentials.yaml` and managed through `tack auth`. See the [Credentials & Auth guide](/docs/guides/credentials) for details.
+See [Credentials & Auth](/docs/guides/credentials) for the full authentication setup, credential formats, and multi-provider configuration.
 
 ## Setting Up During Init
 

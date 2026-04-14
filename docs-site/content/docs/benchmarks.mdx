@@ -49,8 +49,8 @@ The harness self-healed through 4 reviewer rejections and 1 gate failure without
 
 ## What This Proves
 
-- **First-pass success is achievable** — benchmark 2 had zero recovery events
-- **Self-healing works** — benchmark 1 recovered from 5 failures automatically
+- **First-pass success is achievable** — the command-log benchmark had zero recovery events
+- **Self-healing works** — the undo benchmark recovered from 5 failures automatically
 - **Zero human intervention across both benchmarks** — the harness handled everything
 - **Real validation, not vibes** — integration tests confirm merged code actually works
 
@@ -60,3 +60,9 @@ The harness self-healed through 4 reviewer rejections and 1 gate failure without
 - Quality gates and validation commands are defined per benchmark
 - Benchmark reports are generated artifacts, not manually written summaries
 - The benchmark runner is part of Tack's codebase (`internal/benchmark/`)
+
+## Learn More
+
+- [How It Works](/docs/concepts) — the full pipeline from objective to PR
+- [Quality Gates](/docs/concepts/quality-gates) — how gates validate agent output
+- [Recovery & Retries](/docs/concepts/recovery) — how the harness self-heals

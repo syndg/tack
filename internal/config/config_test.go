@@ -15,6 +15,9 @@ func TestLoadMissingReturnsDefault(t *testing.T) {
 	if cfg.Daemon.Listen != "127.0.0.1:9800" {
 		t.Fatalf("unexpected default listen: %q", cfg.Daemon.Listen)
 	}
+	if cfg.Sandbox.Provider != "local" {
+		t.Fatalf("unexpected default sandbox provider: %q", cfg.Sandbox.Provider)
+	}
 }
 
 func TestLoadFileMergesWithDefaults(t *testing.T) {
@@ -35,7 +38,7 @@ func TestLoadFileMergesWithDefaults(t *testing.T) {
 	if cfg.Planning.Model != "custom-model" {
 		t.Fatalf("unexpected model: %q", cfg.Planning.Model)
 	}
-	if cfg.Agents.Runtime != "claude-code" {
+	if cfg.Agents.Runtime != "pi" {
 		t.Fatalf("expected default runtime to remain, got %q", cfg.Agents.Runtime)
 	}
 }

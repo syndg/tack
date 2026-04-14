@@ -1,0 +1,71 @@
+---
+title: Discovery & Dossiers
+description: How Tack explores your codebase before planning.
+---
+
+Before the planner decomposes an objective, Tack runs a discovery step that explores your codebase and produces a context dossier. The planner uses this dossier to create better decompositions.
+
+## What Discovery Does
+
+When you submit an objective, Tack:
+
+1. **Scans your repository** using deterministic keyword retrieval from the objective text
+2. **Finds relevant files** — source files, tests, configs, and docs that relate to the objective
+3. **Identifies similar patterns** — existing code that already does something like what the objective asks for
+4. **Detects risks and unknowns** — areas where the objective may conflict with existing behavior or where more information is needed
+5. **Suggests seams** — natural boundaries in the codebase (the lines between cohesive modules) where changes should be concentrated
+
+All of this goes into a **context dossier** for the objective.
+
+## What a Dossier Contains
+
+| Field | What It Holds |
+|-------|--------------|
+| **Summary** | A concise description of what the objective requires in context of the codebase |
+| **Relevant files** | File paths with reasons why each file matters to the objective |
+| **Similar patterns** | Existing code that the objective can learn from or should be consistent with |
+| **Risks** | Potential conflicts, breaking changes, or tricky areas |
+| **Unknowns** | Questions that the planner or builder may need to resolve |
+| **Suggested seams** | Natural module boundaries where work should be concentrated |
+| **Citations** | Specific line-range references into the codebase |
+
+## How the Planner Uses the Dossier
+
+The planner consumes the dossier instead of exploring the codebase from scratch. This means:
+
+- **Better decomposition** — the planner sees file structure, existing patterns, and risks before choosing streams
+- **Smaller context packets** — each builder receives a focused scope derived from dossier findings, not the entire codebase
+- **Fewer surprises** — risks and unknowns surface early, not during execution
+
+If the dossier is insufficient, the planner can request an expansion. The discovery service then does a deeper search for the specific areas the planner identified as weak.
+
+## Viewing and Editing Dossiers
+
+Dossiers are accessible via the HTTP API (all daemon routes require the bearer token from `~/.config/tack/daemon-token`):
+
+```bash
+# View an objective's dossier
+curl -H "Authorization: Bearer $(cat ~/.config/tack/daemon-token)" \
+  http://127.0.0.1:9800/objectives/{objective-id}/dossier
+
+# Edit a dossier to steer planning
+curl -X PUT -H "Authorization: Bearer $(cat ~/.config/tack/daemon-token)" \
+  http://127.0.0.1:9800/objectives/{objective-id}/dossier \
+  -d '{"summary": "Updated summary", "risks": ["custom risk"]}'
+```
+
+Editing the dossier lets you steer the planner. In practice, this is most useful before plan approval. Add files the discovery missed, flag risks, or clarify scope.
+
+## When Discovery Runs
+
+Discovery runs automatically when you submit an objective, before the planner. You don't need to trigger it separately. The lifecycle is:
+
+```
+Objective created → Discovery runs → Dossier produced → Planner consumes dossier → Plan ready
+```
+
+## See Also
+
+- [Objectives & Planning](/docs/concepts/objectives) — how the planner uses the dossier
+- [Streams](/docs/concepts/streams) — how dossier findings become scoped work items
+- [HTTP API](/docs/reference/api) — dossier endpoints in the API reference

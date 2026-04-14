@@ -86,12 +86,12 @@ agents:
 
 ## SSE Events
 
-The daemon exposes a Server-Sent Events endpoint for real-time integration:
+The daemon exposes a Server-Sent Events (SSE) endpoint for real-time integration:
 
 ```
 GET /events
 ```
 
-Project-aware clients should also send `X-Tack-Project-ID` when targeting a specific registered repo.
+Project-aware clients should also send `X-Tack-Project-ID` when targeting a specific registered repo. See the [HTTP API reference](/docs/reference/api) for full endpoint details.
 
 Events include agent activity, status changes, recovery attempts, blocked recovery, resumed recovery, merge completions, and escalations.
