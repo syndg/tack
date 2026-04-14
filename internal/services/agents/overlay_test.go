@@ -309,10 +309,32 @@ func TestBuildOverlay_IncludesObjectiveInsights(t *testing.T) {
 	}
 
 	result := BuildOverlay(input)
-	for _, want := range []string{"## Objective Insights", "[reviewer/review_rejection] Reviewer requested regression coverage", "Detail: Add coverage for the error path before merge."} {
+	for _, want := range []string{"## Contract Patches", "Preserve this previously rejected requirement: Reviewer requested regression coverage", "Rationale: Add coverage for the error path before merge.", "## Objective Insights", "[reviewer/review_rejection] Reviewer requested regression coverage", "Detail: Add coverage for the error path before merge."} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("overlay missing %q\n%s", want, result)
 		}
+	}
+}
+
+func TestDeriveContractPatches_FiltersOtherStreamsAndDeduplicates(t *testing.T) {
+	stream := &domain.Stream{ID: "stream-1", Title: "auth stream"}
+	patches := deriveContractPatches([]domain.ObjectiveInsight{
+		{StreamID: "stream-1", Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "Add regression coverage", Detail: "Add regression coverage for auth expiry."},
+		{StreamID: "stream-2", Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "Other stream finding", Detail: "Ignore me."},
+		{Source: domain.InsightSourceHuman, Kind: domain.InsightKindRetryGuidance, Summary: "Keep API stable"},
+		{Source: domain.InsightSourceHuman, Kind: domain.InsightKindRetryGuidance, Summary: "Keep API stable"},
+	}, stream)
+	if len(patches) != 2 {
+		t.Fatalf("patch count = %d, want 2: %#v", len(patches), patches)
+	}
+	if !strings.Contains(patches[0].Instruction, "Add regression coverage") {
+		t.Fatalf("patch[0] = %+v", patches[0])
+	}
+	if !strings.Contains(patches[0].Detail, "auth expiry") {
+		t.Fatalf("patch[0] detail = %+v", patches[0])
+	}
+	if !strings.Contains(patches[1].Instruction, "Keep API stable") {
+		t.Fatalf("patch[1] = %+v", patches[1])
 	}
 }
 
@@ -330,6 +352,8 @@ func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 		"## Objective",
 		"## Dossier Summary",
 		"## Dossier Citations",
+		"## Contract Patches",
+		"Honor this explicit human retry guidance: Keep auth compatibility stable",
 		"## Objective Insights",
 		"## Relevant Files",
 		"## Suggested Seams",

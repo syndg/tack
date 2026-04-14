@@ -8,19 +8,19 @@ For current product behavior, start with `docs-site/content/docs/` and `docs/REA
 
 ## From Phase 1 (Foundation)
 
-### Daytona sandbox provider implementation
+### Daytona sandbox provider hardening
 - **Original scope:** Design doc Phase 1 — "Sandbox provider interface + Daytona implementation"
-- **What exists:** `internal/sandbox/provider.go`, `internal/sandbox/types.go` (interfaces only)
-- **What's missing:** `internal/sandbox/daytona/` (concrete provider that talks to Daytona API)
-- **Deferred to:** Phase 4 (Execution) — needed when agents actually spawn in sandboxes
-- **Reason:** No Phase 2 or 3 code exercises a real sandbox. The interface is sufficient until execution.
+- **What exists:** Concrete Daytona provider code now lives under `internal/sandbox/daytona/` and is part of the current sandbox matrix.
+- **What's missing:** Broader production hardening, integration coverage, and clearer operational defaults now that both local and Daytona execution paths exist.
+- **Deferred to:** Future execution hardening work
+- **Reason:** The provider exists, so the remaining work is no longer basic implementation; it is operational hardening.
 
-### Pi runtime implementation
+### Pi runtime hardening
 - **Original scope:** Design doc Phase 1 — "Agent runtime interface + Pi implementation"
-- **What exists:** `internal/runtime/runtime.go` (interfaces only)
-- **What's missing:** `internal/runtime/pi/` (Pi runtime, RPC client, hook definitions)
-- **Deferred to:** Phase 4 (Execution) — needed when agents are actually spawned
-- **Reason:** Same as above. The interface is sufficient for harness and planning phases.
+- **What exists:** Concrete Pi runtime code now lives under `internal/runtime/pi/` and is used by current benchmark and execution flows.
+- **What's missing:** Further runtime hardening, default alignment, and any remaining ergonomics work now that Pi is a real execution path rather than an interface placeholder.
+- **Deferred to:** Future runtime hardening work
+- **Reason:** The implementation exists. Remaining work is quality-of-life and operational maturity, not initial bring-up.
 
 ### Config defaults drift from design doc
 - **Details:** Several `internal/config/config.go` defaults diverge from design doc:
@@ -98,9 +98,9 @@ _(none yet)_
 
 ## Cross-Cutting Future Work
 
-### Feature resurrection benchmark for context-engineering evaluation
+### Benchmark/report productization after feature-resurrection rollout
 - **Original scope:** New evaluation work driven by the harness-first / context-engineering direction
-- **What exists:** Current public docs already position Tack around repo-aware execution, recovery, and upcoming discovery/context-dossier work. A draft benchmark note lives at `docs/plans/2026-04-09-feature-resurrection-benchmark-design.md`.
-- **What's missing:** A canonical benchmark case, scoring rubric, and a repeatable run flow that exercises discovery, planning, execution, review, and merge end to end.
-- **Deferred to:** After the next round of core context-gathering work starts landing, with a thin manual benchmark likely before full automation.
-- **Reason:** Tack's current context flow is not strong enough yet for a fair automated benchmark, but the idea is important enough to capture now because it should shape future discovery and dossier design.
+- **What exists:** Built-in benchmark specs, hardness freezing, end-to-end benchmark reports, and completed reruns for the lazygit command-log and undo resurrection cases. The benchmark design notes live under `docs/plans/2026-04-09-feature-resurrection-benchmark-design.md` and `docs/plans/2026-04-11-lazygit-benchmark-v1-design.md`.
+- **What's missing:** Richer report surfaces, more benchmark families, structured validation modes beyond raw shell strings, and stronger operator-facing summaries of dossiers, stream cards, and insights.
+- **Deferred to:** Follow-on benchmark productization work after the core context-engineering rollout
+- **Reason:** The benchmark foundation now exists. The remaining work is expanding coverage and improving reporting, not establishing the first benchmark flow.

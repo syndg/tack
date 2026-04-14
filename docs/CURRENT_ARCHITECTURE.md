@@ -9,8 +9,8 @@ For the public product story, start with `docs-site/content/docs/`. For implemen
 Tack is a machine-wide daemon with project-scoped execution.
 
 - The daemon boots shared infrastructure once: DB, event bus, credential store, observability recorder, mail broker, and HTTP routes.
-- Each registered repository gets a lazily loaded `ProjectContext` with its own config, blueprints, rules, sandbox provider, planning service, merge processor, and runs service.
-- The core execution model is objective -> plan -> approval -> per-stream execution -> merge -> PR.
+- Each registered repository gets a lazily loaded `ProjectContext` with its own config, blueprints, rules, sandbox provider, discovery service, planning service, merge processor, and runs service.
+- The core execution model is objective -> discovery/dossier -> dossier-driven plan -> approval -> per-stream execution -> merge -> PR.
 
 This maps directly to the code:
 
@@ -43,19 +43,20 @@ Key code:
 - quality gates: `internal/harness/gates/`
 - tool curation: `internal/harness/tools/`
 
-### 3. Planning and Objective Lifecycle
+### 3. Discovery, Planning, and Objective Lifecycle
 
-Objectives and plans are persisted in the DB. Planning currently lives in the planner service and produces streams with scopes and dependencies. The future discovery/dossier layer described in the docs site is not implemented yet as a separate first-class stage.
+Objectives, dossiers, plans, and streams are persisted in the DB. Every objective now runs through a first-class discovery stage before planning. Discovery produces an objective-local dossier with cited repo context and suggested seams. Planning consumes that dossier, emits persisted stream cards, and can request dossier expansion when context is insufficient.
 
 Key code:
 
+- discovery service: `internal/services/discovery/`
 - planning service: `internal/services/planner/`
 - lifecycle manager: `internal/services/lifecycle/manager.go`
-- objective, plan, and stream routes: `internal/daemon/routes_objectives.go`, `internal/daemon/routes_plans.go`
+- objective, dossier, plan, and stream routes: `internal/daemon/routes_objectives.go`, `internal/daemon/routes_dossiers.go`, `internal/daemon/routes_plans.go`
 
 ### 4. Execution, Recovery, and Scheduling
 
-Approved work is driven by the runs and dispatch services. The coordinator advances blueprint executions, schedules streams, spawns agents, applies retry policy, and records recovery attempts.
+Approved work is driven by the runs and dispatch services. The coordinator advances blueprint executions, schedules streams, spawns agents, applies retry policy, records recovery attempts, and routes typed contract failures such as `contract_gap` and `contract_blocked`.
 
 Key code:
 
@@ -100,7 +101,9 @@ Important stores:
 - objectives: `objectives.go`
 - plans and streams: `plans.go`, `streams.go`
 - runs and executions: `runs.go`
+- dossiers: `dossiers.go`
 - attempts / recovery ledger: `attempts.go`
+- objective insights: `objective_insights.go`
 - merge queue: `merge_queue.go`
 - events: `events.go`
 - mail: `mail.go`
@@ -111,6 +114,11 @@ Current, code-backed:
 
 - daemon-first multi-project architecture
 - project-scoped config and registration
+- discovery seam and persisted dossiers
+- dossier-driven planning and dossier expansion
+- persisted stream cards and contract-driven overlays
+- typed contract failures with local stream repair
+- objective-local insight logging
 - blueprint-driven execution
 - isolated sandboxes/worktrees
 - planner/build/review flow
@@ -121,9 +129,8 @@ Current, code-backed:
 
 Future direction, not yet first-class in code:
 
-- explicit discovery stage before planning
-- compact context dossiers
-- bounded execution contracts derived from discovery
-- stronger benchmark-driven context evaluation
+- derived contract-patch compilation that materially rewrites contracts rather than only strengthening overlays
+- codification candidates and reviewable promotion of repeated objective-local learnings
+- richer benchmark/report evaluation surfaces and operator-facing artifact views
 
 When internal docs disagree with this file, trust the code paths above first and then update the docs.
