@@ -1,6 +1,11 @@
 package benchmark
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/syndg/tack/internal/domain"
+)
 
 type Spec struct {
 	ID            string
@@ -18,6 +23,16 @@ type Spec struct {
 	Prompt        string
 	Validation    string
 	Outstanding   []string
+	ExpectedPlan  *ExpectedPlan
+}
+
+type ExpectedPlan struct {
+	Streams []ExpectedStream
+}
+
+type ExpectedStream struct {
+	Title     string
+	BlockedBy []string
 }
 
 func BuiltInSpecs() []Spec {
@@ -58,6 +73,11 @@ func BuiltInSpecs() []Spec {
 			ContextPolicy: "repo-only-no-history",
 			Prompt:        "Add pageUp/pageDown/top/bottom keybindings to the focused command log panel. Follow lazygit's existing keybinding and extras panel conventions, keep the behavior scoped to the command log panel, and fit the current GUI structure without unrelated keybinding changes.",
 			Validation:    "go test ./pkg/gui/... -count=1",
+			ExpectedPlan: &ExpectedPlan{Streams: []ExpectedStream{
+				{Title: "Command log scroll mechanics"},
+				{Title: "Scoped command log keybindings and panel affordances", BlockedBy: []string{"Command log scroll mechanics"}},
+				{Title: "Regression coverage and keybinding reference sync", BlockedBy: []string{"Scoped command log keybindings and panel affordances"}},
+			}},
 		},
 	}
 }
@@ -74,6 +94,59 @@ func (s Spec) OutstandingText() string {
 		return "none"
 	}
 	return strings.Join(s.Outstanding, "; ")
+}
+
+func (s Spec) PromptForRun() string {
+	prompt := strings.TrimSpace(s.Prompt)
+	if s.ExpectedPlan == nil || len(s.ExpectedPlan.Streams) == 0 {
+		return prompt
+	}
+	var b strings.Builder
+	b.WriteString(prompt)
+	b.WriteString("\n\n")
+	b.WriteString("Use this exact benchmark decomposition to keep hardness frozen for comparison runs:\n")
+	b.WriteString("- Emit exactly these streams, in this order, with these exact titles.\n")
+	b.WriteString("- Preserve the same dependency chain via `blocked_by`.\n")
+	b.WriteString("- Do not collapse the proof/regression stream into docs or discoverability work.\n")
+	for i, stream := range s.ExpectedPlan.Streams {
+		fmt.Fprintf(&b, "%d. `%s`", i+1, stream.Title)
+		if len(stream.BlockedBy) > 0 {
+			fmt.Fprintf(&b, " blocked_by: %s", strings.Join(stream.BlockedBy, ", "))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (s Spec) ValidatePlanShape(streams []domain.Stream) error {
+	if s.ExpectedPlan == nil || len(s.ExpectedPlan.Streams) == 0 {
+		return nil
+	}
+	if len(streams) != len(s.ExpectedPlan.Streams) {
+		return fmt.Errorf("expected %d streams, got %d", len(s.ExpectedPlan.Streams), len(streams))
+	}
+	for i, expected := range s.ExpectedPlan.Streams {
+		actual := streams[i]
+		if actual.Title != expected.Title {
+			return fmt.Errorf("stream %d title mismatch: expected %q, got %q", i+1, expected.Title, actual.Title)
+		}
+		if !sameStrings(actual.EffectiveCard().BlockedBy, expected.BlockedBy) {
+			return fmt.Errorf("stream %q blocked_by mismatch: expected %q, got %q", expected.Title, expected.BlockedBy, actual.EffectiveCard().BlockedBy)
+		}
+	}
+	return nil
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func FindSpec(id string) (Spec, bool) {

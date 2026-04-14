@@ -56,7 +56,7 @@ func PrepareRun(id, requestedMode, blueprint string) (Run, bool) {
 		ReadinessSnapshot: spec.Readiness(),
 		Baseline:          spec.Baseline,
 		ContextPolicy:     spec.ContextPolicy,
-		PromptSnapshot:    spec.Prompt,
+		PromptSnapshot:    spec.PromptForRun(),
 		RequestedMode:     effectiveMode,
 		EffectiveMode:     effectiveMode,
 		Blueprint:         blueprint,

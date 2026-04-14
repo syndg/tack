@@ -89,9 +89,20 @@ func syncBenchmarkRun(cmd *cobra.Command, cfg *config.Config, run *benchmark.Run
 }
 
 func applyBenchmarkPlanQualityGates(ctx context.Context, c *client.Client, objectiveID string, qualityGates []string) error {
+	planResp, err := waitForBenchmarkPlan(ctx, c, objectiveID)
+	if err != nil {
+		return err
+	}
 	if len(qualityGates) == 0 {
 		return nil
 	}
+	if _, err := c.UpdatePlanQualityGates(ctx, planResp.Plan.ID, qualityGates); err != nil {
+		return fmt.Errorf("applying benchmark quality gates: %w", err)
+	}
+	return nil
+}
+
+func waitForBenchmarkPlan(ctx context.Context, c *client.Client, objectiveID string) (*client.PlanResponse, error) {
 	deadlineCtx, cancel := context.WithTimeout(ctx, benchmarkPlanQualityGateWait)
 	defer cancel()
 	ticker := time.NewTicker(benchmarkPlanQualityGatePollInterval)
@@ -99,17 +110,24 @@ func applyBenchmarkPlanQualityGates(ctx context.Context, c *client.Client, objec
 	for {
 		planResp, err := c.GetObjectivePlan(deadlineCtx, objectiveID)
 		if err == nil && planResp != nil && planResp.Plan.ID != "" {
-			if _, err := c.UpdatePlanQualityGates(deadlineCtx, planResp.Plan.ID, qualityGates); err != nil {
-				return fmt.Errorf("applying benchmark quality gates: %w", err)
-			}
-			return nil
+			return planResp, nil
 		}
 		select {
 		case <-deadlineCtx.Done():
-			return fmt.Errorf("waiting for benchmark plan to apply quality gates: %w", deadlineCtx.Err())
+			return nil, fmt.Errorf("waiting for benchmark plan: %w", deadlineCtx.Err())
 		case <-ticker.C:
 		}
 	}
+}
+
+func enforceBenchmarkPlanShape(spec benchmark.Spec, planResp *client.PlanResponse) error {
+	if planResp == nil {
+		return fmt.Errorf("benchmark plan missing")
+	}
+	if err := spec.ValidatePlanShape(planResp.Streams); err != nil {
+		return fmt.Errorf("benchmark plan shape mismatch: %w", err)
+	}
+	return nil
 }
 
 func defaultBenchmarkReportPath(run benchmark.Run) (string, error) {
@@ -319,6 +337,13 @@ var benchmarkExecuteCmd = &cobra.Command{
 			return err
 		}
 		if err := applyBenchmarkPlanQualityGates(cmd.Context(), c, obj.ID, spec.QualityGates); err != nil {
+			return err
+		}
+		planResp, err := waitForBenchmarkPlan(cmd.Context(), c, obj.ID)
+		if err != nil {
+			return err
+		}
+		if err := enforceBenchmarkPlanShape(spec, planResp); err != nil {
 			return err
 		}
 		snap, err := c.ObjectiveRunSnapshot(cmd.Context(), obj.ID)
