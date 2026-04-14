@@ -26,7 +26,7 @@ tack init
 The init command is an interactive wizard that sets up everything Tack needs for your project:
 
 1. **Creates `.tack/config.yaml`** — project-specific configuration
-2. **Agent runtime selection** — asks which runtime to use (Pi or Claude Code)
+2. **Agent runtime selection** — defaults to Pi, with Claude Code available only as a minimal compatibility option
 3. **LLM provider selection** — asks which provider (Anthropic, OpenAI, etc.) and validates the choice against your selected runtime
 4. **Authentication setup** — asks for API keys or initiates OAuth flows, stores them in `~/.config/tack/credentials.yaml`
 5. **Sandbox provider selection** — local (git worktrees) or Daytona (remote VMs)

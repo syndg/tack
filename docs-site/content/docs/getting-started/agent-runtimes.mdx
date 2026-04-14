@@ -9,14 +9,14 @@ Tack does not implement its own AI agent. It orchestrates existing agent runtime
 
 | Runtime | Status | RPC | File Scope | Best For |
 |---------|--------|-----|------------|----------|
-| **Pi** | Supported | Yes (bidirectional JSON over stdin/stdout) | Enforced via tool_call hooks | Production use, maximum control |
-| **Claude Code** | Supported | No (fire-and-forget) | Prompt-level guidance | Quick setup, Claude-native workflows |
+| **Pi** | First-class | Yes (bidirectional JSON over stdin/stdout) | Enforced via tool_call hooks | Recommended path, production use |
+| **Claude Code** | Minimal | No (fire-and-forget) | Prompt-level guidance only | Legacy/advanced compatibility only |
 
 ## Choosing a Runtime
 
 ### Pi
 
-Pi is an [open-source agent runtime](https://github.com/anthropics/pi) maintained by Anthropic. It supports bidirectional JSON-RPC communication, which lets Tack enforce file scope boundaries at the tool level and exchange structured messages in real time.
+Pi is an open-source coding agent/runtime from the [pi-mono project](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent). It supports bidirectional JSON-RPC communication, which lets Tack enforce file scope boundaries at the tool level and exchange structured messages in real time.
 
 **Use Pi when:**
 - You want deterministic file scope enforcement (agents physically cannot edit files outside their scope)
@@ -46,12 +46,12 @@ Pi installs automatically inside sandboxes via npm when it is not already presen
 
 ### Claude Code
 
-Claude Code is Anthropic's CLI agent. Tack invokes it with a prompt and waits for it to finish. There is no bidirectional communication — Tack receives the final output and works with that.
+Claude Code is still supported, but only as a minimal compatibility path. Tack invokes it with a prompt and waits for it to finish. There is no bidirectional communication, and this path is not the primary tested/recommended runtime.
 
-**Use Claude Code when:**
-- You want the simplest possible setup
-- You are already using Claude Code interactively and want to add Tack orchestration on top
-- You do not need tool-level file scope enforcement (Claude Code receives scope as prompt guidance instead)
+**Use Claude Code only when:**
+- You already depend on Claude Code in your own workflow
+- You understand the limitations versus Pi
+- You do not need first-class file-scope enforcement or RPC integration
 
 **Configuration:**
 
@@ -81,7 +81,7 @@ See [Credentials & Auth](/docs/guides/credentials) for the full authentication s
 
 `tack init` walks you through runtime selection. It asks:
 
-1. Which runtime to use (Pi or Claude Code)
+1. Which runtime to use (Pi by default; Claude Code is a minimal compatibility option)
 2. Which provider to use (depends on runtime)
 3. Which authentication method (API key, OAuth)
 4. Whether to validate the combination
