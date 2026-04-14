@@ -175,6 +175,21 @@ CREATE TABLE IF NOT EXISTS objective_insights (
     created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS codification_candidates (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    objective_id TEXT NOT NULL REFERENCES objectives(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'proposed',
+    target TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    instruction TEXT NOT NULL DEFAULT '',
+    rationale TEXT NOT NULL DEFAULT '',
+    evidence_count INTEGER NOT NULL DEFAULT 0,
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_projects_root_path ON projects(root_path);
 CREATE INDEX IF NOT EXISTS idx_objectives_project_created ON objectives(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_dossiers_project_updated ON dossiers(project_id, updated_at DESC);
@@ -198,6 +213,7 @@ CREATE INDEX IF NOT EXISTS idx_attempts_stream_created ON attempts(stream_id, cr
 CREATE INDEX IF NOT EXISTS idx_attempts_run_created ON attempts(run_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_objective_insights_objective_created ON objective_insights(objective_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_objective_insights_stream_created ON objective_insights(stream_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_codification_candidates_objective_updated ON codification_candidates(objective_id, updated_at DESC);
 `
 
 // RunMigrations executes the clean-break multi-project schema migration.
@@ -253,6 +269,7 @@ func resetSchema(db *sql.DB) error {
 	for _, table := range []string{
 		"attempts",
 		"objective_insights",
+		"codification_candidates",
 		"agent_sessions",
 		"events",
 		"executions",

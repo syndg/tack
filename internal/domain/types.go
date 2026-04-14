@@ -493,6 +493,35 @@ type ObjectiveInsight struct {
 	CreatedAt   time.Time              `json:"created_at"`
 }
 
+type CodificationCandidateTarget string
+
+const (
+	CodificationTargetRule        CodificationCandidateTarget = "rule"
+	CodificationTargetReviewCheck CodificationCandidateTarget = "review_check"
+	CodificationTargetQualityGate CodificationCandidateTarget = "quality_gate"
+)
+
+type CodificationCandidateStatus string
+
+const (
+	CodificationStatusProposed CodificationCandidateStatus = "proposed"
+)
+
+type CodificationCandidate struct {
+	ID            string                      `json:"id"`
+	ProjectID     string                      `json:"project_id"`
+	ObjectiveID   string                      `json:"objective_id"`
+	Status        CodificationCandidateStatus `json:"status"`
+	Target        CodificationCandidateTarget `json:"target"`
+	Title         string                      `json:"title"`
+	Instruction   string                      `json:"instruction"`
+	Rationale     string                      `json:"rationale,omitempty"`
+	EvidenceCount int                         `json:"evidence_count"`
+	Payload       map[string]string           `json:"payload,omitempty"`
+	CreatedAt     time.Time                   `json:"created_at"`
+	UpdatedAt     time.Time                   `json:"updated_at"`
+}
+
 // RunStreamState is a snapshot of a single stream within a run.
 type RunStreamState struct {
 	StreamID  string       `json:"stream_id"`

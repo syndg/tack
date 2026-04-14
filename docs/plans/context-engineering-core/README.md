@@ -30,4 +30,4 @@ This folder contains the parent PRD and the initial child slice PRDs for Tack's 
 
 - The architectural decisions for these slices are considered locked enough for implementation.
 - The benchmark work that motivated these docs is recorded separately under `docs/benchmarks/`.
-- Objective-local context comes first. Global memory and broad codification remain follow-on work.
+- Objective-local context comes first. Objective-local codification candidates can now be derived, but broad cross-objective memory and automatic promotion remain follow-on work.

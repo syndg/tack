@@ -13,11 +13,16 @@ import (
 )
 
 type ObjectiveInsightStore struct {
-	db *sql.DB
+	db         *sql.DB
+	candidates *CodificationCandidateStore
 }
 
 func NewObjectiveInsightStore(db *sql.DB) *ObjectiveInsightStore {
 	return &ObjectiveInsightStore{db: db}
+}
+
+func (s *ObjectiveInsightStore) BindCodificationStore(candidates *CodificationCandidateStore) {
+	s.candidates = candidates
 }
 
 func (s *ObjectiveInsightStore) Create(ctx context.Context, insight *domain.ObjectiveInsight) error {
@@ -49,6 +54,15 @@ func (s *ObjectiveInsightStore) Create(ctx context.Context, insight *domain.Obje
 	)
 	if err != nil {
 		return fmt.Errorf("inserting objective insight: %w", err)
+	}
+	if s.candidates != nil {
+		insights, err := s.ListByObjective(ctx, insight.ObjectiveID, 0)
+		if err != nil {
+			return fmt.Errorf("refreshing codification candidates after insight insert: %w", err)
+		}
+		if err := s.candidates.RefreshForObjective(ctx, insight.ObjectiveID, insights); err != nil {
+			return fmt.Errorf("refreshing codification candidates after insight insert: %w", err)
+		}
 	}
 	return nil
 }

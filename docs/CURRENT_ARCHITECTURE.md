@@ -119,6 +119,8 @@ Current, code-backed:
 - persisted stream cards and contract-driven overlays
 - typed contract failures with local stream repair
 - objective-local insight logging
+- derived contract patches persisted on stream cards
+- reviewable objective-local codification candidates
 - blueprint-driven execution
 - isolated sandboxes/worktrees
 - planner/build/review flow
@@ -130,7 +132,7 @@ Current, code-backed:
 Future direction, not yet first-class in code:
 
 - derived contract-patch compilation that materially rewrites contracts rather than only strengthening overlays
-- codification candidates and reviewable promotion of repeated objective-local learnings
+- cross-objective codification promotion into durable repo rules, heuristics, or checks
 - richer benchmark/report evaluation surfaces and operator-facing artifact views
 
 When internal docs disagree with this file, trust the code paths above first and then update the docs.

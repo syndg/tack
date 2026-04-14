@@ -43,6 +43,7 @@ type Daemon struct {
 	runStore        *db.RunStore
 	attempts        *db.AttemptStore
 	insights        *db.ObjectiveInsightStore
+	candidates      *db.CodificationCandidateStore
 	mergeQueue      *db.MergeQueueStore
 	mergeQueueStore *db.MergeQueueStore
 
@@ -88,7 +89,9 @@ func New(cfg *config.Config) (*Daemon, error) {
 	streamStore := db.NewStreamStore(conn)
 	runStore := db.NewRunStore(conn)
 	attemptStore := db.NewAttemptStore(conn)
+	candidateStore := db.NewCodificationCandidateStore(conn)
 	insightStore := db.NewObjectiveInsightStore(conn)
+	insightStore.BindCodificationStore(candidateStore)
 	mergeQueueStore := db.NewMergeQueueStore(conn)
 	eventBus := events.NewPersistentBus(eventStore, logger)
 
@@ -154,6 +157,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 		runStore:        runStore,
 		attempts:        attemptStore,
 		insights:        insightStore,
+		candidates:      candidateStore,
 		mergeQueue:      mergeQueueStore,
 		mergeQueueStore: mergeQueueStore,
 		eventBus:        eventBus,
