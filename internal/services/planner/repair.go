@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/syndg/tack/internal/contractpatch"
 	"github.com/syndg/tack/internal/domain"
 	"gopkg.in/yaml.v3"
 )
@@ -17,7 +18,7 @@ type rawStreamCardRepair struct {
 	SeamOverrideRationale string      `yaml:"seam_override_rationale"`
 }
 
-func CompileStreamCardRepair(rawYAML string, stream domain.Stream, dossier *domain.Dossier) (domain.StreamCard, error) {
+func CompileStreamCardRepair(rawYAML string, stream domain.Stream, dossier *domain.Dossier, insights []domain.ObjectiveInsight) (domain.StreamCard, error) {
 	rawYAML = strings.TrimSpace(rawYAML)
 	if rawYAML == "" {
 		return domain.StreamCard{}, fmt.Errorf("contract gap repair missing stream card YAML")
@@ -54,6 +55,7 @@ func CompileStreamCardRepair(rawYAML string, stream domain.Stream, dossier *doma
 	if strings.TrimSpace(card.Goal) == "" {
 		return domain.StreamCard{}, fmt.Errorf("repaired stream card missing goal")
 	}
+	card.ContractPatches = contractpatch.Compile(insights, stream.ID)
 
 	return card, nil
 }

@@ -126,6 +126,41 @@ func TestCreatePlan_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestCreatePlan_AttachesContractPatchesToStreamCards(t *testing.T) {
+	svc, objStore, _, streamStore, _, insightStore := setupService(t)
+	ctx := context.Background()
+
+	obj := &domain.Objective{Description: "refactor auth"}
+	if err := objStore.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	if err := insightStore.Create(ctx, &domain.ObjectiveInsight{
+		ObjectiveID: obj.ID,
+		Source:      domain.InsightSourceHuman,
+		Kind:        domain.InsightKindRetryGuidance,
+		Summary:     "Keep API compatibility stable",
+	}); err != nil {
+		t.Fatalf("Create global insight: %v", err)
+	}
+
+	plan, err := svc.CreatePlan(ctx, obj.ID, validPlanYAML)
+	if err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+	streams, err := streamStore.ListByPlan(ctx, plan.ID)
+	if err != nil {
+		t.Fatalf("ListByPlan: %v", err)
+	}
+	for _, stream := range streams {
+		if stream.Card == nil || len(stream.Card.ContractPatches) != 1 {
+			t.Fatalf("stream %q contract patches = %#v", stream.Title, stream.Card)
+		}
+		if stream.Card.ContractPatches[0].Instruction != "Honor this explicit human retry guidance: Keep API compatibility stable" {
+			t.Fatalf("stream %q patch = %#v", stream.Title, stream.Card.ContractPatches)
+		}
+	}
+}
+
 func TestCreatePlan_ReturnsNeedsDossierExpansion(t *testing.T) {
 	svc, objStore, _, _, _, _ := setupService(t)
 	ctx := context.Background()
@@ -159,12 +194,15 @@ PLANNER_QUESTIONS:
 }
 
 func TestCreateSimplePlan_SingleStream(t *testing.T) {
-	svc, objStore, _, streamStore, _, _ := setupService(t)
+	svc, objStore, _, streamStore, _, insightStore := setupService(t)
 	ctx := context.Background()
 
 	obj := &domain.Objective{Description: "fix typo in header"}
 	if err := objStore.Create(ctx, obj); err != nil {
 		t.Fatalf("Create objective: %v", err)
+	}
+	if err := insightStore.Create(ctx, &domain.ObjectiveInsight{ObjectiveID: obj.ID, Source: domain.InsightSourcePlanner, Kind: domain.InsightKindPlanApproval, Summary: "Keep the simple patch tightly scoped"}); err != nil {
+		t.Fatalf("Create insight: %v", err)
 	}
 
 	plan, err := svc.CreateSimplePlan(ctx, obj.ID)
@@ -190,6 +228,9 @@ func TestCreateSimplePlan_SingleStream(t *testing.T) {
 	}
 	if streams[0].Card == nil || streams[0].Card.Goal != obj.Description {
 		t.Fatalf("card = %#v, want simple stream card", streams[0].Card)
+	}
+	if len(streams[0].Card.ContractPatches) != 1 {
+		t.Fatalf("contract patches = %#v", streams[0].Card.ContractPatches)
 	}
 	if streams[0].Title != obj.Description {
 		t.Errorf("stream title = %q, want %q", streams[0].Title, obj.Description)

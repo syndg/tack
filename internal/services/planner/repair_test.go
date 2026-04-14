@@ -26,7 +26,7 @@ acceptance_criteria:
 hard_anchors:
   - instruction: "Route all login handlers through auth middleware"
     citation_ids:
-      - "file:1"`, stream, dossier)
+      - "file:1"`, stream, dossier, []domain.ObjectiveInsight{{Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "Keep auth middleware coverage explicit"}})
 	if err != nil {
 		t.Fatalf("CompileStreamCardRepair: %v", err)
 	}
@@ -45,6 +45,9 @@ hard_anchors:
 	if len(card.HardAnchors) != 1 || len(card.HardAnchors[0].Citations) != 1 || card.HardAnchors[0].Citations[0].ID != "file:1" {
 		t.Fatalf("hard anchors = %#v", card.HardAnchors)
 	}
+	if len(card.ContractPatches) != 1 || card.ContractPatches[0].Instruction == "" {
+		t.Fatalf("contract patches = %#v", card.ContractPatches)
+	}
 }
 
 func TestCompileStreamCardRepair_RejectsUnknownCitation(t *testing.T) {
@@ -52,7 +55,7 @@ func TestCompileStreamCardRepair_RejectsUnknownCitation(t *testing.T) {
 	_, err := CompileStreamCardRepair(`hard_anchors:
   - instruction: "Route all login handlers through auth middleware"
     citation_ids:
-      - "missing:1"`, stream, &domain.Dossier{})
+      - "missing:1"`, stream, &domain.Dossier{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "unknown citation") {
 		t.Fatalf("err = %v, want unknown citation", err)
 	}

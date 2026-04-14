@@ -443,7 +443,12 @@ func (c *Coordinator) applyContractGapRepair(ctx context.Context, objectiveID st
 	if err != nil {
 		return fmt.Errorf("getting dossier for contract repair: %w", err)
 	}
-	repairedCard, err := plannersvc.CompileStreamCardRepair(rawYAML, *stream, dossier)
+	insights, err := c.listRecentObjectiveInsights(ctx, objectiveID, 0)
+	if err != nil {
+		c.logger.Warn("failed to load objective insights for contract repair", "objective_id", objectiveID, "error", err)
+		insights = nil
+	}
+	repairedCard, err := plannersvc.CompileStreamCardRepair(rawYAML, *stream, dossier, insights)
 	if err != nil {
 		return fmt.Errorf("compiling repaired stream card: %w", err)
 	}

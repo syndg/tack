@@ -55,7 +55,7 @@ func TestStreamStore_Get_RoundTrip(t *testing.T) {
 		PlanID:       plan.ID,
 		Title:        "my stream",
 		Description:  "does things",
-		Card:         &domain.StreamCard{Goal: "do the thing", ProofScope: []string{"go test ./..."}, HardAnchors: []domain.StreamCardAnchor{{Instruction: "stay in middleware", Citations: []domain.StreamCardCitation{{ID: "rule:1", Detail: "middleware rule"}}}}},
+		Card:         &domain.StreamCard{Goal: "do the thing", ProofScope: []string{"go test ./..."}, HardAnchors: []domain.StreamCardAnchor{{Instruction: "stay in middleware", Citations: []domain.StreamCardCitation{{ID: "rule:1", Detail: "middleware rule"}}}}, ContractPatches: []domain.StreamCardPatch{{Instruction: "Honor this explicit human retry guidance: keep middleware stable", Source: domain.InsightSourceHuman, Kind: domain.InsightKindRetryGuidance}}},
 		FileScope:    []string{"src/**/*.go"},
 		Dependencies: []string{"dep-placeholder-id"},
 	}
@@ -87,6 +87,9 @@ func TestStreamStore_Get_RoundTrip(t *testing.T) {
 	}
 	if len(got.Card.HardAnchors) != 1 || got.Card.HardAnchors[0].Citations[0].ID != "rule:1" {
 		t.Fatalf("hard anchors = %#v", got.Card.HardAnchors)
+	}
+	if len(got.Card.ContractPatches) != 1 || got.Card.ContractPatches[0].Instruction == "" {
+		t.Fatalf("contract patches = %#v", got.Card.ContractPatches)
 	}
 }
 

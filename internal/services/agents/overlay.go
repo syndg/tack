@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/syndg/tack/internal/contractpatch"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/harness/rules"
@@ -28,14 +29,6 @@ type OverlayInput struct {
 	FixContext        string                     // quality gate errors from a previous fix-loop iteration
 	RetryContext      *RetryContext              // normalized recovery context for reruns
 	ObjectiveInsights []domain.ObjectiveInsight  // durable objective-local insights
-}
-
-type contractPatch struct {
-	Source      domain.ObjectiveInsightSource
-	Kind        domain.ObjectiveInsightKind
-	Instruction string
-	Detail      string
-	ScopeNote   string
 }
 
 // BuildOverlay generates the markdown system prompt overlay for an agent.
@@ -121,7 +114,15 @@ func BuildOverlay(input OverlayInput) string {
 		b.WriteString(card.SeamOverrideRationale)
 		b.WriteString("\n\n")
 	}
-	if patches := deriveContractPatches(input.ObjectiveInsights, input.Stream); len(patches) > 0 {
+	patches := card.ContractPatches
+	if len(patches) == 0 {
+		streamID := ""
+		if input.Stream != nil {
+			streamID = input.Stream.ID
+		}
+		patches = contractpatch.Compile(input.ObjectiveInsights, streamID)
+	}
+	if len(patches) > 0 {
 		writeContractPatches(&b, patches, "Treat these as additive contract clarifications already learned during this objective.")
 	}
 	if len(input.ObjectiveInsights) > 0 {
@@ -393,7 +394,7 @@ func BuildPlannerOverlay(objective *domain.Objective, dossier *domain.Dossier, g
 	}
 
 	if len(insights) > 0 {
-		if patches := deriveContractPatches(insights, nil); len(patches) > 0 {
+		if patches := contractpatch.Compile(insights, ""); len(patches) > 0 {
 			writeContractPatches(&b, patches, "Use these derived constraints when decomposing or repairing stream cards; prefer them over rediscovering the same contract corrections.")
 		}
 		b.WriteString("## Objective Insights\n")
@@ -437,7 +438,7 @@ func BuildPlannerOverlay(objective *domain.Objective, dossier *domain.Dossier, g
 	return b.String()
 }
 
-func writeContractPatches(b *strings.Builder, patches []contractPatch, intro string) {
+func writeContractPatches(b *strings.Builder, patches []domain.StreamCardPatch, intro string) {
 	b.WriteString("## Contract Patches\n")
 	b.WriteString("Derived from normalized objective-local insights, not free-form prompt history.\n")
 	if strings.TrimSpace(intro) != "" {
@@ -453,69 +454,9 @@ func writeContractPatches(b *strings.Builder, patches []contractPatch, intro str
 		b.WriteString(line)
 		b.WriteString("\n")
 		fmt.Fprintf(b, "  Derived from: [%s/%s]\n", patch.Source, patch.Kind)
-		if patch.Detail != "" && patch.Detail != patch.Instruction {
-			fmt.Fprintf(b, "  Rationale: %s\n", patch.Detail)
+		if patch.Rationale != "" && patch.Rationale != patch.Instruction {
+			fmt.Fprintf(b, "  Rationale: %s\n", patch.Rationale)
 		}
 	}
 	b.WriteString("\n")
-}
-
-func deriveContractPatches(insights []domain.ObjectiveInsight, stream *domain.Stream) []contractPatch {
-	patches := make([]contractPatch, 0, len(insights))
-	seen := map[string]struct{}{}
-	for _, insight := range insights {
-		if stream != nil && insight.StreamID != "" && insight.StreamID != stream.ID {
-			continue
-		}
-		patch, ok := insightToContractPatch(insight, stream)
-		if !ok {
-			continue
-		}
-		key := strings.ToLower(strings.TrimSpace(patch.Instruction + "\n" + patch.Detail + "\n" + patch.ScopeNote))
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		patches = append(patches, patch)
-	}
-	return patches
-}
-
-func insightToContractPatch(insight domain.ObjectiveInsight, stream *domain.Stream) (contractPatch, bool) {
-	text := strings.TrimSpace(insight.Summary)
-	detail := strings.TrimSpace(insight.Detail)
-	if text == "" {
-		text = detail
-		detail = ""
-	}
-	if text == "" {
-		return contractPatch{}, false
-	}
-	patch := contractPatch{
-		Source: insight.Source,
-		Kind:   insight.Kind,
-		Detail: detail,
-	}
-	if insight.StreamID != "" && (stream == nil || insight.StreamID != stream.ID) {
-		patch.ScopeNote = fmt.Sprintf("stream %s", insight.StreamID)
-	}
-	switch insight.Kind {
-	case domain.InsightKindReviewRejection:
-		patch.Instruction = "Preserve this previously rejected requirement: " + text
-	case domain.InsightKindContractGap:
-		patch.Instruction = "Add this previously missing dossier-backed requirement to the contract: " + text
-	case domain.InsightKindContractBlocked:
-		patch.Instruction = "Repair or clarify this previously blocked contract requirement before proceeding: " + text
-	case domain.InsightKindRetryGuidance:
-		patch.Instruction = "Honor this explicit human retry guidance: " + text
-	case domain.InsightKindDossierEdit:
-		patch.Instruction = "Carry forward this dossier correction: " + text
-	case domain.InsightKindPlanApproval:
-		patch.Instruction = "Carry forward this approved planning rationale: " + text
-	case domain.InsightKindPlanQualityGateEdit:
-		patch.Instruction = "Carry forward this quality-gate adjustment: " + text
-	default:
-		return contractPatch{}, false
-	}
-	return patch, true
 }

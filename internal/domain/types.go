@@ -132,7 +132,16 @@ type StreamCard struct {
 	ImplementationScope   []string           `json:"implementation_scope,omitempty"`
 	ProofScope            []string           `json:"proof_scope,omitempty"`
 	HardAnchors           []StreamCardAnchor `json:"hard_anchors,omitempty"`
+	ContractPatches       []StreamCardPatch  `json:"contract_patches,omitempty"`
 	SeamOverrideRationale string             `json:"seam_override_rationale,omitempty"`
+}
+
+type StreamCardPatch struct {
+	Instruction string                 `json:"instruction"`
+	Rationale   string                 `json:"rationale,omitempty"`
+	Source      ObjectiveInsightSource `json:"source,omitempty"`
+	Kind        ObjectiveInsightKind   `json:"kind,omitempty"`
+	ScopeNote   string                 `json:"scope_note,omitempty"`
 }
 
 type StreamCardAnchor struct {

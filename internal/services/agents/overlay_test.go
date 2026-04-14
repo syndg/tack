@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/syndg/tack/internal/contractpatch"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/harness/rules"
@@ -318,20 +319,20 @@ func TestBuildOverlay_IncludesObjectiveInsights(t *testing.T) {
 
 func TestDeriveContractPatches_FiltersOtherStreamsAndDeduplicates(t *testing.T) {
 	stream := &domain.Stream{ID: "stream-1", Title: "auth stream"}
-	patches := deriveContractPatches([]domain.ObjectiveInsight{
+	patches := contractpatch.Compile([]domain.ObjectiveInsight{
 		{StreamID: "stream-1", Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "Add regression coverage", Detail: "Add regression coverage for auth expiry."},
 		{StreamID: "stream-2", Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "Other stream finding", Detail: "Ignore me."},
 		{Source: domain.InsightSourceHuman, Kind: domain.InsightKindRetryGuidance, Summary: "Keep API stable"},
 		{Source: domain.InsightSourceHuman, Kind: domain.InsightKindRetryGuidance, Summary: "Keep API stable"},
-	}, stream)
+	}, stream.ID)
 	if len(patches) != 2 {
 		t.Fatalf("patch count = %d, want 2: %#v", len(patches), patches)
 	}
 	if !strings.Contains(patches[0].Instruction, "Add regression coverage") {
 		t.Fatalf("patch[0] = %+v", patches[0])
 	}
-	if !strings.Contains(patches[0].Detail, "auth expiry") {
-		t.Fatalf("patch[0] detail = %+v", patches[0])
+	if !strings.Contains(patches[0].Rationale, "auth expiry") {
+		t.Fatalf("patch[0] rationale = %+v", patches[0])
 	}
 	if !strings.Contains(patches[1].Instruction, "Keep API stable") {
 		t.Fatalf("patch[1] = %+v", patches[1])
