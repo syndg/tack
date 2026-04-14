@@ -83,8 +83,11 @@ func syncBenchmarkRun(cmd *cobra.Command, cfg *config.Config, run *benchmark.Run
 		if newStatus != "failed" {
 			run.StatusReason = ""
 		}
-		_ = benchmark.UpdateRun(cfg.Daemon.DataDir, *run)
 	}
+	if run.Status == "completed" || run.Status == "failed" || run.Status == "partial" {
+		_ = benchmark.SyncRunValidation(cfg.Daemon.DataDir, run)
+	}
+	_ = benchmark.UpdateRun(cfg.Daemon.DataDir, *run)
 	return nil
 }
 
@@ -405,7 +408,7 @@ var benchmarkShowRunCmd = &cobra.Command{
 			return fmt.Errorf("unknown benchmark run %q", args[0])
 		}
 		_ = syncBenchmarkRun(cmd, cfg, &run)
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Run: %s\nDaemon run: %s\nBenchmark: %s\nStatus: %s\nReason: %s\nRepo: %s\nFamily: %s\nReadiness snapshot: %s\nBaseline: %s\nContext policy: %s\nRequested mode: %s\nEffective mode: %s\nBlueprint: %s\nWorkspace: %s\nProject: %s\nObjective: %s\nVersion: %s\nCreated: %s\nPrompt snapshot: %s\nScore: %s\n", run.ID, run.RunID, run.BenchmarkID, run.Status, run.StatusReason, run.Repo, run.Family, run.ReadinessSnapshot, run.Baseline, run.ContextPolicy, run.RequestedMode, run.EffectiveMode, run.Blueprint, run.Workspace, run.ProjectID, run.ObjectiveID, run.Version, run.CreatedAt, run.PromptSnapshot, run.ScoreStatus); err != nil {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Run: %s\nDaemon run: %s\nBenchmark: %s\nStatus: %s\nReason: %s\nRepo: %s\nFamily: %s\nReadiness snapshot: %s\nBaseline: %s\nContext policy: %s\nRequested mode: %s\nEffective mode: %s\nBlueprint: %s\nWorkspace: %s\nProject: %s\nObjective: %s\nVersion: %s\nCreated: %s\nPrompt snapshot: %s\nScore: %s\nValidation: %s\nValidation summary: %s\nValidation checked: %s\n", run.ID, run.RunID, run.BenchmarkID, run.Status, run.StatusReason, run.Repo, run.Family, run.ReadinessSnapshot, run.Baseline, run.ContextPolicy, run.RequestedMode, run.EffectiveMode, run.Blueprint, run.Workspace, run.ProjectID, run.ObjectiveID, run.Version, run.CreatedAt, run.PromptSnapshot, run.ScoreStatus, run.ValidationStatus, run.ValidationSummary, run.ValidationChecked); err != nil {
 			return err
 		}
 		return nil

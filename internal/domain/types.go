@@ -452,18 +452,21 @@ const (
 	InsightSourceHuman     ObjectiveInsightSource = "human"
 	InsightSourceDiscovery ObjectiveInsightSource = "discovery"
 	InsightSourcePlanner   ObjectiveInsightSource = "planner"
+	InsightSourceBenchmark ObjectiveInsightSource = "benchmark"
 )
 
 type ObjectiveInsightKind string
 
 const (
-	InsightKindReviewRejection     ObjectiveInsightKind = "review_rejection"
-	InsightKindContractGap         ObjectiveInsightKind = "contract_gap"
-	InsightKindContractBlocked     ObjectiveInsightKind = "contract_blocked"
-	InsightKindRetryGuidance       ObjectiveInsightKind = "retry_guidance"
-	InsightKindDossierEdit         ObjectiveInsightKind = "dossier_edit"
-	InsightKindPlanApproval        ObjectiveInsightKind = "plan_approval"
-	InsightKindPlanQualityGateEdit ObjectiveInsightKind = "plan_quality_gate_edit"
+	InsightKindReviewRejection           ObjectiveInsightKind = "review_rejection"
+	InsightKindContractGap               ObjectiveInsightKind = "contract_gap"
+	InsightKindContractBlocked           ObjectiveInsightKind = "contract_blocked"
+	InsightKindRetryGuidance             ObjectiveInsightKind = "retry_guidance"
+	InsightKindDossierEdit               ObjectiveInsightKind = "dossier_edit"
+	InsightKindPlanApproval              ObjectiveInsightKind = "plan_approval"
+	InsightKindPlanQualityGateEdit       ObjectiveInsightKind = "plan_quality_gate_edit"
+	InsightKindBenchmarkValidationPassed ObjectiveInsightKind = "benchmark_validation_passed"
+	InsightKindBenchmarkValidationFailed ObjectiveInsightKind = "benchmark_validation_failed"
 )
 
 type ObjectiveInsight struct {

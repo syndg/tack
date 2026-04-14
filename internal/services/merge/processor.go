@@ -25,6 +25,7 @@ import (
 type Processor struct {
 	projectID   string
 	queue       *db.MergeQueueStore
+	insights    *db.ObjectiveInsightStore
 	streams     *db.StreamStore
 	plans       *db.PlanStore
 	objectives  *db.ObjectiveStore
@@ -37,6 +38,7 @@ type Processor struct {
 	sandboxProv sandbox.SandboxProvider
 	eventBus    *events.PersistentBus
 	obs         *observability.Recorder
+	benchmark   config.BenchmarkConfig
 	logger      *slog.Logger
 
 	mu         sync.Mutex
@@ -48,6 +50,7 @@ type Processor struct {
 func NewProcessor(
 	projectID string,
 	queue *db.MergeQueueStore,
+	insights *db.ObjectiveInsightStore,
 	streams *db.StreamStore,
 	plans *db.PlanStore,
 	objectives *db.ObjectiveStore,
@@ -59,6 +62,7 @@ func NewProcessor(
 	sandboxProv sandbox.SandboxProvider,
 	eventBus *events.PersistentBus,
 	obs *observability.Recorder,
+	benchmarkCfg config.BenchmarkConfig,
 	baseBranch string,
 	logger *slog.Logger,
 ) *Processor {
@@ -69,6 +73,7 @@ func NewProcessor(
 	return &Processor{
 		projectID:   projectID,
 		queue:       queue,
+		insights:    insights,
 		streams:     streams,
 		plans:       plans,
 		objectives:  objectives,
@@ -81,6 +86,7 @@ func NewProcessor(
 		sandboxProv: sandboxProv,
 		eventBus:    eventBus,
 		obs:         obs,
+		benchmark:   benchmarkCfg,
 		logger:      procLogger,
 	}
 }
@@ -365,6 +371,12 @@ func (p *Processor) handleMergeSuccess(ctx context.Context, sb sandbox.Sandbox, 
 		return
 	}
 
+	if err := p.runFinalBenchmarkValidation(ctx, sb, entry); err != nil {
+		p.revertMerge(ctx, sb, entry)
+		p.handlePostMergeGateFailure(ctx, entry, result.Tier, err.Error())
+		return
+	}
+
 	// Extract diff summary.
 	diffJSON, err := p.extractMergedDiffJSON(ctx, sb)
 	if err != nil {
@@ -400,6 +412,98 @@ func (p *Processor) handleMergeSuccess(ctx context.Context, sb sandbox.Sandbox, 
 		"tier", result.Tier,
 		"files_changed", result.FilesChanged,
 	)
+}
+
+func (p *Processor) runFinalBenchmarkValidation(ctx context.Context, sb sandbox.Sandbox, entry *domain.MergeEntry) error {
+	cmd := strings.TrimSpace(p.benchmark.Validation)
+	if cmd == "" {
+		return nil
+	}
+	final, err := p.isFinalMergeForObjective(ctx, entry)
+	if err != nil {
+		return fmt.Errorf("checking benchmark final validation eligibility: %w", err)
+	}
+	if !final {
+		return nil
+	}
+	result, err := p.gateRunner.Run(ctx, sb, []gates.Gate{{
+		Name:    "benchmark-final-validation",
+		Command: cmd,
+		Timeout: 1200,
+	}}, false)
+	if err != nil {
+		p.recordBenchmarkValidationInsight(ctx, entry, domain.InsightKindBenchmarkValidationFailed, "Final benchmark validation failed to run.", err.Error(), map[string]string{"command": cmd})
+		return fmt.Errorf("benchmark-final-validation: %w", err)
+	}
+	if result == nil || len(result.Results) == 0 {
+		p.recordBenchmarkValidationInsight(ctx, entry, domain.InsightKindBenchmarkValidationFailed, "Final benchmark validation produced no result.", "", map[string]string{"command": cmd})
+		return fmt.Errorf("benchmark-final-validation: no result")
+	}
+	gate := result.Results[0]
+	payload := map[string]string{"command": cmd}
+	stdout := strings.TrimSpace(gate.Stdout)
+	stderr := strings.TrimSpace(gate.Stderr)
+	if stdout != "" {
+		payload["stdout"] = truncateInsightText(stdout)
+	}
+	if stderr != "" {
+		payload["stderr"] = truncateInsightText(stderr)
+	}
+	if gate.Passed {
+		p.recordBenchmarkValidationInsight(ctx, entry, domain.InsightKindBenchmarkValidationPassed, "Final benchmark validation passed.", stdout, payload)
+		return nil
+	}
+	detail := stderr
+	if detail == "" {
+		detail = stdout
+	}
+	if detail == "" {
+		detail = fmt.Sprintf("exit code %d", gate.ExitCode)
+	}
+	p.recordBenchmarkValidationInsight(ctx, entry, domain.InsightKindBenchmarkValidationFailed, "Final benchmark validation failed.", detail, payload)
+	return fmt.Errorf("benchmark-final-validation: %s", detail)
+}
+
+func (p *Processor) isFinalMergeForObjective(ctx context.Context, entry *domain.MergeEntry) (bool, error) {
+	streams, err := p.streams.ListByPlan(ctx, entry.PlanID)
+	if err != nil {
+		return false, fmt.Errorf("listing streams for plan: %w", err)
+	}
+	for _, stream := range streams {
+		if stream.ID == entry.StreamID {
+			continue
+		}
+		if stream.Status != domain.StreamStatusMerged {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (p *Processor) recordBenchmarkValidationInsight(ctx context.Context, entry *domain.MergeEntry, kind domain.ObjectiveInsightKind, summary, detail string, payload map[string]string) {
+	if p.insights == nil {
+		return
+	}
+	if err := p.insights.Create(ctx, &domain.ObjectiveInsight{
+		ObjectiveID: entry.ObjectiveID,
+		StreamID:    entry.StreamID,
+		PlanID:      entry.PlanID,
+		Source:      domain.InsightSourceBenchmark,
+		Kind:        kind,
+		Summary:     summary,
+		Detail:      truncateInsightText(strings.TrimSpace(detail)),
+		Payload:     payload,
+	}); err != nil {
+		p.logger.Warn("recording benchmark validation insight", "objective_id", entry.ObjectiveID, "stream_id", entry.StreamID, "kind", kind, "error", err)
+	}
+}
+
+func truncateInsightText(text string) string {
+	text = strings.TrimSpace(text)
+	if len(text) <= 1000 {
+		return text
+	}
+	return strings.TrimSpace(text[:1000])
 }
 
 // extractMergedDiffJSON prefers ORIG_HEAD..HEAD so the stored diff covers the

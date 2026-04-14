@@ -53,8 +53,13 @@ func BuiltInSpecs() []Spec {
 			Baseline:      "43106b6c7fbe8c69cebb02f8fc80cb060faddeee",
 			FeatureRange:  "4065175a5811d688adc65b4b974f6fced0cdba67",
 			ContextPolicy: "repo-only-no-history",
-			Prompt:        "Add support for undoing recent plain commit and checkout actions using git reflog. Explicitly exclude pull --rebase, merge, revert, amend/reword, fixup/squash, and broader rebase flows from this benchmark slice.",
-			Validation:    "go run cmd/integration_test/main.go cli undo/undo_commit reflog/checkout",
+			Prompt:        "Match lazygit's canonical reflog undo slice for recent plain commit and checkout actions. Keep the end-to-end validation entrypoints `undo/undo_commit` and `reflog/checkout` intact: `undo/undo_commit` must preserve the canonical undo/redo commit behavior, including restoring file state while preserving unrelated working-tree changes, and `reflog/checkout` must continue to pass. Explicitly exclude pull --rebase, merge, revert, amend/reword, fixup/squash, and broader rebase flows from the supported feature surface.",
+			Validation:    "go test ./pkg/integration/clients -run 'TestIntegration/undo/undo_commit$' -count=1 -v && go test ./pkg/integration/clients -run 'TestIntegration/reflog/checkout$' -count=1 -v",
+			ExpectedPlan: &ExpectedPlan{Streams: []ExpectedStream{
+				{Title: "Narrow reflog undo core to plain commit and checkout"},
+				{Title: "Exercise supported and unsupported undo flows in integration tests", BlockedBy: []string{"Narrow reflog undo core to plain commit and checkout"}},
+				{Title: "Update user-facing docs and copy for the benchmark slice", BlockedBy: []string{"Narrow reflog undo core to plain commit and checkout"}},
+			}},
 		},
 		{
 			ID:            "lazygit.command-log-nav-keybindings",

@@ -13,13 +13,22 @@ import (
 )
 
 type Report struct {
-	Run       Run
-	DaemonRun *domain.Run
-	Objective *domain.Objective
-	Plan      *domain.Plan
-	Summary   ReportSummary
-	Streams   []StreamReport
-	Notes     []string
+	Run        Run
+	DaemonRun  *domain.Run
+	Objective  *domain.Objective
+	Plan       *domain.Plan
+	Summary    ReportSummary
+	Streams    []StreamReport
+	Validation *ValidationReport
+	Notes      []string
+}
+
+type ValidationReport struct {
+	Command   string
+	Status    string
+	Summary   string
+	Detail    string
+	CheckedAt time.Time
 }
 
 type ReportSummary struct {
@@ -81,6 +90,7 @@ func BuildReport(dataDir string, run Run) (Report, error) {
 		attempts:   db.NewAttemptStore(database.Conn()),
 		agents:     db.NewAgentStore(database.Conn()),
 		merges:     db.NewMergeQueueStore(database.Conn()),
+		insights:   db.NewObjectiveInsightStore(database.Conn()),
 	}
 
 	report := Report{Run: run}
@@ -106,6 +116,7 @@ type reportStores struct {
 	attempts   *db.AttemptStore
 	agents     *db.AgentStore
 	merges     *db.MergeQueueStore
+	insights   *db.ObjectiveInsightStore
 }
 
 func resolveReportContext(ctx context.Context, stores *reportStores, report *Report) error {
@@ -199,6 +210,10 @@ func populateReport(ctx context.Context, stores *reportStores, report *Report) e
 	if err != nil {
 		return fmt.Errorf("list merge entries: %w", err)
 	}
+	insights, err := stores.insights.ListByObjective(ctx, report.Run.ObjectiveID, 0)
+	if err != nil {
+		return fmt.Errorf("list benchmark insights: %w", err)
+	}
 
 	executionsByStream := map[string][]blueprint.Execution{}
 	executionIDsByStream := map[string]map[string]struct{}{}
@@ -242,10 +257,44 @@ func populateReport(ctx context.Context, stores *reportStores, report *Report) e
 	if report.DaemonRun != nil && report.DaemonRun.Status == domain.RunStatusActive && report.Summary.MergedStreams == report.Summary.TotalStreams && report.Summary.TotalStreams > 0 {
 		report.Notes = append(report.Notes, "Daemon run row is still active; completion time inferred from latest merged stream activity.")
 	}
+	if validation := buildValidationReport(report.Run.BenchmarkID, insights); validation != nil {
+		report.Validation = validation
+	}
 	sort.Slice(report.Streams, func(i, j int) bool {
 		return report.Streams[i].StartedAt.Before(report.Streams[j].StartedAt)
 	})
 	return nil
+}
+
+func buildValidationReport(benchmarkID string, insights []domain.ObjectiveInsight) *ValidationReport {
+	spec, ok := FindSpec(benchmarkID)
+	if !ok || strings.TrimSpace(spec.Validation) == "" {
+		return nil
+	}
+	report := &ValidationReport{
+		Command: spec.Validation,
+		Status:  "not_run",
+	}
+	for _, insight := range insights {
+		if insight.Source != domain.InsightSourceBenchmark {
+			continue
+		}
+		switch insight.Kind {
+		case domain.InsightKindBenchmarkValidationPassed:
+			report.Status = "passed"
+			report.Summary = strings.TrimSpace(insight.Summary)
+			report.Detail = strings.TrimSpace(insight.Detail)
+			report.CheckedAt = insight.CreatedAt
+			return report
+		case domain.InsightKindBenchmarkValidationFailed:
+			report.Status = "failed"
+			report.Summary = strings.TrimSpace(insight.Summary)
+			report.Detail = strings.TrimSpace(insight.Detail)
+			report.CheckedAt = insight.CreatedAt
+			return report
+		}
+	}
+	return report
 }
 
 func buildStreamReport(stream domain.Stream, executions []blueprint.Execution, executionIDs map[string]struct{}, agents []domain.AgentSession, attempts []domain.Attempt, merges []domain.MergeEntry) StreamReport {
@@ -420,6 +469,9 @@ func RenderReportMarkdown(report Report) string {
 	fmt.Fprintf(&b, "- Human guidance provided: `%d`\n", report.Summary.HumanGuidanceProvided)
 	fmt.Fprintf(&b, "- Human guidance required: `%s`\n", yesNo(report.Summary.HumanGuidanceRequired))
 	fmt.Fprintf(&b, "- Merge attempts: `%d`\n", report.Summary.MergeAttempts)
+	if report.Validation != nil {
+		fmt.Fprintf(&b, "- Final validation: `%s`\n", report.Validation.Status)
+	}
 	if !report.Summary.StartedAt.IsZero() {
 		fmt.Fprintf(&b, "- Started: `%s`\n", report.Summary.StartedAt.UTC().Format(time.RFC3339))
 	}
@@ -433,6 +485,20 @@ func RenderReportMarkdown(report Report) string {
 		b.WriteString("\n## Quality Gates\n\n")
 		for _, gate := range report.Summary.QualityGates {
 			fmt.Fprintf(&b, "- `%s`\n", gate)
+		}
+	}
+	if report.Validation != nil {
+		b.WriteString("\n## Final Validation\n\n")
+		fmt.Fprintf(&b, "- Command: `%s`\n", report.Validation.Command)
+		fmt.Fprintf(&b, "- Status: `%s`\n", report.Validation.Status)
+		if !report.Validation.CheckedAt.IsZero() {
+			fmt.Fprintf(&b, "- Checked: `%s`\n", report.Validation.CheckedAt.UTC().Format(time.RFC3339))
+		}
+		if report.Validation.Summary != "" {
+			fmt.Fprintf(&b, "- Summary: %s\n", report.Validation.Summary)
+		}
+		if report.Validation.Detail != "" {
+			fmt.Fprintf(&b, "- Detail: %s\n", report.Validation.Detail)
 		}
 	}
 	if len(report.Notes) > 0 {
@@ -475,4 +541,31 @@ func yesNo(v bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+func SyncRunValidation(dataDir string, run *Run) error {
+	if run == nil || run.ObjectiveID == "" {
+		return nil
+	}
+	report, err := BuildReport(dataDir, *run)
+	if err != nil {
+		return err
+	}
+	if report.Validation == nil {
+		return nil
+	}
+	run.ValidationStatus = report.Validation.Status
+	run.ValidationSummary = report.Validation.Summary
+	if !report.Validation.CheckedAt.IsZero() {
+		run.ValidationChecked = report.Validation.CheckedAt.UTC().Format(time.RFC3339)
+	}
+	switch report.Validation.Status {
+	case "passed":
+		run.ScoreStatus = "passed"
+	case "failed":
+		run.ScoreStatus = "failed"
+	default:
+		run.ScoreStatus = report.Validation.Status
+	}
+	return nil
 }

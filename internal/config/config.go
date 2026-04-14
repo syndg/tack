@@ -29,6 +29,7 @@ type Config struct {
 	Daemon       DaemonConfig       `yaml:"daemon"`
 	Sandbox      SandboxConfig      `yaml:"sandbox"`
 	ProjectSetup ProjectSetupConfig `yaml:"project_setup"`
+	Benchmark    BenchmarkConfig    `yaml:"benchmark"`
 	Agents       AgentsConfig       `yaml:"agents"`
 	RuntimeAuth  RuntimeAuthConfig  `yaml:"runtime_auth"`
 	Models       ModelsConfig       `yaml:"models"`
@@ -60,6 +61,11 @@ type SandboxConfig struct {
 type ProjectSetupConfig struct {
 	Commands []string `yaml:"commands"`
 	Verify   []string `yaml:"verify"`
+}
+
+type BenchmarkConfig struct {
+	ID         string `yaml:"id"`
+	Validation string `yaml:"validation"`
 }
 
 type DaytonaConfig struct {

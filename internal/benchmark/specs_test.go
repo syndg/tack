@@ -24,6 +24,25 @@ func TestPrepareRunUsesPromptForRun(t *testing.T) {
 	}
 }
 
+func TestPrepareRunUsesPromptForRunUndoBenchmark(t *testing.T) {
+	run, ok := PrepareRun("lazygit.undo-basic-commit-checkout", "", "")
+	if !ok {
+		t.Fatal("expected built-in benchmark spec")
+	}
+	for _, want := range []string{
+		"Use this exact benchmark decomposition to keep hardness frozen for comparison runs:",
+		"Keep the end-to-end validation entrypoints `undo/undo_commit` and `reflog/checkout` intact:",
+		"preserving unrelated working-tree changes",
+		"`Narrow reflog undo core to plain commit and checkout`",
+		"`Exercise supported and unsupported undo flows in integration tests`",
+		"`Update user-facing docs and copy for the benchmark slice`",
+	} {
+		if !strings.Contains(run.PromptSnapshot, want) {
+			t.Fatalf("prompt snapshot missing %q\n%s", want, run.PromptSnapshot)
+		}
+	}
+}
+
 func TestSpecValidatePlanShape(t *testing.T) {
 	spec, ok := FindSpec("lazygit.command-log-nav-keybindings")
 	if !ok {
@@ -38,6 +57,25 @@ func TestSpecValidatePlanShape(t *testing.T) {
 		t.Fatalf("ValidatePlanShape: %v", err)
 	}
 	streams[2].Title = "Docs only"
+	if err := spec.ValidatePlanShape(streams); err == nil {
+		t.Fatal("expected plan shape mismatch")
+	}
+}
+
+func TestSpecValidatePlanShapeUndoBenchmark(t *testing.T) {
+	spec, ok := FindSpec("lazygit.undo-basic-commit-checkout")
+	if !ok {
+		t.Fatal("expected built-in benchmark spec")
+	}
+	streams := []domain.Stream{
+		{Title: "Narrow reflog undo core to plain commit and checkout", Card: &domain.StreamCard{}},
+		{Title: "Exercise supported and unsupported undo flows in integration tests", Card: &domain.StreamCard{BlockedBy: []string{"Narrow reflog undo core to plain commit and checkout"}}},
+		{Title: "Update user-facing docs and copy for the benchmark slice", Card: &domain.StreamCard{BlockedBy: []string{"Narrow reflog undo core to plain commit and checkout"}}},
+	}
+	if err := spec.ValidatePlanShape(streams); err != nil {
+		t.Fatalf("ValidatePlanShape: %v", err)
+	}
+	streams[1].Card = &domain.StreamCard{BlockedBy: []string{"Exercise supported and unsupported undo flows in integration tests"}}
 	if err := spec.ValidatePlanShape(streams); err == nil {
 		t.Fatal("expected plan shape mismatch")
 	}

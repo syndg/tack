@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
@@ -73,6 +74,7 @@ func (m *mockSandboxProvider) Delete(_ context.Context, _ string) error {
 type processorFixture struct {
 	processor  *Processor
 	queue      *db.MergeQueueStore
+	insights   *db.ObjectiveInsightStore
 	streams    *db.StreamStore
 	plans      *db.PlanStore
 	objectives *db.ObjectiveStore
@@ -99,6 +101,7 @@ func setupProcessor(t *testing.T) *processorFixture {
 
 	conn := d.Conn()
 	queueStore := db.NewMergeQueueStore(conn)
+	insightStore := db.NewObjectiveInsightStore(conn)
 	streamStore := db.NewStreamStore(conn)
 	planStore := db.NewPlanStore(conn)
 	objStore := db.NewObjectiveStore(conn)
@@ -133,17 +136,20 @@ func setupProcessor(t *testing.T) *processorFixture {
 
 	processor := NewProcessor(
 		"test-project",
-		queueStore, streamStore, planStore,
+		queueStore,
+		insightStore,
+		streamStore, planStore,
 		objStore,
 		blueprint.NewEngine(registry, logger),
 		attemptStore,
 		merger, differ, gateRunner, sbProvider,
-		bus, recorder, "main", logger,
+		bus, recorder, config.BenchmarkConfig{}, "main", logger,
 	)
 
 	return &processorFixture{
 		processor:  processor,
 		queue:      queueStore,
+		insights:   insightStore,
 		streams:    streamStore,
 		plans:      planStore,
 		objectives: objStore,
@@ -151,6 +157,141 @@ func setupProcessor(t *testing.T) *processorFixture {
 		bus:        bus,
 		sbProvider: sbProvider,
 		sb:         sb,
+	}
+}
+
+func TestProcessNext_RunsFinalBenchmarkValidationOnLastMerge(t *testing.T) {
+	f := setupProcessor(t)
+	f.processor.benchmark = config.BenchmarkConfig{ID: "lazygit.undo-basic-commit-checkout", Validation: "go test ./pkg/integration/clients -run 'TestIntegration/undo/undo_commit$' -count=1 -v && go test ./pkg/integration/clients -run 'TestIntegration/reflog/checkout$' -count=1 -v"}
+	ctx := context.Background()
+	var callLog []string
+
+	obj := &domain.Objective{Description: "test", Status: domain.ObjectiveStatusExecuting}
+	if err := f.objectives.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	plan := &domain.Plan{ObjectiveID: obj.ID, QualityGates: []string{}}
+	if err := f.plans.Create(ctx, plan); err != nil {
+		t.Fatalf("Create plan: %v", err)
+	}
+	stream := &domain.Stream{PlanID: plan.ID, Title: "s1", FileScope: []string{"**"}, Dependencies: []string{}, Status: domain.StreamStatusMergeReady}
+	if err := f.streams.Create(ctx, stream); err != nil {
+		t.Fatalf("Create stream: %v", err)
+	}
+
+	f.sb.execFn = func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
+		callLog = append(callLog, cmd)
+		switch cmd {
+		case "git fetch origin":
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		case "git merge --no-edit branch-1":
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		case "go test ./pkg/integration/clients -run 'TestIntegration/undo/undo_commit$' -count=1 -v && go test ./pkg/integration/clients -run 'TestIntegration/reflog/checkout$' -count=1 -v":
+			return sandbox.ExecResult{ExitCode: 0, Stdout: "integration ok"}, nil
+		default:
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		}
+	}
+
+	entry := &domain.MergeEntry{StreamID: stream.ID, PlanID: plan.ID, ObjectiveID: obj.ID, Branch: "branch-1"}
+	if err := f.queue.Enqueue(ctx, entry); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	processed, err := f.processor.ProcessNext(ctx)
+	if err != nil {
+		t.Fatalf("ProcessNext: %v", err)
+	}
+	if !processed {
+		t.Fatal("expected merge entry to be processed")
+	}
+	if !contains(callLog, "go test ./pkg/integration/clients -run 'TestIntegration/undo/undo_commit$' -count=1 -v && go test ./pkg/integration/clients -run 'TestIntegration/reflog/checkout$' -count=1 -v") {
+		t.Fatalf("expected final benchmark validation command, calls = %v", callLog)
+	}
+	got, err := f.queue.Get(ctx, entry.ID)
+	if err != nil {
+		t.Fatalf("Get merge entry: %v", err)
+	}
+	if got.Status != domain.MergeStatusMerged {
+		t.Fatalf("entry status = %q, want %q", got.Status, domain.MergeStatusMerged)
+	}
+	insights, err := f.insights.ListByObjective(ctx, obj.ID, 10)
+	if err != nil {
+		t.Fatalf("ListByObjective: %v", err)
+	}
+	if len(insights) == 0 || insights[0].Kind != domain.InsightKindBenchmarkValidationPassed {
+		t.Fatalf("insights = %#v, want benchmark validation pass", insights)
+	}
+}
+
+func TestProcessNext_FinalBenchmarkValidationFailureFailsMerge(t *testing.T) {
+	f := setupProcessor(t)
+	f.processor.benchmark = config.BenchmarkConfig{ID: "lazygit.undo-basic-commit-checkout", Validation: "go test ./pkg/integration/clients -run 'TestIntegration/undo/undo_commit$' -count=1 -v && go test ./pkg/integration/clients -run 'TestIntegration/reflog/checkout$' -count=1 -v"}
+	ctx := context.Background()
+	var callLog []string
+
+	obj := &domain.Objective{Description: "test", Status: domain.ObjectiveStatusExecuting}
+	if err := f.objectives.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	plan := &domain.Plan{ObjectiveID: obj.ID, QualityGates: []string{}}
+	if err := f.plans.Create(ctx, plan); err != nil {
+		t.Fatalf("Create plan: %v", err)
+	}
+	stream := &domain.Stream{PlanID: plan.ID, Title: "s1", FileScope: []string{"**"}, Dependencies: []string{}, Status: domain.StreamStatusMergeReady}
+	if err := f.streams.Create(ctx, stream); err != nil {
+		t.Fatalf("Create stream: %v", err)
+	}
+
+	f.sb.execFn = func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
+		callLog = append(callLog, cmd)
+		switch cmd {
+		case "git fetch origin":
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		case "git merge --no-edit branch-1":
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		case "go test ./pkg/integration/clients -run 'TestIntegration/undo/undo_commit$' -count=1 -v && go test ./pkg/integration/clients -run 'TestIntegration/reflog/checkout$' -count=1 -v":
+			return sandbox.ExecResult{ExitCode: 1, Stderr: "FAIL integration"}, nil
+		case "git reset --hard ORIG_HEAD":
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		default:
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		}
+	}
+
+	entry := &domain.MergeEntry{StreamID: stream.ID, PlanID: plan.ID, ObjectiveID: obj.ID, Branch: "branch-1"}
+	if err := f.queue.Enqueue(ctx, entry); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	f.processor.ProcessNext(ctx)
+
+	if !contains(callLog, "go test ./pkg/integration/clients -run 'TestIntegration/undo/undo_commit$' -count=1 -v && go test ./pkg/integration/clients -run 'TestIntegration/reflog/checkout$' -count=1 -v") {
+		t.Fatalf("expected final benchmark validation command, calls = %v", callLog)
+	}
+	if !contains(callLog, "git reset --hard ORIG_HEAD") {
+		t.Fatalf("expected merge revert after failed validation, calls = %v", callLog)
+	}
+	got, err := f.queue.Get(ctx, entry.ID)
+	if err != nil {
+		t.Fatalf("Get merge entry: %v", err)
+	}
+	if got.Status != domain.MergeStatusFailed {
+		t.Fatalf("entry status = %q, want %q", got.Status, domain.MergeStatusFailed)
+	}
+	attempts := listMergeAttempts(t, f, stream.ID, entry.ID)
+	if len(attempts) != 1 {
+		t.Fatalf("attempt count = %d, want 1", len(attempts))
+	}
+	if !strings.Contains(attempts[0].ErrorSummary, "benchmark-final-validation") {
+		t.Fatalf("error summary = %q, want benchmark validation context", attempts[0].ErrorSummary)
+	}
+	insights, err := f.insights.ListByObjective(ctx, obj.ID, 10)
+	if err != nil {
+		t.Fatalf("ListByObjective: %v", err)
+	}
+	if len(insights) == 0 || insights[0].Kind != domain.InsightKindBenchmarkValidationFailed {
+		t.Fatalf("insights = %#v, want benchmark validation failure", insights)
 	}
 }
 

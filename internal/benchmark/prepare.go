@@ -86,6 +86,15 @@ func workspaceClean(workspace string) (bool, error) {
 func preflightConfigContents(spec Spec) string {
 	var b strings.Builder
 	b.WriteString("daemon:\n  base_branch: benchmark-base\n")
+	if strings.TrimSpace(spec.ID) != "" || strings.TrimSpace(spec.Validation) != "" {
+		b.WriteString("benchmark:\n")
+		if strings.TrimSpace(spec.ID) != "" {
+			fmt.Fprintf(&b, "  id: %q\n", spec.ID)
+		}
+		if strings.TrimSpace(spec.Validation) != "" {
+			fmt.Fprintf(&b, "  validation: %q\n", spec.Validation)
+		}
+	}
 	if len(spec.QualityGates) > 0 {
 		b.WriteString("quality_gates:\n")
 		for _, gate := range spec.QualityGates {

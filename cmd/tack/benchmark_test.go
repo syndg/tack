@@ -132,8 +132,8 @@ func TestBenchmarkShowDisplaysBenchmarkDetails(t *testing.T) {
 		"Baseline: 43106b6c7fbe8c69cebb02f8fc80cb060faddeee",
 		"Feature range: 4065175a5811d688adc65b4b974f6fced0cdba67",
 		"Context policy: repo-only-no-history",
-		"Validation: go run cmd/integration_test/main.go cli undo/undo_commit reflog/checkout",
-		"Prompt: Add support for undoing recent plain commit and checkout actions using git reflog. Explicitly exclude pull --rebase, merge, revert, amend/reword, fixup/squash, and broader rebase flows from this benchmark slice.",
+		"Validation: go test ./pkg/integration/clients -run 'TestIntegration/undo/undo_commit$' -count=1 -v && go test ./pkg/integration/clients -run 'TestIntegration/reflog/checkout$' -count=1 -v",
+		"Prompt: Match lazygit's canonical reflog undo slice for recent plain commit and checkout actions.",
 		"Outstanding: none",
 	} {
 		if !strings.Contains(output, needle) {
@@ -161,7 +161,7 @@ func TestBenchmarkRunbookDisplaysManualPrepSteps(t *testing.T) {
 		"Readiness: ready",
 		"Step 1: clone https://github.com/jesseduffield/lazygit.git into a clean benchmark workspace",
 		"Step 2: check out baseline 43106b6c7fbe8c69cebb02f8fc80cb060faddeee",
-		"Step 5: validate with go run cmd/integration_test/main.go cli undo/undo_commit reflog/checkout",
+		"Step 5: validate with go test ./pkg/integration/clients -run 'TestIntegration/undo/undo_commit$' -count=1 -v && go test ./pkg/integration/clients -run 'TestIntegration/reflog/checkout$' -count=1 -v",
 	} {
 		if !strings.Contains(output, needle) {
 			t.Fatalf("output missing %q:\n%s", needle, output)
@@ -398,7 +398,11 @@ func TestBenchmarkExecuteStartsObjectiveAndPersistsLinks(t *testing.T) {
 					ProjectID:   "proj-1",
 					ObjectiveID: "obj-1",
 				},
-				Streams: []domain.Stream{},
+				Streams: []domain.Stream{
+					{Title: "Narrow reflog undo core to plain commit and checkout", Card: &domain.StreamCard{}},
+					{Title: "Exercise supported and unsupported undo flows in integration tests", Card: &domain.StreamCard{BlockedBy: []string{"Narrow reflog undo core to plain commit and checkout"}}},
+					{Title: "Update user-facing docs and copy for the benchmark slice", Card: &domain.StreamCard{BlockedBy: []string{"Narrow reflog undo core to plain commit and checkout"}}},
+				},
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)
@@ -733,7 +737,8 @@ func TestBenchmarkShowRunDisplaysRecordedRun(t *testing.T) {
 		"Blueprint: benchmark-baseline",
 		"Version: 0.1.0",
 		"Created:",
-		"Prompt snapshot: Add support for undoing recent plain commit and checkout actions using git reflog. Explicitly exclude pull --rebase, merge, revert, amend/reword, fixup/squash, and broader rebase flows from this benchmark slice.",
+		"Prompt snapshot: Match lazygit's canonical reflog undo slice for recent plain commit and checkout actions.",
+		"Keep the end-to-end validation entrypoints `undo/undo_commit` and `reflog/checkout` intact:",
 		"Score: pending",
 	} {
 		if !strings.Contains(output, needle) {
@@ -1042,8 +1047,12 @@ func TestBenchmarkExecuteWaitsForDelayedPlanBeforeApplyingQualityGates(t *testin
 				Plan    domain.Plan     `json:"plan"`
 				Streams []domain.Stream `json:"streams"`
 			}{
-				Plan:    domain.Plan{ID: "plan-delayed", ProjectID: "proj-delayed", ObjectiveID: "obj-delayed"},
-				Streams: []domain.Stream{},
+				Plan: domain.Plan{ID: "plan-delayed", ProjectID: "proj-delayed", ObjectiveID: "obj-delayed"},
+				Streams: []domain.Stream{
+					{Title: "Narrow reflog undo core to plain commit and checkout", Card: &domain.StreamCard{}},
+					{Title: "Exercise supported and unsupported undo flows in integration tests", Card: &domain.StreamCard{BlockedBy: []string{"Narrow reflog undo core to plain commit and checkout"}}},
+					{Title: "Update user-facing docs and copy for the benchmark slice", Card: &domain.StreamCard{BlockedBy: []string{"Narrow reflog undo core to plain commit and checkout"}}},
+				},
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)

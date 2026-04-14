@@ -105,8 +105,19 @@ func TestBuildReportAggregatesStreamMetrics(t *testing.T) {
 			t.Fatalf("Update merge entry: %v", err)
 		}
 	}
+	insightStore := db.NewObjectiveInsightStore(database.Conn())
+	if err := insightStore.Create(ctx, &domain.ObjectiveInsight{
+		ObjectiveID: objective.ID,
+		Source:      domain.InsightSourceBenchmark,
+		Kind:        domain.InsightKindBenchmarkValidationPassed,
+		Summary:     "Final benchmark validation passed.",
+		Detail:      "integration ok",
+		CreatedAt:   now.Add(36 * time.Minute),
+	}); err != nil {
+		t.Fatalf("Create validation insight: %v", err)
+	}
 
-	report, err := BuildReport(dataDir, Run{ID: "bench-1", BenchmarkID: "lazygit.command-log-nav-keybindings", ObjectiveID: objective.ID, ProjectID: project.ID, RunID: daemonRun.ID, Status: "completed"})
+	report, err := BuildReport(dataDir, Run{ID: "bench-1", BenchmarkID: "lazygit.undo-basic-commit-checkout", ObjectiveID: objective.ID, ProjectID: project.ID, RunID: daemonRun.ID, Status: "completed"})
 	if err != nil {
 		t.Fatalf("BuildReport: %v", err)
 	}
@@ -137,6 +148,9 @@ func TestBuildReportAggregatesStreamMetrics(t *testing.T) {
 	if report.Summary.Duration <= 0 {
 		t.Fatalf("duration = %s, want > 0", report.Summary.Duration)
 	}
+	if report.Validation == nil || report.Validation.Status != "passed" {
+		t.Fatalf("validation = %+v, want passed", report.Validation)
+	}
 	streamBReport := report.Streams[1]
 	if streamBReport.ExecutionCount != 2 || streamBReport.HumanEscalations != 1 || streamBReport.HumanResumes != 1 {
 		t.Fatalf("stream B report = %+v", streamBReport)
@@ -147,6 +161,8 @@ func TestBuildReportAggregatesStreamMetrics(t *testing.T) {
 		"# Benchmark Telemetry",
 		"- Human escalations: `1`",
 		"- Human resumes: `1`",
+		"- Final validation: `passed`",
+		"## Final Validation",
 		"### `stream-b` Coverage",
 		"- Stream executions: `2`",
 	} {

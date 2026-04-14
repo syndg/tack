@@ -27,6 +27,9 @@ type Run struct {
 	ObjectiveID       string
 	StatusReason      string
 	ScoreStatus       string
+	ValidationStatus  string
+	ValidationSummary string
+	ValidationChecked string
 	Version           string
 	CreatedAt         string
 }
