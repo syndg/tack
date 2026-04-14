@@ -1,0 +1,66 @@
+---
+title: Security
+description: Tack's security model, audit results, and trust properties.
+---
+
+Tack runs LLM-directed commands inside your repositories. Security is a first-class concern, not an afterthought.
+
+## Audit
+
+Tack has been security audited (2026-04-10). All critical and high findings have been remediated. The full audit report is in the repository:
+
+- [Security Audit Report](https://github.com/syndg/tack/blob/main/docs/security-audit-2026-04-10.md)
+
+## Security Model
+
+### Network
+
+- Daemon binds to `127.0.0.1:9800` by default (loopback only)
+- All daemon routes require bearer token authentication
+- Agent callbacks are authenticated
+- No remote access unless you explicitly configure it
+
+### Sandbox Isolation
+
+- Each agent works in its own git worktree (local) or VM (Daytona)
+- File scope is enforced — agents can only modify files in their assigned scope
+- Path traversal is blocked — agents cannot escape the sandbox root
+- Worktrees are automatically cleaned up when objectives complete
+
+### Credentials
+
+- Git credentials are never persisted in remote URLs
+- API keys are stored in `~/.config/tack/credentials.yaml` (user-local, not in the repo)
+- The `tack init` wizard validates credential/provider combinations before you start
+- Daytona sandboxes receive credentials per-invocation, not permanently
+
+### Observability
+
+- Activity logs use `0600` file permissions
+- Live projected events do not include raw agent content
+- Escalation milestones do not leak mail bodies or payloads
+- Canonical on-disk logs retain content for local debugging only
+
+### Mail
+
+- Mail endpoints enforce project scoping
+- Cross-project spoofing is blocked
+- All mail routes require daemon auth
+
+## What Tack Can Access
+
+When you run Tack with local sandboxes:
+
+| Resource | Access |
+|----------|--------|
+| Files in assigned file scope | Read and write |
+| Files outside file scope | Read only |
+| Files outside the worktree | No access |
+| Environment variables | Only what Tack injects |
+| Network | Not restricted by Tack |
+
+Agents run as your user. Tack's sandbox prevents file-level escapes, but does not provide kernel-level isolation. For stronger isolation, use Daytona sandboxes.
+
+## Reporting
+
+Security issues can be reported by opening an issue on the [GitHub repository](https://github.com/syndg/tack/issues).

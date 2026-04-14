@@ -11,7 +11,7 @@ Tack takes an objective (a description of what you want built), plans how to bre
 Objective
     │
     ▼
-  Run starts automatically
+  Discovery ──► Context Dossier (cited repo context, suggested seams)
     │
     ▼
   Planner ──► Plan (streams, file scopes, dependencies)
@@ -22,9 +22,9 @@ Objective
     ▼
   Dispatch ──► Parallel Agents in Isolated Sandboxes
     │
-    ├── Work item 1: Scout? ──► Build ──► Quality Gates ──► Review ──► Merge Ready
-    ├── Work item 2: Scout? ──► Build ──► Quality Gates ──► Review ──► Merge Ready
-    └── Work item 3: Scout? ──► Build ──► Quality Gates ──► Review ──► Merge Ready
+    ├── Work item 1: Build ──► Quality Gates ──► Review ──► Merge Ready
+    ├── Work item 2: Build ──► Quality Gates ──► Review ──► Merge Ready
+    └── Work item 3: Build ──► Quality Gates ──► Review ──► Merge Ready
     │
     ▼
   Merge Queue ──► Post-Merge Gates ──► PR Created
@@ -46,9 +46,9 @@ The key insight: Tack's product surface is the deterministic harness around the 
 
 | Role | What it does | When It Runs |
 |------|-------------|-------------|
-| **Planner** | Explores the codebase, decomposes the objective into parallel streams with file scopes and dependencies | First, after objective is created |
-| **Scout** | Optional pre-build research inside a bounded scope — investigates files or patterns before building | Before builder, if the blueprint includes it |
-| **Builder** | Implements the stream's task in an isolated sandbox, commits changes | After scout (if present) or directly |
+| **Discovery** | Explores the codebase, produces a cited context dossier with suggested seams | First, before planning |
+| **Planner** | Consumes the dossier, decomposes the objective into parallel streams with file scopes and dependencies | After discovery |
+| **Builder** | Implements the stream's task in an isolated sandbox, commits changes | After plan approval |
 | **Reviewer** | Reviews the implementation for correctness and quality | After builder passes quality gates |
 | **Merger** | Integrates ready streams and runs post-merge checks | After streams signal merge_ready |
 

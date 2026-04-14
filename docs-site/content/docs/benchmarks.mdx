@@ -1,0 +1,62 @@
+---
+title: Benchmarks
+description: Tack benchmarked against real open-source projects.
+---
+
+Tack is benchmarked against real open-source feature implementations. Each benchmark targets a specific feature in a real project, with frozen plan shapes and deterministic validation.
+
+## How Benchmarks Work
+
+1. **Target selection** — a real feature from a real open-source project
+2. **Frozen plan shape** — the expected stream decomposition is fixed for apples-to-apples comparison
+3. **Objective submitted** — Tack runs discovery, planning, execution, review, merge
+4. **Validation** — integration tests run against the merged result
+5. **Report generated** — full telemetry: streams, recovery events, duration, human interventions
+
+## Results
+
+### lazygit: command-log navigation keybindings
+
+Implement scroll mechanics, scoped keybindings, and regression coverage for the command log panel in [lazygit](https://github.com/jesseduffield/lazygit).
+
+| Metric | Value |
+|--------|-------|
+| Streams | 3 planned, 3 merged |
+| Recovery events | 0 |
+| Human interventions | 0 |
+| Duration | 18m 22s |
+| Validation | `go test ./pkg/gui/... -count=1` — passed |
+
+Every stream succeeded on first pass. No reviewer rejections, no quality-gate failures, no human guidance needed.
+
+[Full report](https://github.com/syndg/tack/blob/main/docs/benchmarks/2026-04-14-lazygit-command-log-nav-keybindings-2f5a4e99-8fc4-488e-baa7-ae69b17f0c4c.md)
+
+### lazygit: undo basic commit/checkout
+
+Narrow reflog undo to plain commit and checkout, add integration tests, and update user-facing docs. A harder benchmark involving core git operations.
+
+| Metric | Value |
+|--------|-------|
+| Streams | 3 planned, 3 merged |
+| Recovery events | 5 automatic (4 review rejections self-healed) |
+| Human interventions | 0 |
+| Duration | 1h 6m 53s |
+| Final validation | headless integration tests — passed |
+
+The harness self-healed through 4 reviewer rejections and 1 gate failure without any human intervention. Final validation confirmed correct behavior against lazygit's canonical integration test suite.
+
+[Full report](https://github.com/syndg/tack/blob/main/docs/benchmarks/2026-04-14-lazygit-undo-basic-commit-checkout-545e5673-1b4a-4527-b62a-da2542e08d6a.md)
+
+## What This Proves
+
+- **First-pass success is achievable** — benchmark 2 had zero recovery events
+- **Self-healing works** — benchmark 1 recovered from 5 failures automatically
+- **Zero human intervention across both benchmarks** — the harness handled everything
+- **Real validation, not vibes** — integration tests confirm merged code actually works
+
+## Methodology
+
+- Benchmarks use frozen plan shapes to prevent the planner from finding easier decompositions
+- Quality gates and validation commands are defined per benchmark
+- Benchmark reports are generated artifacts, not manually written summaries
+- The benchmark runner is part of Tack's codebase (`internal/benchmark/`)

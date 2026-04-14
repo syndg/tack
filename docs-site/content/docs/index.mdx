@@ -35,6 +35,7 @@ Tack is trying to make repositories legible to agents and make agent execution r
 
 - **Daemon-first.** `tack daemon` is a machine-wide service.
 - **Project-scoped.** Each repo gets a stable `project_id`, local `.tack/` config, rules, and blueprints.
+- **Context-engineered.** Discovery produces cited dossiers before planning. Contract patches and codification candidates accumulate during execution.
 - **Blueprint-driven.** Workflow steps are explicit YAML state machines, not hidden prompts.
 - **Isolation-first.** Agents run in separate worktrees or remote sandboxes.
 - **Deterministic where it matters.** Quality gates, merge ordering, scoped rules, and retries are infrastructure concerns.
@@ -50,29 +51,19 @@ Tack records recovery attempts durably and uses them to drive reruns.
 - Exhausted retries can block for human guidance instead of failing permanently
 - Human-guided retries survive daemon restarts and resume from the correct point
 
-## What Exists Today vs What Is Planned
-
-**Exists today:**
+## What Exists Today
 
 - machine-wide daemon with project-scoped execution
+- discovery and context dossiers before planning
+- dossier-driven planning with contract patches and codification candidates
 - explicit blueprints, isolated sandboxes, and deterministic quality gates
 - planner -> approval -> build/review -> merge flow
 - recovery-aware execution with watch/log/mail surfaces
-
-**Planned next:**
-
-- a first-class discovery step before planning
-- compact context dossiers
-- bounded execution contracts per work item
-- stronger benchmark-driven evaluation for context quality
-
-Tack's direction is to make the context packet better, not just add more workers.
+- benchmark-driven evaluation against real open-source projects
 
 ## Where Tack Is Going
 
-Tack's next focus is **context engineering** and **harness hardening**.
-
-That means improving the step before planning: discovery, compact context dossiers, bounded execution contracts, and better repo legibility. The goal is not just "run more agents". The goal is to give each worker the smallest, highest-signal packet possible.
+Tack's next focus is **harness hardening** and **operator experience** — better inspectability, richer validation modes, and cross-objective learning. The goal is not more workers. It is making the harness more reliable and the results more visible.
 
 ## What Tack Is Not
 

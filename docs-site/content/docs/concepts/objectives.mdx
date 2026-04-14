@@ -15,16 +15,19 @@ tack plan "Add pagination to all list endpoints" --blueprint standard
 The default workflow:
 
 ```
-objective created → planner runs → plan ready → human approval → execution → merge → PR
+objective created → discovery runs → dossier produced → planner runs → plan ready → human approval → execution → merge → PR
 ```
+
+Before planning, Tack runs a discovery step that explores the codebase and produces a context dossier with cited references and suggested seams. The planner consumes this dossier to produce better decompositions.
 
 See [Writing Good Objectives](/docs/guides/writing-objectives) for patterns and examples that produce better plans.
 
 ## The Planner
 
-When you submit an objective, Tack spawns a planner agent. The planner:
+When you submit an objective, Tack first runs discovery to produce a context dossier, then spawns a planner agent. The planner:
 
-1. **Explores your codebase** to understand its structure, conventions, and relevant files
+1. **Consumes the dossier** — cited repo context and suggested seams from discovery
+2. **Explores your codebase** to validate and supplement the dossier findings
 2. **Identifies what needs to change** to fulfill the objective
 3. **Decomposes the objective** into independent streams that can run in parallel
 4. **Assigns file scopes** — glob patterns defining which files each stream can modify
