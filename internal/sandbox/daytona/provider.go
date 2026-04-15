@@ -240,9 +240,9 @@ func (p *Provider) bootstrap(ctx context.Context, sb *daytona.Sandbox, opts sand
 		p.logger.Info("bootstrap: creating branch from base ref", "branch", branch, "base_ref", opts.BaseRef)
 		// Ensure we have remote refs available when the base ref is a pushed merge branch.
 		_, _ = sb.Process.ExecuteCommand(ctx, "git fetch origin '+refs/heads/*:refs/remotes/origin/*'", options.WithCwd(repoPath))
-		resp, err := sb.Process.ExecuteCommand(ctx, fmt.Sprintf("git checkout -B %s origin/%s", branch, opts.BaseRef), options.WithCwd(repoPath))
+		resp, err := sb.Process.ExecuteCommand(ctx, fmt.Sprintf("git checkout -B %s %s", naming.ShellQuote(branch), naming.ShellQuote("origin/"+opts.BaseRef)), options.WithCwd(repoPath))
 		if err != nil || resp.ExitCode != 0 {
-			resp, err = sb.Process.ExecuteCommand(ctx, fmt.Sprintf("git checkout -B %s %s", branch, opts.BaseRef), options.WithCwd(repoPath))
+			resp, err = sb.Process.ExecuteCommand(ctx, fmt.Sprintf("git checkout -B %s %s", naming.ShellQuote(branch), naming.ShellQuote(opts.BaseRef)), options.WithCwd(repoPath))
 			if err != nil || resp.ExitCode != 0 {
 				return fmt.Errorf("checking out branch %s from %s: %s", branch, opts.BaseRef, resp.Result)
 			}

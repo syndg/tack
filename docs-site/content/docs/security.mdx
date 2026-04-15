@@ -3,13 +3,22 @@ title: Security
 description: Tack's security model, audit results, and trust properties.
 ---
 
-Tack runs LLM-directed commands inside your repositories. Security is a first-class concern, not an afterthought.
+Tack runs LLM-directed commands inside your repositories. Security matters here because the product is intentionally close to your code, your git state, and your local credentials.
 
 ## Audit
 
-Tack has been security audited (2026-04-10). All critical and high findings have been remediated. The full audit report is in the repository:
+Latest audit pass: `2026-04-15`.
 
-- [Security Audit Report](https://github.com/syndg/tack/blob/main/docs/security-audit-2026-04-10.md)
+Recent fixed issues:
+
+- Shell-injection hardening for branch names, merge refs, model names, and PR base/head values that flowed into `sh -c`
+- Local ignored-file bootstrap now skips ignored symlinks whose resolved targets escape the repo root
+- This page now reflects the real local-sandbox trust boundary instead of overstating isolation
+
+Audit reports:
+
+- [Security Audit Report 2026-04-15](https://github.com/syndg/tack/blob/main/docs/security-audit-2026-04-15.md)
+- [Security Audit Report 2026-04-10](https://github.com/syndg/tack/blob/main/docs/security-audit-2026-04-10.md)
 
 ## Security Model
 
@@ -23,9 +32,15 @@ Tack has been security audited (2026-04-10). All critical and high findings have
 ### Sandbox Isolation
 
 - Each agent works in its own git worktree (local) or VM (Daytona)
-- File scope is enforced — agents can only modify files in their assigned scope
-- Path traversal is blocked — agents cannot escape the sandbox root
+- Worktree path traversal via Tack-controlled file operations is blocked
+- Ignored symlinks that resolve outside the repo are not copied into fresh local worktrees
 - Worktrees are automatically cleaned up when objectives complete
+
+Important:
+
+- Local worktrees are not containers or VMs
+- Local agents run as your user
+- File scope is an orchestration and tool-policy boundary, not a kernel-enforced security boundary
 
 ### Credentials
 
@@ -53,13 +68,24 @@ When you run Tack with local sandboxes:
 
 | Resource | Access |
 |----------|--------|
-| Files in assigned file scope | Read and write |
-| Files outside file scope | Read only |
-| Files outside the worktree | No access |
+| Files in assigned file scope | Intended write ownership |
+| Files outside file scope | Not a hard OS boundary |
+| Files outside the worktree | Not sandboxed by the OS |
 | Environment variables | Only what Tack injects |
 | Network | Not restricted by Tack |
 
-Agents run as your user. Tack's sandbox prevents file-level escapes, but does not provide kernel-level isolation. For stronger isolation, use Daytona sandboxes.
+Agents run as your user. Local mode is best understood as an orchestrated worktree plus prompt/tool constraints, not as host isolation. For stronger isolation, use Daytona sandboxes.
+
+## Trusted Inputs
+
+Treat these as trusted code-execution surfaces:
+
+- `.tack/config.yaml`
+- project `quality_gates`
+- project setup commands
+- custom blueprints and rules
+
+If you would not run a repo's scripts locally, do not point Tack at that repo in local-sandbox mode.
 
 ## See Also
 

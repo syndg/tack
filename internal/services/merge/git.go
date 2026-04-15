@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/syndg/tack/internal/naming"
 	"github.com/syndg/tack/internal/sandbox"
 )
 
@@ -83,14 +84,14 @@ func (m *GitMerger) TryCleanMerge(ctx context.Context, sb sandbox.Sandbox, branc
 	// as long as push ran (falls back to local ref if origin/ not found).
 	mergeRef := "origin/" + branch
 	// Check if origin ref exists; fall back to local branch name for worktrees.
-	checkRes, _ := sb.Exec(ctx, fmt.Sprintf("git rev-parse --verify %s", mergeRef), sandbox.ExecOpts{})
+	checkRes, _ := sb.Exec(ctx, fmt.Sprintf("git rev-parse --verify %s", naming.ShellQuote(mergeRef)), sandbox.ExecOpts{})
 	if checkRes.ExitCode != 0 {
 		mergeRef = branch
 	}
 	// Record pre-merge HEAD so we can diff against it after merge.
 	preMergeRef := m.getHeadRef(ctx, sb)
 
-	cmd := fmt.Sprintf("git merge --no-edit %s", mergeRef)
+	cmd := fmt.Sprintf("git merge --no-edit %s", naming.ShellQuote(mergeRef))
 	res, err := sb.Exec(ctx, cmd, sandbox.ExecOpts{})
 	if err != nil {
 		return nil, fmt.Errorf("executing git merge: %w", err)
@@ -145,14 +146,14 @@ func (m *GitMerger) TryCleanMerge(ctx context.Context, sb sandbox.Sandbox, branc
 func (m *GitMerger) TryAutoResolve(ctx context.Context, sb sandbox.Sandbox, branch string) (*MergeResult, error) {
 	// Use origin/ prefix for remote sandboxes; fall back to local ref.
 	mergeRef := "origin/" + branch
-	checkRes, _ := sb.Exec(ctx, fmt.Sprintf("git rev-parse --verify %s", mergeRef), sandbox.ExecOpts{})
+	checkRes, _ := sb.Exec(ctx, fmt.Sprintf("git rev-parse --verify %s", naming.ShellQuote(mergeRef)), sandbox.ExecOpts{})
 	if checkRes.ExitCode != 0 {
 		mergeRef = branch
 	}
 	// Record pre-merge HEAD so we can diff against it after merge.
 	preMergeRef := m.getHeadRef(ctx, sb)
 
-	cmd := fmt.Sprintf("git merge -X theirs --no-edit %s", mergeRef)
+	cmd := fmt.Sprintf("git merge -X theirs --no-edit %s", naming.ShellQuote(mergeRef))
 	res, err := sb.Exec(ctx, cmd, sandbox.ExecOpts{})
 	if err != nil {
 		return nil, fmt.Errorf("executing git merge -X theirs: %w", err)
@@ -205,7 +206,7 @@ func (m *GitMerger) getHeadRef(ctx context.Context, sb sandbox.Sandbox) string {
 func (m *GitMerger) GetDiffStat(ctx context.Context, sb sandbox.Sandbox, preMergeRef string) (filesChanged, insertions, deletions int, err error) {
 	var commands []string
 	if preMergeRef != "" {
-		commands = append(commands, fmt.Sprintf("git diff --stat %s...HEAD", preMergeRef))
+		commands = append(commands, fmt.Sprintf("git diff --stat %s", naming.ShellQuote(preMergeRef+"...HEAD")))
 	}
 	commands = append(commands,
 		"git diff --stat ORIG_HEAD...HEAD",

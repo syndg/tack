@@ -167,6 +167,71 @@ func TestCreate_SkipIgnoredCopyLeavesIgnoredFilesOut(t *testing.T) {
 	}
 }
 
+func TestCreate_DoesNotCopyIgnoredSymlinkOutsideRepo(t *testing.T) {
+	repoDir := initTestRepo(t)
+	p := newTestProvider(t, repoDir)
+	ctx := context.Background()
+
+	outsideDir := t.TempDir()
+	target := filepath.Join(outsideDir, "secret.txt")
+	if err := os.WriteFile(target, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("WriteFile target: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".gitignore"), []byte("secret-link\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile .gitignore: %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(repoDir, "secret-link")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	sb, err := p.Create(ctx, sandbox.CreateOpts{
+		Branch: "tack/objective/symlink",
+		Labels: map[string]string{"tack.objective": "obj-symlink", "tack.role": "builder"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	localSB := sb.(*LocalSandbox)
+	if _, err := os.Lstat(filepath.Join(localSB.path, "secret-link")); !os.IsNotExist(err) {
+		t.Fatalf("expected escaped ignored symlink to be skipped, got err=%v", err)
+	}
+}
+
+func TestCreate_DoesNotCopyNestedIgnoredSymlinkOutsideRepo(t *testing.T) {
+	repoDir := initTestRepo(t)
+	p := newTestProvider(t, repoDir)
+	ctx := context.Background()
+
+	outsideDir := t.TempDir()
+	target := filepath.Join(outsideDir, "secret.txt")
+	if err := os.WriteFile(target, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("WriteFile target: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".gitignore"), []byte("cache/\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile .gitignore: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoDir, "cache"), 0o755); err != nil {
+		t.Fatalf("MkdirAll cache: %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(repoDir, "cache", "secret-link")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	sb, err := p.Create(ctx, sandbox.CreateOpts{
+		Branch: "tack/objective/nested-symlink",
+		Labels: map[string]string{"tack.objective": "obj-nested-symlink", "tack.role": "builder"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	localSB := sb.(*LocalSandbox)
+	if _, err := os.Lstat(filepath.Join(localSB.path, "cache", "secret-link")); !os.IsNotExist(err) {
+		t.Fatalf("expected nested escaped ignored symlink to be skipped, got err=%v", err)
+	}
+}
+
 func TestExec_RunsCommandInWorktreeDirectory(t *testing.T) {
 	repoDir := initTestRepo(t)
 	p := newTestProvider(t, repoDir)

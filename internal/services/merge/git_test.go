@@ -45,7 +45,7 @@ func TestTryCleanMerge_Success(t *testing.T) {
 				return sandbox.ExecResult{ExitCode: 0}, nil
 			case strings.Contains(cmd, "rev-parse --verify"):
 				return sandbox.ExecResult{ExitCode: 128}, nil
-			case cmd == "git merge --no-edit feature-branch":
+			case cmd == "git merge --no-edit 'feature-branch'":
 				return sandbox.ExecResult{ExitCode: 0}, nil
 			case strings.Contains(cmd, "diff --stat"):
 				return sandbox.ExecResult{
@@ -98,7 +98,7 @@ func TestTryCleanMerge_Conflict(t *testing.T) {
 				return sandbox.ExecResult{ExitCode: 0}, nil
 			case strings.Contains(cmd, "rev-parse --verify"):
 				return sandbox.ExecResult{ExitCode: 128}, nil
-			case cmd == "git merge --no-edit conflict-branch":
+			case cmd == "git merge --no-edit 'conflict-branch'":
 				return sandbox.ExecResult{
 					ExitCode: 1,
 					Stderr:   "CONFLICT (content): Merge conflict in src/auth.go\nAutomatic merge failed",
@@ -141,7 +141,9 @@ func TestTryAutoResolve_Success(t *testing.T) {
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
 			switch cmd {
-			case "git merge -X theirs --no-edit feature-branch":
+			case "git rev-parse --verify 'origin/feature-branch'":
+				return sandbox.ExecResult{ExitCode: 128}, nil
+			case "git merge -X theirs --no-edit 'feature-branch'":
 				return sandbox.ExecResult{ExitCode: 0}, nil
 			case "git diff --stat HEAD~1":
 				return sandbox.ExecResult{
@@ -181,7 +183,7 @@ func TestTryAutoResolve_Failure(t *testing.T) {
 			switch {
 			case strings.Contains(cmd, "rev-parse --verify"):
 				return sandbox.ExecResult{ExitCode: 128}, nil
-			case cmd == "git merge -X theirs --no-edit bad-branch":
+			case cmd == "git merge -X theirs --no-edit 'bad-branch'":
 				return sandbox.ExecResult{ExitCode: 1, Stderr: "CONFLICT"}, nil
 			case cmd == "git diff --name-only --diff-filter=U":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: "binary.dat\n"}, nil
@@ -310,7 +312,7 @@ func TestGetDiffStat_UsesPreMergeRef(t *testing.T) {
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
 			callLog = append(callLog, cmd)
 			switch cmd {
-			case "git diff --stat abc123...HEAD":
+			case "git diff --stat 'abc123...HEAD'":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: " f.go | 5 +++--\n 1 file changed, 3 insertions(+), 2 deletions(-)\n"}, nil
 			default:
 				return sandbox.ExecResult{ExitCode: 0}, nil
@@ -327,7 +329,7 @@ func TestGetDiffStat_UsesPreMergeRef(t *testing.T) {
 		t.Fatalf("GetDiffStat = (%d, %d, %d), want (1, 3, 2)", files, ins, del)
 	}
 	// Should use the preMergeRef directly without falling back to ORIG_HEAD.
-	if len(callLog) != 1 || callLog[0] != "git diff --stat abc123...HEAD" {
+	if len(callLog) != 1 || callLog[0] != "git diff --stat 'abc123...HEAD'" {
 		t.Fatalf("unexpected command sequence: %v (wanted single preMergeRef call)", callLog)
 	}
 }
@@ -406,7 +408,7 @@ func TestMerge_TiersSequentially(t *testing.T) {
 				return sandbox.ExecResult{ExitCode: 0}, nil
 			case strings.Contains(cmd, "rev-parse --verify"):
 				return sandbox.ExecResult{ExitCode: 128}, nil // no origin/ ref
-			case cmd == "git merge --no-edit test-branch":
+			case cmd == "git merge --no-edit 'test-branch'":
 				tierAttempts++
 				return sandbox.ExecResult{
 					ExitCode: 1,
@@ -416,7 +418,7 @@ func TestMerge_TiersSequentially(t *testing.T) {
 				return sandbox.ExecResult{ExitCode: 0, Stdout: "file.go\n"}, nil
 			case cmd == "git merge --abort":
 				return sandbox.ExecResult{ExitCode: 0}, nil
-			case cmd == "git merge -X theirs --no-edit test-branch":
+			case cmd == "git merge -X theirs --no-edit 'test-branch'":
 				tierAttempts++
 				return sandbox.ExecResult{ExitCode: 0}, nil
 			case strings.Contains(cmd, "diff --stat"):
@@ -455,12 +457,12 @@ func TestMerge_AllTiersFail(t *testing.T) {
 				return sandbox.ExecResult{ExitCode: 0}, nil
 			case strings.Contains(cmd, "rev-parse --verify"):
 				return sandbox.ExecResult{ExitCode: 128}, nil
-			case cmd == "git merge --no-edit stuck-branch":
+			case cmd == "git merge --no-edit 'stuck-branch'":
 				return sandbox.ExecResult{
 					ExitCode: 1,
 					Stderr:   "CONFLICT (content): Merge conflict in binary.dat",
 				}, nil
-			case cmd == "git merge -X theirs --no-edit stuck-branch":
+			case cmd == "git merge -X theirs --no-edit 'stuck-branch'":
 				return sandbox.ExecResult{
 					ExitCode: 1,
 					Stderr:   "CONFLICT (binary): Merge conflict in binary.dat",

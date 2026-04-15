@@ -972,8 +972,8 @@ func (p *Processor) publishNewlyReadyStreams(ctx context.Context, planID string)
 
 func (p *Processor) pushMergeBranch(ctx context.Context, sb sandbox.Sandbox, objectiveID string) {
 	branch := naming.MergeBranch(objectiveID)
-	pushCmd := fmt.Sprintf("git push -u origin HEAD:refs/heads/%s", branch)
-	verifyCmd := fmt.Sprintf("git ls-remote --exit-code --heads origin %s", branch)
+	pushCmd := fmt.Sprintf("git push -u origin %s", naming.ShellQuote("HEAD:refs/heads/"+branch))
+	verifyCmd := fmt.Sprintf("git ls-remote --exit-code --heads origin %s", naming.ShellQuote(branch))
 	for attempt := 1; attempt <= 2; attempt++ {
 		res, err := sb.Exec(ctx, pushCmd, sandbox.ExecOpts{})
 		if err != nil || res.ExitCode != 0 {
@@ -997,7 +997,7 @@ func (p *Processor) deleteRemoteBranch(ctx context.Context, sb sandbox.Sandbox, 
 	if err != nil || remoteCheck.ExitCode != 0 {
 		return
 	}
-	res, err := sb.Exec(ctx, fmt.Sprintf("git push origin --delete %s", branch), sandbox.ExecOpts{})
+	res, err := sb.Exec(ctx, fmt.Sprintf("git push origin --delete %s", naming.ShellQuote(branch)), sandbox.ExecOpts{})
 	if err != nil || res.ExitCode != 0 {
 		stderr := strings.TrimSpace(res.Stderr)
 		if strings.Contains(stderr, "remote ref does not exist") || strings.Contains(stderr, "unable to delete") {

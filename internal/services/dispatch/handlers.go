@@ -611,7 +611,7 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 	// Fallback to gh CLI inside the sandbox for unsupported remotes.
 	escapedTitle := naming.ShellQuote(title)
 	escapedBody := naming.ShellQuote(body)
-	prCmd := fmt.Sprintf("gh pr create --title %s --body %s --head %s --base %s", escapedTitle, escapedBody, branch, h.baseBranch)
+	prCmd := fmt.Sprintf("gh pr create --title %s --body %s --head %s --base %s", escapedTitle, escapedBody, naming.ShellQuote(branch), naming.ShellQuote(h.baseBranch))
 
 	prResult, err := sb.Exec(ctx, prCmd, sandbox.ExecOpts{})
 	if err != nil || prResult.ExitCode != 0 {
@@ -869,14 +869,15 @@ func (h *Handlers) buildPRPrompt(ctx context.Context, sb sandbox.Sandbox, obj *d
 		b.WriteString(strings.TrimSpace(streamSummary))
 		b.WriteString("\n\n")
 	}
+	diffRange := naming.ShellQuote("origin/" + h.baseBranch + "...HEAD")
 	b.WriteString("## Changed Files\n")
-	b.WriteString(h.commandOutput(ctx, sb, "git diff --name-only origin/"+h.baseBranch+"...HEAD", 4000, "(changed files unavailable)"))
+	b.WriteString(h.commandOutput(ctx, sb, "git diff --name-only "+diffRange, 4000, "(changed files unavailable)"))
 	b.WriteString("\n\n")
 	b.WriteString("## Diff Stat\n")
-	b.WriteString(h.commandOutput(ctx, sb, "git diff --stat origin/"+h.baseBranch+"...HEAD", 6000, "(diff stat unavailable)"))
+	b.WriteString(h.commandOutput(ctx, sb, "git diff --stat "+diffRange, 6000, "(diff stat unavailable)"))
 	b.WriteString("\n\n")
 	b.WriteString("## Diff Excerpt\n")
-	b.WriteString(h.commandOutput(ctx, sb, "git diff --unified=1 origin/"+h.baseBranch+"...HEAD", 16000, "(diff excerpt unavailable)"))
+	b.WriteString(h.commandOutput(ctx, sb, "git diff --unified=1 "+diffRange, 16000, "(diff excerpt unavailable)"))
 	b.WriteString("\n\n")
 	b.WriteString("## Output Contract\n")
 	b.WriteString("Emit exactly one final line in this form:\n")

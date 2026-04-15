@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/syndg/tack/internal/naming"
 	"github.com/syndg/tack/internal/sandbox"
 )
 
@@ -44,7 +45,8 @@ func (d *DiffExtractor) Extract(ctx context.Context, sb sandbox.Sandbox, base, h
 	execOpts := sandbox.ExecOpts{}
 
 	// Get diff stat for per-file insertions/deletions and totals.
-	statResult, err := sb.Exec(ctx, fmt.Sprintf("git diff --stat %s...%s", base, head), execOpts)
+	diffRange := naming.ShellQuote(base + "..." + head)
+	statResult, err := sb.Exec(ctx, fmt.Sprintf("git diff --stat %s", diffRange), execOpts)
 	if err != nil {
 		return nil, fmt.Errorf("running git diff --stat: %w", err)
 	}
@@ -53,7 +55,7 @@ func (d *DiffExtractor) Extract(ctx context.Context, sb sandbox.Sandbox, base, h
 	}
 
 	// Get name-status for file status (A/M/D/R).
-	nameStatusResult, err := sb.Exec(ctx, fmt.Sprintf("git diff --name-status %s...%s", base, head), execOpts)
+	nameStatusResult, err := sb.Exec(ctx, fmt.Sprintf("git diff --name-status %s", diffRange), execOpts)
 	if err != nil {
 		return nil, fmt.Errorf("running git diff --name-status: %w", err)
 	}
@@ -62,7 +64,7 @@ func (d *DiffExtractor) Extract(ctx context.Context, sb sandbox.Sandbox, base, h
 	}
 
 	// Get numstat for accurate per-file insertion/deletion counts.
-	numStatResult, numStatErr := sb.Exec(ctx, fmt.Sprintf("git diff --numstat %s...%s", base, head), execOpts)
+	numStatResult, numStatErr := sb.Exec(ctx, fmt.Sprintf("git diff --numstat %s", diffRange), execOpts)
 	if numStatErr != nil {
 		d.logger.Warn("running git diff --numstat failed, falling back to --stat bars", "base", base, "head", head, "error", numStatErr)
 	}
@@ -71,7 +73,7 @@ func (d *DiffExtractor) Extract(ctx context.Context, sb sandbox.Sandbox, base, h
 	}
 
 	// Get full unified diff for patch content.
-	patchResult, err := sb.Exec(ctx, fmt.Sprintf("git diff %s...%s", base, head), execOpts)
+	patchResult, err := sb.Exec(ctx, fmt.Sprintf("git diff %s", diffRange), execOpts)
 	if err != nil {
 		return nil, fmt.Errorf("running git diff: %w", err)
 	}

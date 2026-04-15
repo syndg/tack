@@ -91,7 +91,7 @@ func (r *Runtime) addGitExclude(ctx context.Context, sb sandbox.Sandbox, pattern
 	}
 
 	// 2. Ensure the parent directory exists.
-	sb.Exec(ctx, fmt.Sprintf("mkdir -p %s", filepath.Dir(excludePath)), sandbox.ExecOpts{})
+	sb.Exec(ctx, fmt.Sprintf("mkdir -p %s", naming.ShellQuote(filepath.Dir(excludePath))), sandbox.ExecOpts{})
 
 	// 3. Check if pattern is already excluded.
 	checkRes, _ := sb.Exec(ctx, fmt.Sprintf("grep -Fqx %s %s", naming.ShellQuote(pattern), naming.ShellQuote(excludePath)), sandbox.ExecOpts{})
@@ -148,15 +148,15 @@ func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.Ag
 
 	// 3. Build Pi command with RPC mode
 	cmdParts := []string{
-		piCommand,
-		"--mode", "rpc",
-		"--provider", r.provider,
-		"--thinking", r.thinkingLevel,
+		naming.ShellQuote(piCommand),
+		"--mode", naming.ShellQuote("rpc"),
+		"--provider", naming.ShellQuote(r.provider),
+		"--thinking", naming.ShellQuote(r.thinkingLevel),
 	}
 	if model != "" {
-		cmdParts = append(cmdParts, "--model", model)
+		cmdParts = append(cmdParts, "--model", naming.ShellQuote(model))
 	}
-	cmdParts = append(cmdParts, "--extension", extDir)
+	cmdParts = append(cmdParts, "--extension", naming.ShellQuote(extDir))
 	cmd := strings.Join(cmdParts, " ")
 
 	// 4. Set up env vars
@@ -201,7 +201,7 @@ func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.Ag
 
 func (r *Runtime) ensurePIInstalled(ctx context.Context, sb sandbox.Sandbox) (string, error) {
 	// Prefer a sandbox-managed Pi install so remote sandboxes work without user-defined post_create.
-	check, err := sb.Exec(ctx, "if [ -x "+sandboxPIBinary+" ]; then echo local; elif command -v pi >/dev/null 2>&1; then echo global; else echo missing; fi", sandbox.ExecOpts{})
+	check, err := sb.Exec(ctx, "if [ -x "+naming.ShellQuote(sandboxPIBinary)+" ]; then echo local; elif command -v pi >/dev/null 2>&1; then echo global; else echo missing; fi", sandbox.ExecOpts{})
 	if err == nil && check.ExitCode == 0 {
 		switch strings.TrimSpace(check.Stdout) {
 		case "local":

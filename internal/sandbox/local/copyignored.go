@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -62,7 +63,7 @@ func copyIgnoredFiles(repoRoot, worktreePath string, logger *slog.Logger) error 
 		}
 
 		// Copy with reflink if possible, fall back to regular copy
-		if err := copyFileReflink(src, dst); err != nil {
+		if err := copyFileReflink(repoRoot, src, dst); err != nil {
 			logger.Debug("copy-ignored file failed", "src", relPath, "error", err)
 			continue
 		}
@@ -153,7 +154,7 @@ func matchesInclude(path string, patterns []string) bool {
 
 // copyFileReflink copies a file or directory using cp -c (reflink/CoW) on macOS,
 // falling back to cp -R on other systems or if reflink fails.
-func copyFileReflink(src, dst string) error {
+func copyFileReflink(repoRoot, src, dst string) error {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
@@ -161,20 +162,26 @@ func copyFileReflink(src, dst string) error {
 
 	// For directories, use cp -Rc (recursive with reflink)
 	if info.IsDir() {
-		cmd := exec.Command("cp", "-Rc", src, dst)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			// Reflink not supported, fall back to regular copy
-			cmd2 := exec.Command("cp", "-R", src, dst)
-			if out2, err2 := cmd2.CombinedOutput(); err2 != nil {
-				return fmt.Errorf("cp -R: %w (%s)", err2, string(out2))
-			}
-			_ = out
-		}
-		return nil
+		return copyDirectoryFiltered(repoRoot, src, dst, info.Mode())
 	}
 
 	// For symlinks, recreate the link
 	if info.Mode()&os.ModeSymlink != 0 {
+		resolved, err := filepath.EvalSymlinks(src)
+		if err != nil {
+			return fmt.Errorf("resolving symlink %s: %w", src, err)
+		}
+		repoResolved, err := filepath.EvalSymlinks(repoRoot)
+		if err != nil {
+			return fmt.Errorf("resolving repo root %s: %w", repoRoot, err)
+		}
+		rel, err := filepath.Rel(repoResolved, resolved)
+		if err != nil {
+			return fmt.Errorf("checking symlink target %s: %w", src, err)
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("symlink target escapes repo root: %s -> %s", src, resolved)
+		}
 		target, err := os.Readlink(src)
 		if err != nil {
 			return err
@@ -189,6 +196,36 @@ func copyFileReflink(src, dst string) error {
 		return copyFileRegular(src, dst, info.Mode())
 	}
 	return nil
+}
+
+func copyDirectoryFiltered(repoRoot, src, dst string, mode os.FileMode) error {
+	if err := os.MkdirAll(dst, mode.Perm()); err != nil {
+		return err
+	}
+
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == src {
+			return nil
+		}
+
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(dst, rel)
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return os.MkdirAll(targetPath, info.Mode().Perm())
+		}
+		return copyFileReflink(repoRoot, path, targetPath)
+	})
 }
 
 // copyFileRegular copies a file using standard I/O.

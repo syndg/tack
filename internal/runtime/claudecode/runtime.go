@@ -51,10 +51,10 @@ func (r *Runtime) Spawn(ctx context.Context, sb sandbox.Sandbox, opts runtime.Ag
 	quotedPrompt := naming.ShellQuote(prompt)
 	cmd := fmt.Sprintf("claude -p %s --dangerously-skip-permissions", quotedPrompt)
 	if model != "" {
-		cmd += " --model " + model
+		cmd += " --model " + naming.ShellQuote(model)
 	}
 	if toolList != "" {
-		cmd += " --allowedTools " + toolList
+		cmd += " --allowedTools " + naming.ShellQuote(toolList)
 	}
 
 	// 5. Set up env vars

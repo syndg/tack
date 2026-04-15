@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/syndg/tack/internal/naming"
 	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/sandbox"
 )
@@ -203,11 +204,11 @@ func TestRuntime_Spawn_UploadsExtension(t *testing.T) {
 	if !strings.Contains(sb.streamCmd, "pi") {
 		t.Errorf("command %q should contain pi", sb.streamCmd)
 	}
-	if !strings.Contains(sb.streamCmd, "--mode rpc") {
-		t.Errorf("command %q should contain --mode rpc", sb.streamCmd)
+	if !strings.Contains(sb.streamCmd, "--mode "+naming.ShellQuote("rpc")) {
+		t.Errorf("command %q should contain quoted --mode rpc", sb.streamCmd)
 	}
-	if !strings.Contains(sb.streamCmd, "--model test-model") {
-		t.Errorf("command %q should contain --model test-model", sb.streamCmd)
+	if !strings.Contains(sb.streamCmd, "--model "+naming.ShellQuote("test-model")) {
+		t.Errorf("command %q should contain quoted --model test-model", sb.streamCmd)
 	}
 
 	// Initial prompt should have been written
@@ -255,7 +256,7 @@ func TestRuntime_Spawn_ModelOverride(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	if !strings.Contains(sb.streamCmd, "--model override-model") {
+	if !strings.Contains(sb.streamCmd, "--model "+naming.ShellQuote("override-model")) {
 		t.Errorf("command %q should use override model", sb.streamCmd)
 	}
 }

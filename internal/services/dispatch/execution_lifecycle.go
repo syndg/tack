@@ -8,6 +8,7 @@ import (
 
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/naming"
 	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/sandbox"
 	"github.com/syndg/tack/internal/services/agents"
@@ -367,7 +368,7 @@ func (c *Coordinator) rePushMergerBranch(ctx context.Context, objectiveID string
 	}
 	branch := strings.TrimSpace(branchResult.Stdout)
 
-	pushResult, err := sb.Exec(ctx, fmt.Sprintf("git push -f origin %s", branch), sandbox.ExecOpts{})
+	pushResult, err := sb.Exec(ctx, fmt.Sprintf("git push -f origin %s", naming.ShellQuote(branch)), sandbox.ExecOpts{})
 	if err != nil || pushResult.ExitCode != 0 {
 		c.logger.Warn("failed to re-push merger branch after retry",
 			"objective", objectiveID,

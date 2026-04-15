@@ -184,7 +184,7 @@ func TestProcessNext_RunsFinalBenchmarkValidationOnLastMerge(t *testing.T) {
 		switch cmd {
 		case "git fetch origin":
 			return sandbox.ExecResult{ExitCode: 0}, nil
-		case "git merge --no-edit branch-1":
+		case "git merge --no-edit 'branch-1'":
 			return sandbox.ExecResult{ExitCode: 0}, nil
 		case "go test ./pkg/integration/clients -run 'TestIntegration/undo/undo_commit$' -count=1 -v && go test ./pkg/integration/clients -run 'TestIntegration/reflog/checkout$' -count=1 -v":
 			return sandbox.ExecResult{ExitCode: 0, Stdout: "integration ok"}, nil
@@ -248,7 +248,7 @@ func TestProcessNext_FinalBenchmarkValidationFailureFailsMerge(t *testing.T) {
 		switch cmd {
 		case "git fetch origin":
 			return sandbox.ExecResult{ExitCode: 0}, nil
-		case "git merge --no-edit branch-1":
+		case "git merge --no-edit 'branch-1'":
 			return sandbox.ExecResult{ExitCode: 0}, nil
 		case "go test ./pkg/integration/clients -run 'TestIntegration/undo/undo_commit$' -count=1 -v && go test ./pkg/integration/clients -run 'TestIntegration/reflog/checkout$' -count=1 -v":
 			return sandbox.ExecResult{ExitCode: 1, Stderr: "FAIL integration"}, nil
@@ -463,7 +463,7 @@ func TestProcessNext_SuccessfulMerge(t *testing.T) {
 		switch {
 		case cmd == "git fetch origin":
 			return sandbox.ExecResult{ExitCode: 0}, nil
-		case cmd == "git merge --no-edit "+streamID:
+		case cmd == "git merge --no-edit '"+streamID+"'":
 			// Branch name used is streamID here for simplicity.
 			return sandbox.ExecResult{ExitCode: 0}, nil
 		case cmd == "git diff --stat HEAD~1":
@@ -596,13 +596,13 @@ func TestProcessNext_FailedGates(t *testing.T) {
 			return sandbox.ExecResult{ExitCode: 0}, nil
 		case strings.Contains(cmd, "git fetch origin '+refs/heads/*:refs/remotes/origin/*'"):
 			return sandbox.ExecResult{ExitCode: 0}, nil
-		case cmd == "git rev-parse --verify origin/branch-1":
+		case cmd == "git rev-parse --verify 'origin/branch-1'":
 			return sandbox.ExecResult{ExitCode: 128}, nil
 		case cmd == "git rev-parse HEAD":
 			return sandbox.ExecResult{ExitCode: 0, Stdout: "abc123\n"}, nil
-		case cmd == "git merge --no-edit branch-1":
+		case cmd == "git merge --no-edit 'branch-1'":
 			return sandbox.ExecResult{ExitCode: 0}, nil
-		case cmd == "git diff --stat abc123...HEAD":
+		case cmd == "git diff --stat 'abc123...HEAD'":
 			return sandbox.ExecResult{
 				ExitCode: 0,
 				Stdout:   " f.go | 1 +\n 1 file changed, 1 insertion(+)\n",
@@ -704,13 +704,13 @@ func TestProcessNext_MergeConflictRetriesThenBlocks(t *testing.T) {
 		switch cmd {
 		case "git fetch origin '+refs/heads/*:refs/remotes/origin/*'":
 			return sandbox.ExecResult{ExitCode: 0}, nil
-		case "git rev-parse --verify origin/conflict-branch":
+		case "git rev-parse --verify 'origin/conflict-branch'":
 			return sandbox.ExecResult{ExitCode: 128}, nil
 		case "git rev-parse HEAD":
 			return sandbox.ExecResult{ExitCode: 0, Stdout: "abc123\n"}, nil
-		case "git merge --no-edit conflict-branch":
+		case "git merge --no-edit 'conflict-branch'":
 			return sandbox.ExecResult{ExitCode: 1, Stderr: "CONFLICT (content): Merge conflict in file.go"}, nil
-		case "git merge -X theirs --no-edit conflict-branch":
+		case "git merge -X theirs --no-edit 'conflict-branch'":
 			return sandbox.ExecResult{ExitCode: 1, Stderr: "CONFLICT (content): Merge conflict in file.go"}, nil
 		case "git diff --name-only --diff-filter=U":
 			return sandbox.ExecResult{ExitCode: 0, Stdout: "file.go\n"}, nil

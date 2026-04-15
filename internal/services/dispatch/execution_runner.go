@@ -319,7 +319,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 				branchRes, _ := result.Sandbox.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
 				if branchRes.ExitCode == 0 {
 					branch := strings.TrimSpace(branchRes.Stdout)
-					pushRes, pushErr := result.Sandbox.Exec(ctx, fmt.Sprintf("git push -u origin %s", branch), sandbox.ExecOpts{})
+					pushRes, pushErr := result.Sandbox.Exec(ctx, fmt.Sprintf("git push -u origin %s", naming.ShellQuote(branch)), sandbox.ExecOpts{})
 					if pushErr != nil || pushRes.ExitCode != 0 {
 						c.logger.Warn("failed to push branch (merge may fail for remote sandboxes)",
 							"branch", branch, "step", step.ID, "exit", pushRes.ExitCode)

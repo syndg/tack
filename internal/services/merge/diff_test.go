@@ -165,22 +165,22 @@ func TestExtract_MockSandbox(t *testing.T) {
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
 			switch cmd {
-			case "git diff --stat main...feature":
+			case "git diff --stat 'main...feature'":
 				return sandbox.ExecResult{
 					ExitCode: 0,
 					Stdout:   " src/auth.go | 10 ++++++----\n 1 file changed, 6 insertions(+), 4 deletions(-)\n",
 				}, nil
-			case "git diff --name-status main...feature":
+			case "git diff --name-status 'main...feature'":
 				return sandbox.ExecResult{
 					ExitCode: 0,
 					Stdout:   "M\tsrc/auth.go\n",
 				}, nil
-			case "git diff --numstat main...feature":
+			case "git diff --numstat 'main...feature'":
 				return sandbox.ExecResult{
 					ExitCode: 0,
 					Stdout:   "6\t4\tsrc/auth.go\n",
 				}, nil
-			case "git diff main...feature":
+			case "git diff 'main...feature'":
 				return sandbox.ExecResult{
 					ExitCode: 0,
 					Stdout:   "diff --git a/src/auth.go b/src/auth.go\n--- a/src/auth.go\n+++ b/src/auth.go\n@@ -1,3 +1,5 @@\n+// new code\n",
@@ -228,19 +228,19 @@ func TestExtractJSON_ValidJSON(t *testing.T) {
 		id: "test-sb",
 		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
 			switch cmd {
-			case "git diff --stat base...head":
+			case "git diff --stat 'base...head'":
 				return sandbox.ExecResult{
 					ExitCode: 0,
 					Stdout:   " f.go | 2 ++\n 1 file changed, 2 insertions(+)\n",
 				}, nil
-			case "git diff --name-status base...head":
+			case "git diff --name-status 'base...head'":
 				return sandbox.ExecResult{
 					ExitCode: 0,
 					Stdout:   "A\tf.go\n",
 				}, nil
-			case "git diff --numstat base...head":
+			case "git diff --numstat 'base...head'":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: "2\t0\tf.go\n"}, nil
-			case "git diff base...head":
+			case "git diff 'base...head'":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: ""}, nil
 			default:
 				return sandbox.ExecResult{ExitCode: 0}, nil
@@ -297,5 +297,28 @@ func TestExtract_NonZeroExitCode(t *testing.T) {
 	_, err := extractor.Extract(context.Background(), sb, "bad-ref", "head")
 	if err == nil {
 		t.Fatal("expected error from non-zero exit code")
+	}
+}
+
+func TestExtract_QuotesDiffRange(t *testing.T) {
+	var calls []string
+	sb := &mockSandbox{
+		id: "test-sb",
+		execFn: func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
+			calls = append(calls, cmd)
+			return sandbox.ExecResult{ExitCode: 0, Stdout: ""}, nil
+		},
+	}
+
+	extractor := NewDiffExtractor(slog.Default())
+	if _, err := extractor.Extract(context.Background(), sb, "main; touch /tmp/pwned", "feature"); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	if len(calls) == 0 {
+		t.Fatal("expected diff commands to run")
+	}
+	if got, want := calls[0], "git diff --stat 'main; touch /tmp/pwned...feature'"; got != want {
+		t.Fatalf("first command = %q, want %q", got, want)
 	}
 }
