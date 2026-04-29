@@ -88,8 +88,8 @@ func (d *Daemon) handleKillAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	snap, err := projectCtx.RunsService.Command(r.Context(), run.ID, domain.Command{
-		Kind:      domain.CommandKill,
+	snap, err := projectCtx.RunsService.Act(r.Context(), run.ID, domain.Command{
+		Kind:      domain.CommandKillWorker,
 		SessionID: id,
 	})
 	if err != nil {

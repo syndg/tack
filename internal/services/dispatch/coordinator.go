@@ -32,6 +32,7 @@ type Orchestrator interface {
 	Approve(ctx context.Context, executionID string) error
 	Retry(ctx context.Context, executionID string, guidance string) error
 	RetryStream(ctx context.Context, streamID string, guidance string) error
+	Abort(ctx context.Context, objectiveID string) error
 	Kill(ctx context.Context, sessionID string) error
 }
 
@@ -433,6 +434,63 @@ func (c *Coordinator) Stop() {
 
 	c.tracker.StopAll()
 	c.logger.Info("coordinator stopped")
+}
+
+// Abort cancels one objective's active execution and kills its active workers.
+func (c *Coordinator) Abort(ctx context.Context, objectiveID string) error {
+	retryKeys := map[string]struct{}{}
+	if c.executions != nil {
+		var (
+			execs []blueprint.Execution
+			err   error
+		)
+		if c.projectID != "" {
+			execs, err = c.executions.ListByProject(ctx, c.projectID)
+		} else {
+			execs, err = c.executions.List(ctx)
+		}
+		if err != nil {
+			return fmt.Errorf("listing executions for objective %s: %w", objectiveID, err)
+		}
+		for _, exec := range execs {
+			if exec.ObjectiveID == objectiveID {
+				retryKeys["retry:"+exec.ID] = struct{}{}
+			}
+		}
+	}
+
+	c.mu.Lock()
+	cancels := make([]context.CancelFunc, 0, 1+len(retryKeys))
+	for key, cancel := range c.activeExecs {
+		if key != objectiveID {
+			if _, ok := retryKeys[key]; !ok {
+				continue
+			}
+		}
+		cancels = append(cancels, cancel)
+		delete(c.activeExecs, key)
+	}
+	c.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+
+	if c.spawner == nil || c.spawner.agentStore == nil {
+		return fmt.Errorf("listing agents for objective %s: agent store unavailable", objectiveID)
+	}
+	sessions, err := c.spawner.agentStore.ListByObjective(ctx, objectiveID)
+	if err != nil {
+		return fmt.Errorf("listing agents for objective %s: %w", objectiveID, err)
+	}
+	for _, session := range sessions {
+		if session.Status != "pending" && session.Status != "running" {
+			continue
+		}
+		if err := c.tracker.Kill(ctx, session.ID); err != nil {
+			return fmt.Errorf("killing agent session %s: %w", session.ID, err)
+		}
+	}
+	return nil
 }
 
 // Approve absorbs the full approval dance: fetch execution, validate status,

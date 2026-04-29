@@ -359,7 +359,7 @@ func TestScenario_StartFailRetryComplete(t *testing.T) {
 
 // TestScenario_StartAbortTerminal walks the abort lifecycle:
 //
-//	start objective → abort while active → coordinator stopped →
+//	start objective → abort while active → objective execution aborted →
 //	snapshot shows failed with outcome → further commands rejected.
 func TestScenario_StartAbortTerminal(t *testing.T) {
 	env := setupScenario(t)
@@ -378,15 +378,18 @@ func TestScenario_StartAbortTerminal(t *testing.T) {
 	runID := startSnap.RunID
 
 	// Abort the run.
-	abortSnap, err := env.svc.Command(ctx, runID, domain.Command{
+	abortSnap, err := env.svc.Act(ctx, runID, domain.Command{
 		Kind:   domain.CommandAbort,
 		Reason: "requirements changed, cancelling",
 	})
 	if err != nil {
-		t.Fatalf("Command(abort): %v", err)
+		t.Fatalf("Act(abort): %v", err)
 	}
-	if !env.orch.stopCalled {
-		t.Error("coordinator.Stop was not called")
+	if !env.orch.abortCalled {
+		t.Error("coordinator.Abort was not called")
+	}
+	if env.orch.stopCalled {
+		t.Error("coordinator.Stop was called; abort should target one run")
 	}
 	if abortSnap.Status != domain.RunStatusFailed {
 		t.Errorf("post-abort: status = %q, want %q", abortSnap.Status, domain.RunStatusFailed)

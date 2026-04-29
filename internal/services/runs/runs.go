@@ -32,8 +32,8 @@
 //   - Start: creates a run and delegates to coordinator.Execute
 //   - Command(approve): finds blocked execution, delegates to coordinator.Approve
 //   - Command(retry): resolves failed stream execution, delegates to coordinator.Retry
-//   - Command(abort): stops the coordinator, marks run failed
-//   - Command(kill): terminates a specific agent session within a run
+//   - Act(abort): cancels one run's active execution and marks it failed
+//   - Act(kill_worker): terminates a specific agent session within a run
 //   - Snapshot: assembles observable state from persisted records
 //   - Run/Stop: manages coordinator and merge processor lifecycle
 //
@@ -98,12 +98,14 @@ type RunView = domain.Snapshot
 //
 // Ensure creates or resumes a run for an objective and returns the run view.
 // Start creates a new run for an objective and begins execution.
-// Command sends an intervention (approve, retry, abort) to a run.
+// Act sends an intervention (approve, retry, abort, kill_worker) to a run.
+// Command is the legacy name for Act and remains available for compatibility.
 // Snapshot returns the observable state of a run at a point in time.
 // Run starts the background orchestration loop (coordinator, merge processor,
 // run status synchronization, and recovery/reconciliation).
 type Runs interface {
 	Ensure(ctx context.Context, objectiveID string) (RunView, error)
+	Act(ctx context.Context, runID string, action domain.Command) (RunView, error)
 	Start(ctx context.Context, objectiveID string) (domain.Snapshot, error)
 	Command(ctx context.Context, runID string, cmd domain.Command) (domain.Snapshot, error)
 	Snapshot(ctx context.Context, runID string) (domain.Snapshot, error)
@@ -425,7 +427,7 @@ func (s *Service) Act(ctx context.Context, runID string, action domain.Command) 
 	return s.Command(ctx, runID, action)
 }
 
-// Command sends an intervention (approve, retry, abort) to a run.
+// Command sends an intervention (approve, retry, abort, kill_worker) to a run.
 //
 // This is the single entry point for all run interventions. It owns the
 // choreography that was previously spread across coordinator.Approve,
@@ -447,7 +449,7 @@ func (s *Service) Command(ctx context.Context, runID string, cmd domain.Command)
 		return s.commandRetry(ctx, run, cmd)
 	case domain.CommandAbort:
 		return s.commandAbort(ctx, run, cmd)
-	case domain.CommandKill:
+	case domain.CommandKill, domain.CommandKillWorker:
 		return s.commandKill(ctx, run, cmd)
 	default:
 		return domain.Snapshot{}, fmt.Errorf("unknown command kind %q: %w", cmd.Kind, ErrInvalidState)
@@ -608,9 +610,9 @@ func (s *Service) commandAbort(ctx context.Context, run *domain.Run, cmd domain.
 		)
 	}
 
-	// Stop the coordinator's active execution for this objective.
-	// This cancels the execution context and kills tracked agents.
-	s.coordinator.Stop()
+	if err := s.coordinator.Abort(ctx, run.ObjectiveID); err != nil {
+		return domain.Snapshot{}, fmt.Errorf("aborting run workers: %w", err)
+	}
 
 	if err := s.runs.UpdateStatus(ctx, run.ID, domain.RunStatusFailed); err != nil {
 		return domain.Snapshot{}, fmt.Errorf("marking run failed: %w", err)
@@ -684,8 +686,31 @@ func (s *Service) Snapshot(ctx context.Context, runID string) (domain.Snapshot, 
 
 	// Populate stream states from the objective's plan.
 	snap.Streams = s.resolveStreams(ctx, run.ObjectiveID)
+	snap.Workers = s.resolveWorkers(ctx, run.ObjectiveID)
 
 	return snap, nil
+}
+
+func (s *Service) resolveWorkers(ctx context.Context, objectiveID string) []domain.RunWorkerState {
+	sessions, err := s.agents.ListByObjective(ctx, objectiveID)
+	if err != nil {
+		s.logger.Warn("failed to resolve run workers", "objective_id", objectiveID, "error", err)
+		return nil
+	}
+	workers := make([]domain.RunWorkerState, 0, len(sessions))
+	for _, session := range sessions {
+		if session.Status != "pending" && session.Status != "running" {
+			continue
+		}
+		workers = append(workers, domain.RunWorkerState{
+			SessionID: session.ID,
+			StreamID:  session.StreamID,
+			Role:      session.Role,
+			Status:    session.Status,
+			SandboxID: session.SandboxID,
+		})
+	}
+	return workers
 }
 
 // View returns the operator-facing state of a run.

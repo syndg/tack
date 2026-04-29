@@ -91,7 +91,7 @@ func (d *Daemon) handleApproveExecution(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
 		return
 	}
-	snap, err := projectCtx.RunsService.Command(r.Context(), run.ID, domain.Command{Kind: domain.CommandApprove})
+	snap, err := projectCtx.RunsService.Act(r.Context(), run.ID, domain.Command{Kind: domain.CommandApprove})
 	if err != nil {
 		switch {
 		case errors.Is(err, runs.ErrInvalidState):
@@ -143,7 +143,7 @@ func (d *Daemon) handleRetryExecution(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
 		return
 	}
-	snap, err := projectCtx.RunsService.Command(r.Context(), run.ID, domain.Command{
+	snap, err := projectCtx.RunsService.Act(r.Context(), run.ID, domain.Command{
 		Kind:     domain.CommandRetry,
 		StreamID: exec.StreamID,
 		Guidance: req.Guidance,

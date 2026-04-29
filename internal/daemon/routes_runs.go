@@ -43,10 +43,10 @@ func (d *Daemon) handleGetRunSnapshot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, snap)
 }
 
-// handleRunCommand sends an intervention (approve, retry, abort, kill) to a run.
+// handleRunCommand sends an intervention (approve, retry, abort, kill_worker) to a run.
 // This is the run-centric entry point that replaces direct coordinator calls.
 //
-// Body: {"kind": "approve"|"retry"|"abort"|"kill", "stream_id": "...", "session_id": "...", "guidance": "...", "reason": "..."}
+// Body: {"kind": "approve"|"retry"|"abort"|"kill_worker", "stream_id": "...", "session_id": "...", "guidance": "...", "reason": "..."}
 func (d *Daemon) handleRunCommand(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 	run, err := d.runStore.Get(r.Context(), runID)
@@ -90,7 +90,7 @@ func (d *Daemon) handleRunCommand(w http.ResponseWriter, r *http.Request) {
 		ScopeAdditions: req.ScopeAdditions,
 	}
 
-	snap, err := projectCtx.RunsService.Command(r.Context(), runID, cmd)
+	snap, err := projectCtx.RunsService.Act(r.Context(), runID, cmd)
 	if err != nil {
 		switch {
 		case errors.Is(err, runs.ErrInvalidState):

@@ -426,10 +426,11 @@ type Run struct {
 type CommandKind string
 
 const (
-	CommandApprove CommandKind = "approve"
-	CommandRetry   CommandKind = "retry"
-	CommandAbort   CommandKind = "abort"
-	CommandKill    CommandKind = "kill"
+	CommandApprove    CommandKind = "approve"
+	CommandRetry      CommandKind = "retry"
+	CommandAbort      CommandKind = "abort"
+	CommandKill       CommandKind = "kill"
+	CommandKillWorker CommandKind = "kill_worker"
 )
 
 // Command represents an intervention on a run.
@@ -454,6 +455,15 @@ type BlockedState struct {
 type Outcome struct {
 	Status  RunStatus `json:"status"`
 	Summary string    `json:"summary,omitempty"`
+}
+
+// RunWorkerState is a snapshot of an active worker within a run.
+type RunWorkerState struct {
+	SessionID string    `json:"session_id"`
+	StreamID  string    `json:"stream_id,omitempty"`
+	Role      AgentRole `json:"role"`
+	Status    string    `json:"status"`
+	SandboxID string    `json:"sandbox_id,omitempty"`
 }
 
 type ObjectiveInsightSource string
@@ -574,6 +584,7 @@ type Snapshot struct {
 	Status      RunStatus        `json:"status"`
 	Blocked     *BlockedState    `json:"blocked,omitempty"`
 	Streams     []RunStreamState `json:"streams,omitempty"`
+	Workers     []RunWorkerState `json:"workers,omitempty"`
 	Outcome     *Outcome         `json:"outcome,omitempty"`
 	CreatedAt   time.Time        `json:"created_at"`
 	UpdatedAt   time.Time        `json:"updated_at"`

@@ -31,7 +31,13 @@ type mockOrchestrator struct {
 	retryStreamCalled bool
 	retryStreamID     string
 
-	stopCalled bool
+	stopCalled       bool
+	abortCalled      bool
+	abortObjectiveID string
+	abortErr         error
+	killCalled       bool
+	killSessionID    string
+	killErr          error
 }
 
 func (m *mockOrchestrator) Start(ctx context.Context) error { return nil }
@@ -53,7 +59,16 @@ func (m *mockOrchestrator) RetryStream(ctx context.Context, id string, g string)
 	m.retryGuidance = g
 	return m.retryErr
 }
-func (m *mockOrchestrator) Kill(ctx context.Context, sessionID string) error { return nil }
+func (m *mockOrchestrator) Abort(ctx context.Context, objectiveID string) error {
+	m.abortCalled = true
+	m.abortObjectiveID = objectiveID
+	return m.abortErr
+}
+func (m *mockOrchestrator) Kill(ctx context.Context, sessionID string) error {
+	m.killCalled = true
+	m.killSessionID = sessionID
+	return m.killErr
+}
 func (m *mockOrchestrator) Execute(ctx context.Context, objectiveID string) error {
 	m.executeCalled = true
 	m.executeID = objectiveID
@@ -1164,7 +1179,7 @@ func TestCommandRetryRequiresStreamID(t *testing.T) {
 	}
 }
 
-func TestCommandAbortStopsAndFailsRun(t *testing.T) {
+func TestActAbortTargetsOneRunAndFailsRun(t *testing.T) {
 	database := openTestDB(t)
 	conn := database.Conn()
 	ctx := context.Background()
@@ -1190,17 +1205,22 @@ func TestCommandAbortStopsAndFailsRun(t *testing.T) {
 		t.Fatalf("creating run: %v", err)
 	}
 
-	snap, err := svc.Command(ctx, run.ID, domain.Command{
+	snap, err := svc.Act(ctx, run.ID, domain.Command{
 		Kind:   domain.CommandAbort,
 		Reason: "test abort",
 	})
 	if err != nil {
-		t.Fatalf("Command(abort): %v", err)
+		t.Fatalf("Act(abort): %v", err)
 	}
 
-	// Verify coordinator.Stop was called.
-	if !orch.stopCalled {
-		t.Error("coordinator.Stop was not called")
+	if !orch.abortCalled {
+		t.Error("coordinator.Abort was not called")
+	}
+	if orch.abortObjectiveID != obj.ID {
+		t.Errorf("Abort objective = %q, want %q", orch.abortObjectiveID, obj.ID)
+	}
+	if orch.stopCalled {
+		t.Error("coordinator.Stop was called; abort should target one run")
 	}
 
 	// Verify run is marked failed.
@@ -1212,6 +1232,56 @@ func TestCommandAbortStopsAndFailsRun(t *testing.T) {
 	}
 	if snap.Outcome.Status != domain.RunStatusFailed {
 		t.Errorf("snap.Outcome.Status = %q, want %q", snap.Outcome.Status, domain.RunStatusFailed)
+	}
+}
+
+func TestActKillWorkerTerminatesOneWorkerAndKeepsRunActive(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+	logger := slog.Default()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+
+	orch := &mockOrchestrator{}
+	svc := newTestService(t, runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+
+	obj := &domain.Objective{Description: "kill worker test", Status: domain.ObjectiveStatusExecuting}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+	run := &domain.Run{ObjectiveID: obj.ID}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+	session := &domain.AgentSession{ObjectiveID: obj.ID, Role: domain.AgentRoleBuilder, Status: "running", SandboxID: "sb-worker"}
+	if err := agentStore.Create(ctx, session); err != nil {
+		t.Fatalf("creating agent session: %v", err)
+	}
+
+	snap, err := svc.Act(ctx, run.ID, domain.Command{Kind: domain.CommandKillWorker, SessionID: session.ID})
+	if err != nil {
+		t.Fatalf("Act(kill_worker): %v", err)
+	}
+	if !orch.killCalled {
+		t.Fatal("coordinator.Kill was not called")
+	}
+	if orch.killSessionID != session.ID {
+		t.Errorf("Kill session = %q, want %q", orch.killSessionID, session.ID)
+	}
+	if snap.Status != domain.RunStatusActive {
+		t.Errorf("snap.Status = %q, want %q", snap.Status, domain.RunStatusActive)
+	}
+	if len(snap.Workers) != 1 {
+		t.Fatalf("len(snap.Workers) = %d, want 1", len(snap.Workers))
+	}
+	if snap.Workers[0].SessionID != session.ID {
+		t.Errorf("worker session = %q, want %q", snap.Workers[0].SessionID, session.ID)
 	}
 }
 
