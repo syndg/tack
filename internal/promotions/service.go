@@ -94,17 +94,38 @@ func promotionFromCandidate(candidate domain.CodificationCandidate, target domai
 		payload[k] = v
 	}
 	payload["candidate_target"] = string(candidate.Target)
+	metadata := EvaluateThreshold(candidate.EvidenceCount, DefaultThresholdConfig())
 	return domain.PromotionRecord{
 		ProjectID:         candidate.ProjectID,
 		ObjectiveID:       candidate.ObjectiveID,
 		SourceCandidateID: candidate.ID,
 		Target:            target,
 		Status:            status,
-		Confidence:        confidenceForSupport(candidate.EvidenceCount),
-		SupportCount:      candidate.EvidenceCount,
+		Confidence:        metadata.Confidence,
+		SupportCount:      metadata.SupportCount,
 		Summary:           firstNonEmpty(candidate.Title, candidate.Instruction),
 		Detail:            candidate.Rationale,
 		Payload:           payload,
+	}
+}
+
+func promotionFromInsight(insight domain.ObjectiveInsight, target domain.PromotionTarget, status domain.PromotionStatus) domain.PromotionRecord {
+	metadata := EvaluateThreshold(1, DefaultThresholdConfig())
+	payload := map[string]string{}
+	for k, v := range insight.Payload {
+		payload[k] = v
+	}
+	return domain.PromotionRecord{
+		ProjectID:        insight.ProjectID,
+		ObjectiveID:      insight.ObjectiveID,
+		SourceInsightIDs: []string{insight.ID},
+		Target:           target,
+		Status:           status,
+		Confidence:       metadata.Confidence,
+		SupportCount:     metadata.SupportCount,
+		Summary:          insight.Summary,
+		Detail:           insight.Detail,
+		Payload:          payload,
 	}
 }
 

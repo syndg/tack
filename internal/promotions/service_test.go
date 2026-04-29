@@ -27,6 +27,33 @@ func TestServicePromoteCandidateCreatesApprovedRecord(t *testing.T) {
 	}
 }
 
+func TestEvaluateThresholdDoesNotAutoApproveByDefault(t *testing.T) {
+	metadata := EvaluateThreshold(3, DefaultThresholdConfig())
+	if !metadata.ThresholdEligible {
+		t.Fatalf("metadata should be threshold eligible: %+v", metadata)
+	}
+	if metadata.AutoApprovalEnabled || metadata.AutoApproved {
+		t.Fatalf("default threshold metadata auto-approved: %+v", metadata)
+	}
+
+	enabled := EvaluateThreshold(3, ThresholdConfig{SupportThreshold: 3, AutoApprovalEnabled: true})
+	if !enabled.AutoApproved {
+		t.Fatalf("explicit auto approval not reflected: %+v", enabled)
+	}
+}
+
+func TestPromotionFromInsightPersistsRawInsightMetadata(t *testing.T) {
+	insight := domain.ObjectiveInsight{ID: "insight-1", ProjectID: "project-1", ObjectiveID: "obj-1", Summary: "Use Bun", Detail: "Package tooling should use Bun", Payload: map[string]string{"source": "human"}}
+	record := promotionFromInsight(insight, domain.PromotionTargetProjectMemory, domain.PromotionStatusApproved)
+
+	if record.SourceCandidateID != "" || len(record.SourceInsightIDs) != 1 || record.SourceInsightIDs[0] != "insight-1" {
+		t.Fatalf("record source = %+v", record)
+	}
+	if record.SupportCount != 1 || record.Confidence == 0 || record.Summary != insight.Summary || record.Payload["source"] != "human" {
+		t.Fatalf("record metadata = %+v", record)
+	}
+}
+
 func TestServicePromoteCandidateIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	candidates := &fakeCandidates{candidate: &domain.CodificationCandidate{ID: "candidate-1", ProjectID: "project-1", ObjectiveID: "obj-1", EvidenceCount: 2}}

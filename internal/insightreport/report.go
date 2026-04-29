@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/promotions"
 )
 
 type Summary struct {
@@ -27,10 +28,20 @@ type Group struct {
 }
 
 type Report struct {
-	ObjectiveID string                         `json:"objective_id"`
-	Summary     Summary                        `json:"summary"`
-	Groups      []Group                        `json:"groups"`
-	Candidates  []domain.CodificationCandidate `json:"candidates"`
+	ObjectiveID       string                         `json:"objective_id"`
+	Summary           Summary                        `json:"summary"`
+	Groups            []Group                        `json:"groups"`
+	Candidates        []domain.CodificationCandidate `json:"candidates"`
+	CandidateMetadata []CandidateMetadata            `json:"candidate_metadata"`
+}
+
+type CandidateMetadata struct {
+	CandidateID         string  `json:"candidate_id"`
+	SupportCount        int     `json:"support_count"`
+	Confidence          float64 `json:"confidence"`
+	ThresholdEligible   bool    `json:"threshold_eligible"`
+	AutoApprovalEnabled bool    `json:"auto_approval_enabled"`
+	AutoApproved        bool    `json:"auto_approved"`
 }
 
 type DetailKind string
@@ -55,9 +66,26 @@ func Build(objectiveID string, insights []domain.ObjectiveInsight, candidates []
 			TotalGroups:   len(groups),
 			Candidates:    len(candidates),
 		},
-		Groups:     groups,
-		Candidates: append([]domain.CodificationCandidate(nil), candidates...),
+		Groups:            groups,
+		Candidates:        append([]domain.CodificationCandidate(nil), candidates...),
+		CandidateMetadata: candidateMetadata(candidates),
 	}
+}
+
+func candidateMetadata(candidates []domain.CodificationCandidate) []CandidateMetadata {
+	metadata := make([]CandidateMetadata, 0, len(candidates))
+	for _, candidate := range candidates {
+		threshold := promotions.EvaluateThreshold(candidate.EvidenceCount, promotions.DefaultThresholdConfig())
+		metadata = append(metadata, CandidateMetadata{
+			CandidateID:         candidate.ID,
+			SupportCount:        threshold.SupportCount,
+			Confidence:          threshold.Confidence,
+			ThresholdEligible:   threshold.ThresholdEligible,
+			AutoApprovalEnabled: threshold.AutoApprovalEnabled,
+			AutoApproved:        threshold.AutoApproved,
+		})
+	}
+	return metadata
 }
 
 func groupInsights(insights []domain.ObjectiveInsight) []Group {

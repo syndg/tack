@@ -231,8 +231,21 @@ func formatInsightReport(w io.Writer, objective domain.Objective, report insight
 		return
 	}
 	fmt.Fprintln(w, "\nCodification Candidates:")
+	metadataByCandidate := map[string]insightreport.CandidateMetadata{}
+	for _, metadata := range report.CandidateMetadata {
+		metadataByCandidate[metadata.CandidateID] = metadata
+	}
 	for _, candidate := range report.Candidates {
 		parts := []string{string(candidate.Target), string(candidate.Status), fmt.Sprintf("evidence=%d", candidate.EvidenceCount)}
+		if metadata, ok := metadataByCandidate[candidate.ID]; ok {
+			parts = append(parts, fmt.Sprintf("confidence=%.2f", metadata.Confidence))
+			if metadata.ThresholdEligible {
+				parts = append(parts, "threshold=eligible")
+			}
+			if !metadata.AutoApprovalEnabled {
+				parts = append(parts, "auto-approval=off")
+			}
+		}
 		fmt.Fprintf(w, "  - %s [%s]\n", candidate.ID, strings.Join(parts, ", "))
 		fmt.Fprintf(w, "    %s\n", truncateObjectiveText(candidate.Instruction, 100))
 	}

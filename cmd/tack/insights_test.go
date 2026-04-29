@@ -23,12 +23,13 @@ func TestFormatInsightReportShowsGroupsAndCandidates(t *testing.T) {
 			LastSeen:  time.Unix(20, 0),
 			Summaries: []string{"Keep review checks explicit"},
 		}},
-		Candidates: []domain.CodificationCandidate{{ID: "candidate-1", Target: domain.CodificationTargetReviewCheck, Status: domain.CodificationStatusProposed, EvidenceCount: 2, Instruction: "Preserve review coverage"}},
+		Candidates:        []domain.CodificationCandidate{{ID: "candidate-1", Target: domain.CodificationTargetReviewCheck, Status: domain.CodificationStatusProposed, EvidenceCount: 3, Instruction: "Preserve review coverage"}},
+		CandidateMetadata: []insightreport.CandidateMetadata{{CandidateID: "candidate-1", SupportCount: 3, Confidence: 1, ThresholdEligible: true}},
 	}
 	var out bytes.Buffer
 	formatInsightReport(&out, domain.Objective{Description: "Add operational memory review"}, report)
 	got := out.String()
-	for _, want := range []string{"Insights:   2 across 1 groups", "review_rejection/reviewer", "Keep review checks explicit", "candidate-1", "review_check, proposed, evidence=2"} {
+	for _, want := range []string{"Insights:   2 across 1 groups", "review_rejection/reviewer", "Keep review checks explicit", "candidate-1", "review_check, proposed, evidence=3, confidence=1.00, threshold=eligible, auto-approval=off"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q:\n%s", want, got)
 		}
