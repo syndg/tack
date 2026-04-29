@@ -4,8 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/syndg/tack/internal/codification"
+	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 )
 
@@ -157,6 +163,153 @@ func TestServiceValidatesInsightTargetAndProject(t *testing.T) {
 	if _, err := service.PromoteSource(ctx, "other-project", "insight-1", domain.PromotionTargetCodification); !errors.Is(err, ErrWrongProject) {
 		t.Fatalf("wrong project err = %v", err)
 	}
+}
+
+func TestOperationalMemoryV1PromotionGuardrails(t *testing.T) {
+	ctx := context.Background()
+	repoRoot := t.TempDir()
+	tracked := map[string]string{
+		"README.md":                          "# docs stay unchanged\n",
+		".tack/rules/review.md":              "---\nscope: **/*\npriority: high\n---\nKeep reviews focused.\n",
+		".tack/blueprints/build-review.yaml": "id: build-review\nname: Build Review\n",
+		".github/workflows/checks.yml":       "name: checks\n",
+	}
+	for path, content := range tracked {
+		full := filepath.Join(repoRoot, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", path, err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", path, err)
+		}
+	}
+
+	database, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+	if err := database.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	project := &domain.Project{ID: "project-1", Name: "demo", RootPath: repoRoot, ConfigPath: filepath.Join(repoRoot, ".tack", "config.yaml")}
+	if err := db.NewProjectStore(database.Conn()).Upsert(ctx, project); err != nil {
+		t.Fatalf("Upsert project: %v", err)
+	}
+	objective := &domain.Objective{ProjectID: project.ID, Description: "Add auth guardrails"}
+	objectiveStore := db.NewObjectiveStore(database.Conn())
+	if err := objectiveStore.Create(ctx, objective); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	planStore := db.NewPlanStore(database.Conn())
+	plan := &domain.Plan{ProjectID: project.ID, ObjectiveID: objective.ID, Status: domain.PlanStatusDraft, QualityGates: []string{"go test ./..."}}
+	if err := planStore.Create(ctx, plan); err != nil {
+		t.Fatalf("Create plan: %v", err)
+	}
+	dossierStore := db.NewDossierStore(database.Conn())
+	dossier := &domain.Dossier{ProjectID: project.ID, ObjectiveID: objective.ID, Summary: "Current repo context", RepoPriors: []domain.DossierPrior{{Kind: "rule", Title: "review", Detail: "Keep reviews focused."}}}
+	if err := dossierStore.Upsert(ctx, dossier); err != nil {
+		t.Fatalf("Upsert dossier: %v", err)
+	}
+
+	candidateStore := db.NewCodificationCandidateStore(database.Conn())
+	insightStore := db.NewObjectiveInsightStore(database.Conn())
+	insightStore.BindCodificationStore(candidateStore)
+	for i := 0; i < 3; i++ {
+		if err := insightStore.Create(ctx, &domain.ObjectiveInsight{
+			ProjectID:   project.ID,
+			ObjectiveID: objective.ID,
+			Source:      domain.InsightSourceReviewer,
+			Kind:        domain.InsightKindReviewRejection,
+			Summary:     "Keep auth middleware coverage explicit",
+			Detail:      "Repeated review finding",
+			Payload:     map[string]string{"raw_transcript": "long chat log", "source": "reviewer"},
+		}); err != nil {
+			t.Fatalf("Create insight %d: %v", i, err)
+		}
+	}
+	candidates, err := candidateStore.ListByObjective(ctx, objective.ID)
+	if err != nil {
+		t.Fatalf("ListByObjective candidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].EvidenceCount != 3 {
+		t.Fatalf("candidate derivation before promotion = %#v", candidates)
+	}
+
+	promotionStore := db.NewPromotionRecordStore(database.Conn())
+	service := NewService(candidateStore, insightStore, promotionStore)
+	if _, err := service.PromoteCandidate(ctx, project.ID, candidates[0].ID, "global-memory"); !errors.Is(err, ErrInvalidTarget) {
+		t.Fatalf("global target err = %v, want ErrInvalidTarget", err)
+	}
+	record, err := service.PromoteCandidate(ctx, project.ID, candidates[0].ID, domain.PromotionTargetProjectMemory)
+	if err != nil {
+		t.Fatalf("PromoteCandidate: %v", err)
+	}
+	if record.Status != domain.PromotionStatusApproved || record.Target != domain.PromotionTargetProjectMemory {
+		t.Fatalf("approved project-memory record = %+v", record)
+	}
+	if record.SupportCount != 3 || record.Confidence != 1 {
+		t.Fatalf("threshold support metadata = %+v", record)
+	}
+	metadata := EvaluateThreshold(record.SupportCount, DefaultThresholdConfig())
+	if !metadata.ThresholdEligible || metadata.AutoApprovalEnabled || metadata.AutoApproved {
+		t.Fatalf("default threshold metadata = %+v", metadata)
+	}
+
+	insights, err := insightStore.ListByObjective(ctx, objective.ID, 0)
+	if err != nil {
+		t.Fatalf("ListByObjective insights: %v", err)
+	}
+	if len(insights) != 3 {
+		t.Fatalf("insight capture after promotion = %d, want 3", len(insights))
+	}
+	derived := codification.DeriveCandidates(project.ID, objective.ID, insights)
+	if len(derived) != 1 || derived[0].EvidenceCount != 3 {
+		t.Fatalf("objective-local candidate derivation after promotion = %#v", derived)
+	}
+	allPromotions, err := promotionStore.ListByObjective(ctx, objective.ID)
+	if err != nil {
+		t.Fatalf("ListByObjective promotions: %v", err)
+	}
+	if len(allPromotions) != 1 {
+		t.Fatalf("promotion records = %#v, want one project-local record only", allPromotions)
+	}
+	if strings.Contains(strings.ToLower(allPromotions[0].Detail), "transcript") || containsTranscriptPayload(allPromotions[0].Payload) {
+		t.Fatalf("promotion stored raw transcript data: %+v", allPromotions[0])
+	}
+
+	loadedPlan, err := planStore.Get(ctx, plan.ID)
+	if err != nil {
+		t.Fatalf("Get plan: %v", err)
+	}
+	if !reflect.DeepEqual(loadedPlan.QualityGates, []string{"go test ./..."}) {
+		t.Fatalf("quality gates mutated: %#v", loadedPlan.QualityGates)
+	}
+	loadedDossier, err := dossierStore.GetByObjective(ctx, objective.ID)
+	if err != nil {
+		t.Fatalf("Get dossier: %v", err)
+	}
+	if loadedDossier.Summary != dossier.Summary || !reflect.DeepEqual(loadedDossier.RepoPriors, dossier.RepoPriors) {
+		t.Fatalf("dossier mutated: %+v", loadedDossier)
+	}
+	for path, want := range tracked {
+		got, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatalf("ReadFile %s: %v", path, err)
+		}
+		if string(got) != want {
+			t.Fatalf("repo file %s mutated: %q", path, string(got))
+		}
+	}
+}
+
+func containsTranscriptPayload(payload map[string]string) bool {
+	for key, value := range payload {
+		if strings.Contains(strings.ToLower(key), "transcript") || strings.Contains(strings.ToLower(value), "transcript") || strings.Contains(value, "long chat log") {
+			return true
+		}
+	}
+	return false
 }
 
 type fakeCandidates struct {

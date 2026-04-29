@@ -411,6 +411,37 @@ func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 	}
 }
 
+func TestBuildOverlays_DoNotInjectApprovedProjectMemoryPromotionsInV1(t *testing.T) {
+	promotion := domain.PromotionRecord{
+		Target:  domain.PromotionTargetProjectMemory,
+		Status:  domain.PromotionStatusApproved,
+		Summary: "Durable project memory must not enter v1 prompts",
+	}
+	objective := testObjective()
+	stream := testStream()
+
+	outputs := map[string]string{
+		"planner": BuildPlannerOverlay(objective, testDossier(), "", nil),
+		"builder": BuildOverlay(OverlayInput{
+			AgentName: "builder-auth",
+			Role:      DefaultRoles()["builder"],
+			Objective: objective,
+			Stream:    stream,
+		}),
+		"reviewer": BuildOverlay(OverlayInput{
+			AgentName: "reviewer-auth",
+			Role:      DefaultRoles()["reviewer"],
+			Objective: objective,
+			Stream:    stream,
+		}),
+	}
+	for name, output := range outputs {
+		if strings.Contains(output, promotion.Summary) || strings.Contains(output, string(promotion.Target)) {
+			t.Fatalf("%s overlay injected approved project-memory promotion:\n%s", name, output)
+		}
+	}
+}
+
 func TestBuildOverlay_ReviewerTreatsOutOfScopeFixAsContractGap(t *testing.T) {
 	result := BuildOverlay(OverlayInput{
 		AgentName: "reviewer-auth-1",

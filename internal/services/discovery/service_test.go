@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -83,6 +84,56 @@ func TestGenerateBuildsPersistedDossier(t *testing.T) {
 	}
 	if persisted.Summary != dossier.Summary {
 		t.Fatalf("persisted summary = %q, want %q", persisted.Summary, dossier.Summary)
+	}
+}
+
+func TestGenerateDoesNotInjectApprovedProjectMemoryPromotionsInV1(t *testing.T) {
+	projectRoot := t.TempDir()
+	database, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer database.Close()
+	if err := database.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	ctx := context.Background()
+	projectStore := db.NewProjectStore(database.Conn())
+	project := &domain.Project{Name: "demo", RootPath: projectRoot, ConfigPath: filepath.Join(projectRoot, ".tack", "config.yaml")}
+	if err := projectStore.Upsert(ctx, project); err != nil {
+		t.Fatalf("Upsert project: %v", err)
+	}
+	objectiveStore := db.NewObjectiveStore(database.Conn())
+	objective := &domain.Objective{ProjectID: project.ID, Description: "Add command log keybindings", Blueprint: "build-review"}
+	if err := objectiveStore.Create(ctx, objective); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	promotion := &domain.PromotionRecord{
+		ProjectID:   project.ID,
+		ObjectiveID: objective.ID,
+		Target:      domain.PromotionTargetProjectMemory,
+		Status:      domain.PromotionStatusApproved,
+		Summary:     "Durable project memory must not enter discovery context",
+	}
+	if err := db.NewPromotionRecordStore(database.Conn()).Create(ctx, promotion); err != nil {
+		t.Fatalf("Create promotion record: %v", err)
+	}
+	registry := blueprint.NewRegistry()
+	if err := registry.LoadDefaults(); err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+
+	svc := New(projectRoot, objectiveStore, db.NewDossierStore(database.Conn()), rules.NewEngine(slog.Default()), registry, slog.Default())
+	dossier, err := svc.Generate(ctx, objective.ID)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	encoded, err := json.Marshal(dossier)
+	if err != nil {
+		t.Fatalf("Marshal dossier: %v", err)
+	}
+	if strings.Contains(string(encoded), promotion.Summary) || strings.Contains(string(encoded), string(promotion.Target)) {
+		t.Fatalf("discovery dossier injected approved project-memory promotion: %s", string(encoded))
 	}
 }
 
