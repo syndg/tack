@@ -24,11 +24,9 @@ func initTestRepo(t *testing.T) string {
 
 	dir := t.TempDir()
 	runGitInDir(t, dir, "init")
-	runGitInDir(t, dir,
-		"-c", "user.email=tack-test@example.com",
-		"-c", "user.name=Tack Test",
-		"commit", "--allow-empty", "-m", "initial",
-	)
+	runGitInDir(t, dir, "config", "user.email", "tack-test@example.com")
+	runGitInDir(t, dir, "config", "user.name", "Tack Test")
+	runGitInDir(t, dir, "commit", "--allow-empty", "-m", "initial")
 	return dir
 }
 
