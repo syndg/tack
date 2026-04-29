@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,7 +19,7 @@ var insightPromotionTarget string
 func init() {
 	insightsCmd.Flags().BoolVar(&insightsJSON, "json", false, "print machine-readable JSON")
 	insightsPromoteCmd.Flags().StringVar(&insightPromotionTarget, "target", "", "promotion target: project-memory or codification")
-	insightsCmd.AddCommand(insightsPromoteCmd, insightsRejectCmd)
+	insightsCmd.AddCommand(insightsShowCmd, insightsPromoteCmd, insightsRejectCmd)
 	rootCmd.AddCommand(insightsCmd)
 }
 
@@ -49,6 +50,29 @@ var insightsCmd = &cobra.Command{
 			return enc.Encode(report)
 		}
 		formatInsightReport(cmd.OutOrStdout(), *objective, *report)
+		return nil
+	},
+}
+
+var insightsShowCmd = &cobra.Command{
+	Use:   "show <insight-or-candidate-id>",
+	Short: "Show one insight or codification candidate",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
+		detail, err := c.GetInsightDetail(cmd.Context(), args[0])
+		if err != nil {
+			return err
+		}
+		if insightsJSON {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(detail)
+		}
+		formatInsightDetail(cmd.OutOrStdout(), *detail)
 		return nil
 	},
 }
@@ -98,6 +122,84 @@ var insightsRejectCmd = &cobra.Command{
 		formatPromotionRecord(cmd.OutOrStdout(), "Rejected", *record)
 		return nil
 	},
+}
+
+func formatInsightDetail(w io.Writer, detail insightreport.Detail) {
+	switch detail.Kind {
+	case insightreport.DetailKindInsight:
+		if detail.Insight == nil {
+			fmt.Fprintln(w, "Insight: missing")
+			return
+		}
+		formatRawInsightDetail(w, *detail.Insight)
+	case insightreport.DetailKindCandidate:
+		if detail.Candidate == nil {
+			fmt.Fprintln(w, "Candidate: missing")
+			return
+		}
+		formatCandidateDetail(w, *detail.Candidate)
+	default:
+		fmt.Fprintf(w, "Unknown insight detail kind: %s\n", detail.Kind)
+	}
+}
+
+func formatRawInsightDetail(w io.Writer, insight domain.ObjectiveInsight) {
+	fmt.Fprintf(w, "Insight:   %s\n", insight.ID)
+	fmt.Fprintf(w, "Objective: %s\n", insight.ObjectiveID)
+	if insight.StreamID != "" {
+		fmt.Fprintf(w, "Stream:    %s\n", insight.StreamID)
+	}
+	if insight.PlanID != "" {
+		fmt.Fprintf(w, "Plan:      %s\n", insight.PlanID)
+	}
+	if insight.ExecutionID != "" {
+		fmt.Fprintf(w, "Execution: %s\n", insight.ExecutionID)
+	}
+	fmt.Fprintf(w, "Source:    %s\n", insight.Source)
+	fmt.Fprintf(w, "Kind:      %s\n", insight.Kind)
+	fmt.Fprintf(w, "Created:   %s\n", formatReportTime(insight.CreatedAt))
+	if insight.Summary != "" {
+		fmt.Fprintf(w, "Summary:   %s\n", insight.Summary)
+	}
+	if insight.Detail != "" {
+		fmt.Fprintf(w, "Detail:    %s\n", insight.Detail)
+	}
+	formatPayload(w, insight.Payload)
+}
+
+func formatCandidateDetail(w io.Writer, candidate domain.CodificationCandidate) {
+	fmt.Fprintf(w, "Candidate: %s\n", candidate.ID)
+	fmt.Fprintf(w, "Objective: %s\n", candidate.ObjectiveID)
+	fmt.Fprintf(w, "Target:    %s\n", candidate.Target)
+	fmt.Fprintf(w, "Status:    %s\n", candidate.Status)
+	fmt.Fprintf(w, "Evidence:  %d\n", candidate.EvidenceCount)
+	fmt.Fprintf(w, "Created:   %s\n", formatReportTime(candidate.CreatedAt))
+	fmt.Fprintf(w, "Updated:   %s\n", formatReportTime(candidate.UpdatedAt))
+	if candidate.Title != "" {
+		fmt.Fprintf(w, "Title:     %s\n", candidate.Title)
+	}
+	if candidate.Instruction != "" {
+		fmt.Fprintf(w, "Instruction:\n%s\n", candidate.Instruction)
+	}
+	if candidate.Rationale != "" {
+		fmt.Fprintf(w, "Rationale:\n%s\n", candidate.Rationale)
+	}
+	formatPayload(w, candidate.Payload)
+}
+
+func formatPayload(w io.Writer, payload map[string]string) {
+	if len(payload) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(payload))
+	for key := range payload {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	fmt.Fprintln(w, "Payload:")
+	for _, key := range keys {
+		fmt.Fprintf(w, "  %s: %s\n", key, payload[key])
+	}
 }
 
 func formatInsightReport(w io.Writer, objective domain.Objective, report insightreport.Report) {

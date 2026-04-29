@@ -93,6 +93,15 @@ func (s *ObjectiveInsightStore) ListByObjective(ctx context.Context, objectiveID
 	return insights, nil
 }
 
+func (s *ObjectiveInsightStore) Get(ctx context.Context, id string) (*domain.ObjectiveInsight, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, project_id, objective_id, stream_id, plan_id, execution_id, source, kind, summary, detail, payload, created_at FROM objective_insights WHERE id = ?`, id)
+	insight, err := scanObjectiveInsight(row)
+	if err != nil {
+		return nil, err
+	}
+	return &insight, nil
+}
+
 func scanObjectiveInsight(scanner interface{ Scan(dest ...any) error }) (domain.ObjectiveInsight, error) {
 	var insight domain.ObjectiveInsight
 	var source, kind, payload string

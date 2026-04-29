@@ -52,6 +52,29 @@ func TestGetObjectiveInsightReportWrapsEndpoint(t *testing.T) {
 	}
 }
 
+func TestGetInsightDetailWrapsEndpoint(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/insights/insight-1" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("X-Tack-Project-ID"); got != "project-1" {
+			t.Fatalf("project header = %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(insightreport.Detail{Kind: insightreport.DetailKindInsight, Insight: &domain.ObjectiveInsight{ID: "insight-1"}})
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL)
+	c.SetProjectID("project-1")
+	detail, err := c.GetInsightDetail(context.Background(), "insight-1")
+	if err != nil {
+		t.Fatalf("GetInsightDetail: %v", err)
+	}
+	if detail.Kind != insightreport.DetailKindInsight || detail.Insight == nil || detail.Insight.ID != "insight-1" {
+		t.Fatalf("detail = %+v", detail)
+	}
+}
+
 func TestPromoteAndRejectInsightSourceWrapEndpoints(t *testing.T) {
 	requests := []string{}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

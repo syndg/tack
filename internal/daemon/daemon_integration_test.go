@@ -197,6 +197,116 @@ func TestObjectiveInsightReportRouteIsProjectScoped(t *testing.T) {
 	}
 }
 
+func TestInsightDetailRouteShowsRawInsightAndCandidate(t *testing.T) {
+	cfg := config.Default()
+	cfg.Daemon.DataDir = t.TempDir()
+	d, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer d.Shutdown(context.Background())
+	registerDaemonTestProject(t, d, t.TempDir())
+
+	obj := &domain.Objective{ProjectID: "test-project", Description: "Inspect one learning"}
+	if err := d.objectives.Create(context.Background(), obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := d.insights.Create(context.Background(), &domain.ObjectiveInsight{
+			ProjectID:   "test-project",
+			ObjectiveID: obj.ID,
+			StreamID:    "stream-1",
+			PlanID:      "plan-1",
+			ExecutionID: "execution-1",
+			Source:      domain.InsightSourceReviewer,
+			Kind:        domain.InsightKindReviewRejection,
+			Summary:     "Keep auth middleware coverage explicit",
+			Detail:      "Reviewer rejected the run until auth middleware had direct coverage.",
+			Payload:     map[string]string{"step_id": "review"},
+			CreatedAt:   time.Unix(int64(10+i), 0),
+		}); err != nil {
+			t.Fatalf("Create insight %d: %v", i, err)
+		}
+	}
+	insights, err := d.insights.ListByObjective(context.Background(), obj.ID, 0)
+	if err != nil {
+		t.Fatalf("ListByObjective insights: %v", err)
+	}
+	candidates, err := d.candidates.ListByObjective(context.Background(), obj.ID)
+	if err != nil {
+		t.Fatalf("ListByObjective candidates: %v", err)
+	}
+	if len(insights) == 0 || len(candidates) != 1 {
+		t.Fatalf("insights=%d candidates=%d", len(insights), len(candidates))
+	}
+
+	ts := httptest.NewServer(d.authMiddleware(d.mux))
+	defer ts.Close()
+	rawReq := authedRequest(t, http.MethodGet, ts.URL+"/insights/"+insights[0].ID, nil)
+	rawReq.Header.Set(projectHeader, "test-project")
+	rawResp, err := http.DefaultClient.Do(rawReq)
+	if err != nil {
+		t.Fatalf("GET raw detail: %v", err)
+	}
+	defer rawResp.Body.Close()
+	if rawResp.StatusCode != http.StatusOK {
+		t.Fatalf("raw status = %d", rawResp.StatusCode)
+	}
+	var rawDetail struct {
+		Kind    string                  `json:"kind"`
+		Insight domain.ObjectiveInsight `json:"insight"`
+	}
+	if err := json.NewDecoder(rawResp.Body).Decode(&rawDetail); err != nil {
+		t.Fatalf("Decode raw detail: %v", err)
+	}
+	if rawDetail.Kind != "insight" || rawDetail.Insight.ID != insights[0].ID || rawDetail.Insight.Payload["step_id"] != "review" {
+		t.Fatalf("raw detail = %+v", rawDetail)
+	}
+
+	candidateReq := authedRequest(t, http.MethodGet, ts.URL+"/insights/"+candidates[0].ID, nil)
+	candidateReq.Header.Set(projectHeader, "test-project")
+	candidateResp, err := http.DefaultClient.Do(candidateReq)
+	if err != nil {
+		t.Fatalf("GET candidate detail: %v", err)
+	}
+	defer candidateResp.Body.Close()
+	if candidateResp.StatusCode != http.StatusOK {
+		t.Fatalf("candidate status = %d", candidateResp.StatusCode)
+	}
+	var candidateDetail struct {
+		Kind      string                       `json:"kind"`
+		Candidate domain.CodificationCandidate `json:"candidate"`
+	}
+	if err := json.NewDecoder(candidateResp.Body).Decode(&candidateDetail); err != nil {
+		t.Fatalf("Decode candidate detail: %v", err)
+	}
+	if candidateDetail.Kind != "candidate" || candidateDetail.Candidate.ID != candidates[0].ID || candidateDetail.Candidate.EvidenceCount != 2 {
+		t.Fatalf("candidate detail = %+v", candidateDetail)
+	}
+
+	wrongProjectReq := authedRequest(t, http.MethodGet, ts.URL+"/insights/"+candidates[0].ID, nil)
+	wrongProjectReq.Header.Set(projectHeader, "other-project")
+	wrongProjectResp, err := http.DefaultClient.Do(wrongProjectReq)
+	if err != nil {
+		t.Fatalf("GET wrong project detail: %v", err)
+	}
+	defer wrongProjectResp.Body.Close()
+	if wrongProjectResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("wrong project status = %d", wrongProjectResp.StatusCode)
+	}
+
+	notFoundReq := authedRequest(t, http.MethodGet, ts.URL+"/insights/missing", nil)
+	notFoundReq.Header.Set(projectHeader, "test-project")
+	notFoundResp, err := http.DefaultClient.Do(notFoundReq)
+	if err != nil {
+		t.Fatalf("GET missing detail: %v", err)
+	}
+	defer notFoundResp.Body.Close()
+	if notFoundResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("not found status = %d", notFoundResp.StatusCode)
+	}
+}
+
 func TestInsightPromotionRoutesAreProjectScopedAndIdempotent(t *testing.T) {
 	cfg := config.Default()
 	cfg.Daemon.DataDir = t.TempDir()

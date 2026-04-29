@@ -314,6 +314,20 @@ func (c *Client) GetObjectiveInsightReport(ctx context.Context, objectiveID stri
 	return &report, nil
 }
 
+func (c *Client) GetInsightDetail(ctx context.Context, id string) (*insightreport.Detail, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/insights/"+id, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting insight detail: %w", err)
+	}
+	defer closeBody(resp)
+
+	var detail insightreport.Detail
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		return nil, fmt.Errorf("decoding insight detail response: %w", err)
+	}
+	return &detail, nil
+}
+
 func (c *Client) PromoteInsightSource(ctx context.Context, sourceID string, target domain.PromotionTarget) (*domain.PromotionRecord, error) {
 	body := struct {
 		Target domain.PromotionTarget `json:"target"`

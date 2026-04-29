@@ -40,4 +40,11 @@ func TestObjectiveInsightStore_RoundTrip(t *testing.T) {
 	if insights[0].Payload["stream_card_field"] != "proof_scope" {
 		t.Fatalf("payload = %#v", insights[0].Payload)
 	}
+	got, err := store.Get(ctx, insight.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ID != insight.ID || got.Detail != insight.Detail || got.Payload["step_id"] != "review" {
+		t.Fatalf("got insight = %+v", got)
+	}
 }

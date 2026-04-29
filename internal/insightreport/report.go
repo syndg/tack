@@ -33,6 +33,19 @@ type Report struct {
 	Candidates  []domain.CodificationCandidate `json:"candidates"`
 }
 
+type DetailKind string
+
+const (
+	DetailKindInsight   DetailKind = "insight"
+	DetailKindCandidate DetailKind = "candidate"
+)
+
+type Detail struct {
+	Kind      DetailKind                    `json:"kind"`
+	Insight   *domain.ObjectiveInsight      `json:"insight,omitempty"`
+	Candidate *domain.CodificationCandidate `json:"candidate,omitempty"`
+}
+
 func Build(objectiveID string, insights []domain.ObjectiveInsight, candidates []domain.CodificationCandidate) Report {
 	groups := groupInsights(insights)
 	return Report{

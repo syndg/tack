@@ -47,6 +47,38 @@ func (d *Daemon) handleGetObjectiveInsightReport(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, insightreport.Build(id, insights, candidates))
 }
 
+func (d *Daemon) handleGetInsightDetail(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	insight, err := d.insights.Get(r.Context(), id)
+	if err == nil {
+		if !d.ensureProjectMatch(w, r, insight.ProjectID) {
+			return
+		}
+		writeJSON(w, http.StatusOK, insightreport.Detail{Kind: insightreport.DetailKindInsight, Insight: insight})
+		return
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		d.logger.Error("getting objective insight detail", "insight_id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get insight")
+		return
+	}
+
+	candidate, err := d.candidates.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "insight or candidate not found")
+			return
+		}
+		d.logger.Error("getting codification candidate detail", "candidate_id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get candidate")
+		return
+	}
+	if !d.ensureProjectMatch(w, r, candidate.ProjectID) {
+		return
+	}
+	writeJSON(w, http.StatusOK, insightreport.Detail{Kind: insightreport.DetailKindCandidate, Candidate: candidate})
+}
+
 func (d *Daemon) handlePromoteInsightSource(w http.ResponseWriter, r *http.Request) {
 	ctx, ok := d.requireProjectContext(w, r)
 	if !ok {
