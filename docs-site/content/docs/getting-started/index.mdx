@@ -1,7 +1,43 @@
 ---
 title: Installation
-description: Install Tack from source and set up your first project.
+description: Install Tack and set up your first project.
 ---
+
+## Recommended Install
+
+Tack is distributed as a binary-first CLI. You do not need Go unless you want to build from source.
+
+### Homebrew
+
+```bash
+brew tap syndg/tack
+brew install tack
+```
+
+### Install Script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/syndg/tack/main/install.sh | sh
+```
+
+Install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/syndg/tack/main/install.sh | TACK_VERSION=v0.1.0-alpha.1 sh
+```
+
+### GitHub Release Binary
+
+Download the archive for your OS and architecture from [GitHub Releases](https://github.com/syndg/tack/releases), extract it, then move `tack` onto your `$PATH`.
+
+Published archives use this shape:
+
+```text
+tack_Darwin_arm64.tar.gz
+tack_Darwin_x86_64.tar.gz
+tack_Linux_arm64.tar.gz
+tack_Linux_x86_64.tar.gz
+```
 
 ## Prerequisites
 
@@ -9,7 +45,6 @@ Before installing Tack, make sure you have:
 
 | Requirement | Minimum Version | Why |
 |-------------|----------------|-----|
-| **Go** | 1.22+ | Tack uses Go 1.22+ standard library features |
 | **Git** | 2.5+ | Worktree support, branch management |
 | **LLM API key** | — | At least one provider key (Anthropic, OpenAI, etc.) |
 
@@ -20,6 +55,14 @@ Optional:
 | **Node.js / npm** | Required if using the Pi runtime (Tack installs Pi via npm in sandboxes) |
 | **Daytona account** | Required only for remote sandboxes |
 | **GitHub PAT** | Required for automatic PR creation |
+
+If you build from source or install with `go install`, you also need Go `1.25.4+`.
+
+## Go Install
+
+```bash
+go install github.com/syndg/tack/cmd/tack@latest
+```
 
 ## Install from Source
 
@@ -40,6 +83,17 @@ mv tack /usr/local/bin/
 ```bash
 tack version
 ```
+
+## Uninstall
+
+Remove the binary and user-level runtime state:
+
+```bash
+rm -f /usr/local/bin/tack
+rm -rf ~/.config/tack
+```
+
+Remove `<repo>/.tack/` from any project where you no longer want Tack config or local runtime state.
 
 ## What Gets Installed
 

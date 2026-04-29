@@ -1,0 +1,61 @@
+name: Bug Report
+description: Report something that is broken or surprising.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include API keys, OAuth tokens, daemon tokens, private source, or sensitive logs.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Run ...
+        2. See ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tack version or commit
+      placeholder: tack version / git commit
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 15, Ubuntu 24.04, etc.
+  - type: dropdown
+    id: sandbox
+    attributes:
+      label: Sandbox provider
+      options:
+        - local
+        - daytona
+        - unknown
+  - type: input
+    id: runtime
+    attributes:
+      label: Agent runtime and provider/model
+      placeholder: pi + openai-codex + gpt-5.4
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Prefer short `tack watch --summary` output. Redact sensitive details.
+      render: text

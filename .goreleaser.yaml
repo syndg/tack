@@ -1,0 +1,58 @@
+version: 2
+
+project_name: tack
+
+builds:
+  - id: tack
+    main: ./cmd/tack
+    binary: tack
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/syndg/tack/internal/version.Version={{ .Version }}
+
+archives:
+  - id: tack
+    ids:
+      - tack
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+
+brews:
+  - name: tack
+    repository:
+      owner: syndg
+      name: homebrew-tack
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/syndg/tack
+    description: Deterministic harness for agentic code execution
+    license: Apache-2.0
+    test: |
+      system "#{bin}/tack", "version"
+    install: |
+      bin.install "tack"

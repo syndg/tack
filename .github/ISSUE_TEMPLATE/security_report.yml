@@ -1,0 +1,15 @@
+name: Security Report Placeholder
+description: Use this only to request a private reporting channel.
+title: "security: private report requested"
+labels: [security]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include vulnerability details, exploit steps, credentials, private source, or logs here. Prefer GitHub private vulnerability reporting if enabled.
+  - type: textarea
+    id: contact
+    attributes:
+      label: Private contact request
+      description: Say how maintainers can contact you privately.
+    validations:
+      required: true

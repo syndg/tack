@@ -151,4 +151,4 @@ When recovery plays out across all streams, the objective ends in one of these s
 | `failed` | All streams failed or the run could not proceed |
 | `blocked` | One or more streams are blocked waiting for human guidance |
 
-For `partial` objectives, you can retry just the failed streams without re-running everything. For `blocked` objectives, send guidance to unblock.
+For `partial` objectives, preserve the merged work and create a follow-up objective for the remaining work. For `blocked` objectives, send guidance to unblock.

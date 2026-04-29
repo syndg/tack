@@ -5,8 +5,9 @@ import (
 	"time"
 )
 
-// Version is the current version of the tack CLI.
-const Version = "0.1.0"
+// Version is the current version of the tack CLI. Release builds override this
+// with the tag version via ldflags.
+var Version = "0.1.0"
 
 // FormatDuration returns a human-friendly duration string.
 // It uses the two most significant non-zero units for readability

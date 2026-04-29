@@ -4,6 +4,8 @@
 
 Tack is an open-source harness for deterministic, repository-aware agentic code execution. You describe what you want built. Tack turns that into a bounded workflow: discovery, planning, isolated execution, quality gates, recovery, merge, and PR creation.
 
+Tack is in public alpha. The best-supported launch path is local git worktrees with the Pi runtime. Expect rough edges, file sharp issues, and do not point Tack at repositories you would not run locally.
+
 ```
 $ tack plan "Add pagination to all list endpoints and a PATCH /expenses/:id endpoint"
 
@@ -33,14 +35,73 @@ Tack solves six problems:
 - **Failures stall progress** — quality-gate and review failures trigger automatic recovery loops
 - **Merging is manual** — the merge processor integrates branches with tiered conflict resolution
 
+## Security Model
+
+Tack runs agent-directed commands near your source code, git state, and credentials.
+
+- Local sandboxes use git worktrees and run as your user; they are not containers or VMs.
+- File scope is an orchestration and tool-policy boundary, not a kernel-enforced boundary.
+- The daemon binds to `127.0.0.1:9800` by default and all daemon routes require bearer auth.
+- API keys live in `~/.config/tack/credentials.yaml`, not in repo config.
+- Daytona sandboxes provide VM-level isolation when local worktrees are not enough.
+
+Read the full [security model](docs-site/content/docs/security.mdx) before using Tack on sensitive repositories.
+
 ---
+
+## Install
+
+### Homebrew
+
+```bash
+brew tap syndg/tack
+brew install tack
+```
+
+### Install Script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/syndg/tack/main/install.sh | sh
+```
+
+Install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/syndg/tack/main/install.sh | TACK_VERSION=v0.1.0-alpha.1 sh
+```
+
+### GitHub Release Binary
+
+Download the archive for your OS and architecture from [GitHub Releases](https://github.com/syndg/tack/releases), then move `tack` onto your `$PATH`.
+
+### Go Install
+
+```bash
+go install github.com/syndg/tack/cmd/tack@latest
+```
+
+### Source Build
+
+```bash
+git clone https://github.com/syndg/tack.git
+cd tack
+go build -o tack ./cmd/tack/
+```
+
+### Uninstall
+
+```bash
+rm -f /usr/local/bin/tack
+rm -rf ~/.config/tack
+```
+
+Remove `<repo>/.tack/` from any project where you no longer want Tack config or local runtime state.
 
 ## Quickstart
 
 ```bash
-# Install
-git clone https://github.com/syndg/tack.git
-cd tack && go build -o tack ./cmd/tack/
+# Verify install
+tack version
 
 # Start the daemon, then initialize a project
 cd your-project
@@ -59,6 +120,34 @@ tack watch
 ```
 
 See the [full getting started guide](docs-site/content/docs/getting-started/index.mdx) for details.
+
+## Example Objectives
+
+Start small and specific:
+
+```bash
+tack plan "Add a health check endpoint at GET /health that returns 200 OK"
+tack plan "Fix the race condition in src/services/websocket.ts and add a regression test"
+tack plan "Add pagination to all list endpoints with page and per_page query params"
+tack plan "Extract shared validation logic from src/routes/users.ts and src/routes/expenses.ts without changing behavior"
+tack plan "Add a PATCH /expenses/:id endpoint with partial update validation and tests"
+```
+
+Good objectives are specific, scoped, grounded in codebase terms, and testable. See [Writing Good Objectives](docs-site/content/docs/guides/writing-objectives.mdx).
+
+## First-Run Troubleshooting
+
+| Problem | Check |
+|---------|-------|
+| `tack` command not found | Confirm the binary is on `$PATH`: `which tack` |
+| Daemon not reachable | Start it in another terminal: `tack daemon` |
+| Init cannot authenticate | Run `tack auth list` and `tack auth test <provider>` |
+| Agent cannot push or create PR | Add git credentials: `tack auth add git` |
+| Worktree creation fails | Commit or stash local changes before running objectives |
+| Plan looks wrong | Reject it: `tack reject <plan-id>`, then resubmit a clearer objective |
+| Agent gets stuck | Check `tack watch --summary`, then `tack logs <agent-id>` |
+
+Full troubleshooting: [Troubleshooting](docs-site/content/docs/guides/troubleshooting.mdx).
 
 ---
 
@@ -209,6 +298,8 @@ Agents get a curated tool set based on role, file scope, and project config. A b
 
 Tack is benchmarked against real open-source projects.
 
+Methodology: benchmark runs use real open-source targets, frozen plan shapes, deterministic validation commands, and generated reports. The reported runs below had no manual code edits.
+
 **lazygit: command-log navigation keybindings** — 3 streams, 3 merged, 0 recovery events, 18 minutes. Zero human intervention. First-pass success on every stream. ([full report](docs/benchmarks/2026-04-14-lazygit-command-log-nav-keybindings-2f5a4e99-8fc4-488e-baa7-ae69b17f0c4c.md))
 
 **lazygit: undo basic commit/checkout** — 3 streams, 3 merged, 5 automatic recoveries (4 review rejections self-healed), final integration validation passed. Zero human intervention. ([full report](docs/benchmarks/2026-04-14-lazygit-undo-basic-commit-checkout-545e5673-1b4a-4527-b62a-da2542e08d6a.md))
@@ -274,8 +365,8 @@ See the [full security audit](docs/security-audit-2026-04-10.md) for details.
 
 | Runtime | Status | RPC | Hooks | File Scope |
 |---------|--------|-----|-------|------------|
-| [Pi](https://github.com/anthropics/pi) | Supported | Yes | Yes | Yes |
-| Claude Code | Supported | No | Yes | Prompt-level |
+| [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | First-class | Yes | Yes | Enforced via tool-call hooks |
+| Claude Code | Minimal compatibility | No | No | Prompt-level guidance only |
 | Codex CLI | Planned | Limited | No | Prompt-level |
 
 ## Sandbox Providers
@@ -296,6 +387,24 @@ See the [full security audit](docs/security-audit-2026-04-10.md) for details.
 - **Not an IDE.** Agents edit code. You review their work.
 - **Not a CI system.** Tack runs quality gates locally in sandboxes. CI is your existing pipeline.
 - **Not locked to any model.** Bring your own runtime, provider, and model.
+
+## Comparison
+
+| Tool category | What it gives you | What Tack adds |
+|---------------|-------------------|----------------|
+| Direct agent CLI | One agent working in your repo | Discovery, stream planning, file scopes, gates, review, merge, PR |
+| Agent framework | Building blocks for custom agents | An opinionated operator workflow for code changes |
+| CI system | Validation after code is pushed | Local quality gates and recovery before merge/PR |
+| Sandbox provider | Isolated execution environments | Lifecycle management, scoped work, merge ordering, recovery |
+
+## Known Limitations
+
+- Public alpha: APIs, config, and workflow details may change.
+- Local mode is not OS sandboxing; agents run as your user.
+- Pi is the first-class runtime; Claude Code is a minimal compatibility path.
+- Docker, E2B, and semantic AI merge are planned, not launch promises.
+- Official Homebrew core is not available yet; use the `syndg/tack` tap.
+- First-run reliability depends on provider credentials, git credentials, and project setup commands being correct.
 
 ---
 
