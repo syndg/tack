@@ -44,7 +44,16 @@ func (d *Daemon) handleGetObjectiveInsightReport(w http.ResponseWriter, r *http.
 	if candidates == nil {
 		candidates = []domain.CodificationCandidate{}
 	}
-	writeJSON(w, http.StatusOK, insightreport.Build(id, insights, candidates))
+	promotions, err := d.promotions.ListByObjective(r.Context(), id)
+	if err != nil {
+		d.logger.Error("listing promotion records", "objective_id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list promotion records")
+		return
+	}
+	if promotions == nil {
+		promotions = []domain.PromotionRecord{}
+	}
+	writeJSON(w, http.StatusOK, insightreport.Build(id, insights, candidates, promotions))
 }
 
 func (d *Daemon) handleGetInsightDetail(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +63,13 @@ func (d *Daemon) handleGetInsightDetail(w http.ResponseWriter, r *http.Request) 
 		if !d.ensureProjectMatch(w, r, insight.ProjectID) {
 			return
 		}
-		writeJSON(w, http.StatusOK, insightreport.Detail{Kind: insightreport.DetailKindInsight, Insight: insight})
+		promotions, err := d.promotions.ListByObjective(r.Context(), insight.ObjectiveID)
+		if err != nil {
+			d.logger.Error("listing promotion records for insight detail", "objective_id", insight.ObjectiveID, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to list promotion records")
+			return
+		}
+		writeJSON(w, http.StatusOK, insightreport.Detail{Kind: insightreport.DetailKindInsight, Insight: insight, PromotionDecisions: insightreport.DecisionsForInsight(promotions, insight.ID)})
 		return
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -76,7 +91,13 @@ func (d *Daemon) handleGetInsightDetail(w http.ResponseWriter, r *http.Request) 
 	if !d.ensureProjectMatch(w, r, candidate.ProjectID) {
 		return
 	}
-	writeJSON(w, http.StatusOK, insightreport.Detail{Kind: insightreport.DetailKindCandidate, Candidate: candidate})
+	promotions, err := d.promotions.ListByObjective(r.Context(), candidate.ObjectiveID)
+	if err != nil {
+		d.logger.Error("listing promotion records for candidate detail", "objective_id", candidate.ObjectiveID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list promotion records")
+		return
+	}
+	writeJSON(w, http.StatusOK, insightreport.Detail{Kind: insightreport.DetailKindCandidate, Candidate: candidate, PromotionDecisions: insightreport.DecisionsForCandidate(promotions, candidate.ID)})
 }
 
 func (d *Daemon) handlePromoteInsightSource(w http.ResponseWriter, r *http.Request) {

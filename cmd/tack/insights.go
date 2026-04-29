@@ -132,12 +132,14 @@ func formatInsightDetail(w io.Writer, detail insightreport.Detail) {
 			return
 		}
 		formatRawInsightDetail(w, *detail.Insight)
+		formatPromotionDecisions(w, detail.PromotionDecisions)
 	case insightreport.DetailKindCandidate:
 		if detail.Candidate == nil {
 			fmt.Fprintln(w, "Candidate: missing")
 			return
 		}
 		formatCandidateDetail(w, *detail.Candidate)
+		formatPromotionDecisions(w, detail.PromotionDecisions)
 	default:
 		fmt.Fprintf(w, "Unknown insight detail kind: %s\n", detail.Kind)
 	}
@@ -209,6 +211,8 @@ func formatInsightReport(w io.Writer, objective domain.Objective, report insight
 	}
 	fmt.Fprintf(w, "Insights:   %d across %d groups\n", report.Summary.TotalInsights, report.Summary.TotalGroups)
 	fmt.Fprintf(w, "Candidates: %d\n", report.Summary.Candidates)
+	fmt.Fprintf(w, "Promotions: proposed=%d approved=%d rejected=%d\n", report.Summary.Promotions.Proposed, report.Summary.Promotions.Approved, report.Summary.Promotions.Rejected)
+	fmt.Fprintf(w, "Targets:    project-memory=%d codification=%d\n", report.Summary.PromotionTargets.ProjectMemory, report.Summary.PromotionTargets.Codification)
 
 	if len(report.Groups) == 0 {
 		fmt.Fprintln(w, "\nInsight Groups: none")
@@ -222,6 +226,9 @@ func formatInsightReport(w io.Writer, objective domain.Objective, report insight
 			fmt.Fprintf(w, "  - %s/%s on %s: %d insight(s), %s..%s\n", group.Kind, group.Source, stream, group.Count, formatReportTime(group.FirstSeen), formatReportTime(group.LastSeen))
 			for _, summary := range group.Summaries[:min(2, len(group.Summaries))] {
 				fmt.Fprintf(w, "    %s\n", truncateObjectiveText(summary, 100))
+			}
+			for _, decision := range group.PromotionDecisions {
+				fmt.Fprintf(w, "    promotion: %s target=%s status=%s\n", decision.SourceID, decision.Target, decision.Status)
 			}
 		}
 	}
@@ -245,9 +252,26 @@ func formatInsightReport(w io.Writer, objective domain.Objective, report insight
 			if !metadata.AutoApprovalEnabled {
 				parts = append(parts, "auto-approval=off")
 			}
+			for _, decision := range metadata.PromotionDecisions {
+				parts = append(parts, fmt.Sprintf("promotion=%s/%s", decision.Target, decision.Status))
+			}
+			if metadata.PreviouslyRejected {
+				parts = append(parts, "previously-rejected")
+			}
 		}
 		fmt.Fprintf(w, "  - %s [%s]\n", candidate.ID, strings.Join(parts, ", "))
 		fmt.Fprintf(w, "    %s\n", truncateObjectiveText(candidate.Instruction, 100))
+	}
+}
+
+func formatPromotionDecisions(w io.Writer, decisions []insightreport.PromotionDecision) {
+	if len(decisions) == 0 {
+		fmt.Fprintln(w, "Promotions: none")
+		return
+	}
+	fmt.Fprintln(w, "Promotions:")
+	for _, decision := range decisions {
+		fmt.Fprintf(w, "  - %s target=%s status=%s updated=%s\n", decision.RecordID, decision.Target, decision.Status, formatReportTime(decision.UpdatedAt))
 	}
 }
 

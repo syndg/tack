@@ -13,7 +13,7 @@ import (
 func TestFormatInsightReportShowsGroupsAndCandidates(t *testing.T) {
 	report := insightreport.Report{
 		ObjectiveID: "obj-1",
-		Summary:     insightreport.Summary{TotalInsights: 2, TotalGroups: 1, Candidates: 1},
+		Summary:     insightreport.Summary{TotalInsights: 2, TotalGroups: 1, Candidates: 1, Promotions: insightreport.PromotionSummary{Proposed: 1, Approved: 1, Rejected: 1}, PromotionTargets: insightreport.TargetSummary{ProjectMemory: 1, Codification: 1}},
 		Groups: []insightreport.Group{{
 			Kind:      domain.InsightKindReviewRejection,
 			Source:    domain.InsightSourceReviewer,
@@ -24,12 +24,12 @@ func TestFormatInsightReportShowsGroupsAndCandidates(t *testing.T) {
 			Summaries: []string{"Keep review checks explicit"},
 		}},
 		Candidates:        []domain.CodificationCandidate{{ID: "candidate-1", Target: domain.CodificationTargetReviewCheck, Status: domain.CodificationStatusProposed, EvidenceCount: 3, Instruction: "Preserve review coverage"}},
-		CandidateMetadata: []insightreport.CandidateMetadata{{CandidateID: "candidate-1", SupportCount: 3, Confidence: 1, ThresholdEligible: true}},
+		CandidateMetadata: []insightreport.CandidateMetadata{{CandidateID: "candidate-1", SupportCount: 3, Confidence: 1, ThresholdEligible: true, PromotionDecisions: []insightreport.PromotionDecision{{SourceID: "candidate-1", Target: domain.PromotionTargetCodification, Status: domain.PromotionStatusRejected}}, PreviouslyRejected: true}},
 	}
 	var out bytes.Buffer
 	formatInsightReport(&out, domain.Objective{Description: "Add operational memory review"}, report)
 	got := out.String()
-	for _, want := range []string{"Insights:   2 across 1 groups", "review_rejection/reviewer", "Keep review checks explicit", "candidate-1", "review_check, proposed, evidence=3, confidence=1.00, threshold=eligible, auto-approval=off"} {
+	for _, want := range []string{"Insights:   2 across 1 groups", "Promotions: proposed=1 approved=1 rejected=1", "Targets:    project-memory=1 codification=1", "review_rejection/reviewer", "Keep review checks explicit", "candidate-1", "review_check, proposed, evidence=3, confidence=1.00, threshold=eligible, auto-approval=off, promotion=codification/rejected, previously-rejected"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q:\n%s", want, got)
 		}
@@ -40,11 +40,11 @@ func TestFormatInsightDetailShowsRawInsight(t *testing.T) {
 	detail := insightreport.Detail{Kind: insightreport.DetailKindInsight, Insight: &domain.ObjectiveInsight{
 		ID: "insight-1", ObjectiveID: "obj-1", StreamID: "stream-1", PlanID: "plan-1", ExecutionID: "execution-1",
 		Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "Add coverage", Detail: "Reviewer asked for coverage", Payload: map[string]string{"step_id": "review"}, CreatedAt: time.Unix(10, 0),
-	}}
+	}, PromotionDecisions: []insightreport.PromotionDecision{{RecordID: "promotion-1", SourceID: "insight-1", Target: domain.PromotionTargetProjectMemory, Status: domain.PromotionStatusApproved, UpdatedAt: time.Unix(20, 0)}}}
 	var out bytes.Buffer
 	formatInsightDetail(&out, detail)
 	got := out.String()
-	for _, want := range []string{"Insight:   insight-1", "Objective: obj-1", "Stream:    stream-1", "Plan:      plan-1", "Execution: execution-1", "Source:    reviewer", "Kind:      review_rejection", "Summary:   Add coverage", "Detail:    Reviewer asked for coverage", "step_id: review"} {
+	for _, want := range []string{"Insight:   insight-1", "Objective: obj-1", "Stream:    stream-1", "Plan:      plan-1", "Execution: execution-1", "Source:    reviewer", "Kind:      review_rejection", "Summary:   Add coverage", "Detail:    Reviewer asked for coverage", "step_id: review", "Promotions:", "promotion-1 target=project-memory status=approved"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q:\n%s", want, got)
 		}
