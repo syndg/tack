@@ -51,3 +51,27 @@ func TestPromotionRecordStorePersistsRecords(t *testing.T) {
 		t.Fatalf("listed = %+v", listed)
 	}
 }
+
+func TestPromotionRecordStoreFindsRawInsightRecordsBySourceAndTarget(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	obj := createTestObjective(t, NewObjectiveStore(d.Conn()), "promote raw insights")
+	store := NewPromotionRecordStore(d.Conn())
+
+	first := &domain.PromotionRecord{ProjectID: testProjectID, ObjectiveID: obj.ID, SourceInsightIDs: []string{"insight-1"}, Target: domain.PromotionTargetProjectMemory, Status: domain.PromotionStatusApproved, Summary: "Use Bun"}
+	second := &domain.PromotionRecord{ProjectID: testProjectID, ObjectiveID: obj.ID, SourceInsightIDs: []string{"insight-2"}, Target: domain.PromotionTargetProjectMemory, Status: domain.PromotionStatusApproved, Summary: "Keep tests focused"}
+	if err := store.Create(ctx, first); err != nil {
+		t.Fatalf("Create first: %v", err)
+	}
+	if err := store.Create(ctx, second); err != nil {
+		t.Fatalf("Create second: %v", err)
+	}
+
+	loaded, err := store.GetByInsightAndTarget(ctx, testProjectID, "insight-2", domain.PromotionTargetProjectMemory)
+	if err != nil {
+		t.Fatalf("GetByInsightAndTarget: %v", err)
+	}
+	if loaded.ID != second.ID || loaded.Summary != "Keep tests focused" || loaded.SourceCandidateID != "" {
+		t.Fatalf("loaded = %+v", loaded)
+	}
+}

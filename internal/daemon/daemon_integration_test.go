@@ -380,6 +380,65 @@ func TestInsightPromotionRoutesAreProjectScopedAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestRawInsightPromotionRoutesPreserveSourceEvidence(t *testing.T) {
+	cfg := config.Default()
+	cfg.Daemon.DataDir = t.TempDir()
+	d, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer d.Shutdown(context.Background())
+	registerDaemonTestProject(t, d, t.TempDir())
+
+	obj := &domain.Objective{ProjectID: "test-project", Description: "Promote raw learning"}
+	if err := d.objectives.Create(context.Background(), obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	insight := &domain.ObjectiveInsight{ProjectID: "test-project", ObjectiveID: obj.ID, Source: domain.InsightSourceHuman, Kind: domain.InsightKindRetryGuidance, Summary: "Use Bun", Detail: "Use Bun for package scripts", Payload: map[string]string{"source": "human", "raw_transcript": "operator chat"}, CreatedAt: time.Unix(10, 0)}
+	if err := d.insights.Create(context.Background(), insight); err != nil {
+		t.Fatalf("Create insight: %v", err)
+	}
+
+	ts := httptest.NewServer(d.authMiddleware(d.mux))
+	defer ts.Close()
+	promoteReq := authedRequest(t, http.MethodPost, ts.URL+"/insights/"+insight.ID+"/promote", bytes.NewBufferString(`{"target":"project-memory"}`))
+	promoteReq.Header.Set(projectHeader, "test-project")
+	promoteReq.Header.Set("Content-Type", "application/json")
+	promoteResp, err := http.DefaultClient.Do(promoteReq)
+	if err != nil {
+		t.Fatalf("POST raw promote: %v", err)
+	}
+	defer promoteResp.Body.Close()
+	if promoteResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(promoteResp.Body)
+		t.Fatalf("promote status = %d body=%s", promoteResp.StatusCode, body)
+	}
+	var record domain.PromotionRecord
+	if err := json.NewDecoder(promoteResp.Body).Decode(&record); err != nil {
+		t.Fatalf("Decode promotion: %v", err)
+	}
+	if record.SourceCandidateID != "" || len(record.SourceInsightIDs) != 1 || record.SourceInsightIDs[0] != insight.ID {
+		t.Fatalf("promotion source = %+v", record)
+	}
+	if record.Status != domain.PromotionStatusApproved || record.Target != domain.PromotionTargetProjectMemory || record.Summary != "Use Bun" || record.Payload["source"] != "human" {
+		t.Fatalf("promotion record = %+v", record)
+	}
+	if _, ok := record.Payload["raw_transcript"]; ok {
+		t.Fatalf("promotion stored transcript payload: %+v", record.Payload)
+	}
+
+	rejectReq := authedRequest(t, http.MethodPost, ts.URL+"/insights/"+insight.ID+"/reject", nil)
+	rejectReq.Header.Set(projectHeader, "other-project")
+	rejectResp, err := http.DefaultClient.Do(rejectReq)
+	if err != nil {
+		t.Fatalf("POST wrong project raw reject: %v", err)
+	}
+	defer rejectResp.Body.Close()
+	if rejectResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("wrong project status = %d", rejectResp.StatusCode)
+	}
+}
+
 func TestBlueprintEndpoints(t *testing.T) {
 	cfg := config.Default()
 	cfg.Daemon.Listen = "127.0.0.1:19802"

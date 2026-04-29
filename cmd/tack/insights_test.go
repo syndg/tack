@@ -76,3 +76,15 @@ func TestFormatPromotionRecordShowsDecision(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatPromotionRecordShowsRawInsightSource(t *testing.T) {
+	record := domain.PromotionRecord{ID: "promotion-1", SourceInsightIDs: []string{"insight-1"}, Target: domain.PromotionTargetCodification, Status: domain.PromotionStatusRejected, SupportCount: 1, Confidence: 0.33, Summary: "Noisy learning"}
+	var out bytes.Buffer
+	formatPromotionRecord(&out, "Rejected", record)
+	got := out.String()
+	for _, want := range []string{"Rejected promotion: promotion-1", "Source: insight-1", "Target: codification", "Status: rejected", "Noisy learning"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+}

@@ -20,18 +20,24 @@ type CandidateStore interface {
 	Get(ctx context.Context, id string) (*domain.CodificationCandidate, error)
 }
 
+type InsightStore interface {
+	Get(ctx context.Context, id string) (*domain.ObjectiveInsight, error)
+}
+
 type Store interface {
 	Create(ctx context.Context, record *domain.PromotionRecord) error
 	GetByCandidateAndTarget(ctx context.Context, projectID, candidateID string, target domain.PromotionTarget) (*domain.PromotionRecord, error)
+	GetByInsightAndTarget(ctx context.Context, projectID, insightID string, target domain.PromotionTarget) (*domain.PromotionRecord, error)
 }
 
 type Service struct {
 	candidates CandidateStore
+	insights   InsightStore
 	store      Store
 }
 
-func NewService(candidates CandidateStore, store Store) *Service {
-	return &Service{candidates: candidates, store: store}
+func NewService(candidates CandidateStore, insights InsightStore, store Store) *Service {
+	return &Service{candidates: candidates, insights: insights, store: store}
 }
 
 func (s *Service) PromoteCandidate(ctx context.Context, projectID, candidateID string, target domain.PromotionTarget) (*domain.PromotionRecord, error) {
@@ -56,6 +62,42 @@ func (s *Service) PromoteCandidate(ctx context.Context, projectID, candidateID s
 		return nil, err
 	}
 	record := promotionFromCandidate(*candidate, target, domain.PromotionStatusApproved)
+	if err := s.store.Create(ctx, &record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (s *Service) PromoteSource(ctx context.Context, projectID, sourceID string, target domain.PromotionTarget) (*domain.PromotionRecord, error) {
+	record, err := s.PromoteCandidate(ctx, projectID, sourceID, target)
+	if err == nil || !errors.Is(err, sql.ErrNoRows) {
+		return record, err
+	}
+	return s.PromoteInsight(ctx, projectID, sourceID, target)
+}
+
+func (s *Service) PromoteInsight(ctx context.Context, projectID, insightID string, target domain.PromotionTarget) (*domain.PromotionRecord, error) {
+	if !validTarget(target) {
+		return nil, ErrInvalidTarget
+	}
+	insight, err := s.insights.Get(ctx, insightID)
+	if err != nil {
+		return nil, err
+	}
+	if insight.ProjectID != projectID {
+		return nil, ErrWrongProject
+	}
+	existing, err := s.store.GetByInsightAndTarget(ctx, projectID, insightID, target)
+	if err == nil {
+		if existing.Status == domain.PromotionStatusApproved {
+			return existing, nil
+		}
+		return nil, fmt.Errorf("%w: cannot approve %s promotion", ErrInvalidTransition, existing.Status)
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	record := promotionFromInsight(*insight, target, domain.PromotionStatusApproved)
 	if err := s.store.Create(ctx, &record); err != nil {
 		return nil, err
 	}
@@ -88,6 +130,40 @@ func (s *Service) RejectCandidate(ctx context.Context, projectID, candidateID st
 	return &record, nil
 }
 
+func (s *Service) RejectSource(ctx context.Context, projectID, sourceID string) (*domain.PromotionRecord, error) {
+	record, err := s.RejectCandidate(ctx, projectID, sourceID)
+	if err == nil || !errors.Is(err, sql.ErrNoRows) {
+		return record, err
+	}
+	return s.RejectInsight(ctx, projectID, sourceID)
+}
+
+func (s *Service) RejectInsight(ctx context.Context, projectID, insightID string) (*domain.PromotionRecord, error) {
+	insight, err := s.insights.Get(ctx, insightID)
+	if err != nil {
+		return nil, err
+	}
+	if insight.ProjectID != projectID {
+		return nil, ErrWrongProject
+	}
+	target := domain.PromotionTargetCodification
+	existing, err := s.store.GetByInsightAndTarget(ctx, projectID, insightID, target)
+	if err == nil {
+		if existing.Status == domain.PromotionStatusRejected {
+			return existing, nil
+		}
+		return nil, fmt.Errorf("%w: cannot reject %s promotion", ErrInvalidTransition, existing.Status)
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	record := promotionFromInsight(*insight, target, domain.PromotionStatusRejected)
+	if err := s.store.Create(ctx, &record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
 func promotionFromCandidate(candidate domain.CodificationCandidate, target domain.PromotionTarget, status domain.PromotionStatus) domain.PromotionRecord {
 	payload := map[string]string{}
 	for k, v := range candidate.Payload {
@@ -113,6 +189,9 @@ func promotionFromInsight(insight domain.ObjectiveInsight, target domain.Promoti
 	metadata := EvaluateThreshold(1, DefaultThresholdConfig())
 	payload := map[string]string{}
 	for k, v := range insight.Payload {
+		if strings.Contains(strings.ToLower(k), "transcript") {
+			continue
+		}
 		payload[k] = v
 	}
 	return domain.PromotionRecord{

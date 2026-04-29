@@ -77,6 +77,19 @@ func (s *PromotionRecordStore) GetByCandidateAndTarget(ctx context.Context, proj
 	return &record, nil
 }
 
+func (s *PromotionRecordStore) GetByInsightAndTarget(ctx context.Context, projectID, insightID string, target domain.PromotionTarget) (*domain.PromotionRecord, error) {
+	sourceInsightIDs, err := json.Marshal([]string{insightID})
+	if err != nil {
+		return nil, fmt.Errorf("marshalling promotion source insight ids: %w", err)
+	}
+	row := s.db.QueryRowContext(ctx, selectPromotionRecordSQL()+` WHERE project_id = ? AND source_candidate_id = '' AND source_insight_ids = ? AND target = ?`, projectID, string(sourceInsightIDs), string(target))
+	record, err := scanPromotionRecord(row)
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
 func (s *PromotionRecordStore) ListByObjective(ctx context.Context, objectiveID string) ([]domain.PromotionRecord, error) {
 	rows, err := s.db.QueryContext(ctx, selectPromotionRecordSQL()+` WHERE objective_id = ? ORDER BY updated_at DESC, rowid DESC`, objectiveID)
 	if err != nil {

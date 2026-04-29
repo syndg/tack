@@ -78,8 +78,8 @@ var insightsShowCmd = &cobra.Command{
 }
 
 var insightsPromoteCmd = &cobra.Command{
-	Use:   "promote <candidate-id>",
-	Short: "Approve a codification candidate promotion",
+	Use:   "promote <insight-or-candidate-id>",
+	Short: "Approve an insight or codification candidate promotion",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := newDaemonClient(cmd, true)
@@ -102,8 +102,8 @@ var insightsPromoteCmd = &cobra.Command{
 }
 
 var insightsRejectCmd = &cobra.Command{
-	Use:   "reject <candidate-id>",
-	Short: "Reject a codification candidate promotion",
+	Use:   "reject <insight-or-candidate-id>",
+	Short: "Reject an insight or codification candidate promotion",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := newDaemonClient(cmd, true)
@@ -253,7 +253,11 @@ func formatInsightReport(w io.Writer, objective domain.Objective, report insight
 
 func formatPromotionRecord(w io.Writer, action string, record domain.PromotionRecord) {
 	fmt.Fprintf(w, "%s promotion: %s\n", action, record.ID)
-	fmt.Fprintf(w, "Source: %s\n", record.SourceCandidateID)
+	source := record.SourceCandidateID
+	if source == "" && len(record.SourceInsightIDs) > 0 {
+		source = strings.Join(record.SourceInsightIDs, ",")
+	}
+	fmt.Fprintf(w, "Source: %s\n", source)
 	fmt.Fprintf(w, "Target: %s\n", record.Target)
 	fmt.Fprintf(w, "Status: %s\n", record.Status)
 	if record.SupportCount > 0 {

@@ -91,8 +91,8 @@ func (d *Daemon) handlePromoteInsightSource(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid promotion request")
 		return
 	}
-	service := promotions.NewService(d.candidates, d.promotions)
-	record, err := service.PromoteCandidate(r.Context(), ctx.Project.ID, r.PathValue("id"), req.Target)
+	service := promotions.NewService(d.candidates, d.insights, d.promotions)
+	record, err := service.PromoteSource(r.Context(), ctx.Project.ID, r.PathValue("id"), req.Target)
 	if err != nil {
 		d.writePromotionError(w, err)
 		return
@@ -105,8 +105,8 @@ func (d *Daemon) handleRejectInsightSource(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	service := promotions.NewService(d.candidates, d.promotions)
-	record, err := service.RejectCandidate(r.Context(), ctx.Project.ID, r.PathValue("id"))
+	service := promotions.NewService(d.candidates, d.insights, d.promotions)
+	record, err := service.RejectSource(r.Context(), ctx.Project.ID, r.PathValue("id"))
 	if err != nil {
 		d.writePromotionError(w, err)
 		return

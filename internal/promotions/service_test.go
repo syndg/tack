@@ -13,7 +13,7 @@ func TestServicePromoteCandidateCreatesApprovedRecord(t *testing.T) {
 	ctx := context.Background()
 	candidates := &fakeCandidates{candidate: &domain.CodificationCandidate{ID: "candidate-1", ProjectID: "project-1", ObjectiveID: "obj-1", Target: domain.CodificationTargetReviewCheck, Title: "Review check", Instruction: "Keep tests focused", Rationale: "Repeated review finding", EvidenceCount: 2, Payload: map[string]string{"kind_counts": "review_rejection:2"}}}
 	store := newFakePromotionStore()
-	service := NewService(candidates, store)
+	service := NewService(candidates, nil, store)
 
 	record, err := service.PromoteCandidate(ctx, "project-1", "candidate-1", domain.PromotionTargetProjectMemory)
 	if err != nil {
@@ -43,7 +43,7 @@ func TestEvaluateThresholdDoesNotAutoApproveByDefault(t *testing.T) {
 }
 
 func TestPromotionFromInsightPersistsRawInsightMetadata(t *testing.T) {
-	insight := domain.ObjectiveInsight{ID: "insight-1", ProjectID: "project-1", ObjectiveID: "obj-1", Summary: "Use Bun", Detail: "Package tooling should use Bun", Payload: map[string]string{"source": "human"}}
+	insight := domain.ObjectiveInsight{ID: "insight-1", ProjectID: "project-1", ObjectiveID: "obj-1", Summary: "Use Bun", Detail: "Package tooling should use Bun", Payload: map[string]string{"source": "human", "raw_transcript": "long chat log"}}
 	record := promotionFromInsight(insight, domain.PromotionTargetProjectMemory, domain.PromotionStatusApproved)
 
 	if record.SourceCandidateID != "" || len(record.SourceInsightIDs) != 1 || record.SourceInsightIDs[0] != "insight-1" {
@@ -52,13 +52,37 @@ func TestPromotionFromInsightPersistsRawInsightMetadata(t *testing.T) {
 	if record.SupportCount != 1 || record.Confidence == 0 || record.Summary != insight.Summary || record.Payload["source"] != "human" {
 		t.Fatalf("record metadata = %+v", record)
 	}
+	if _, ok := record.Payload["raw_transcript"]; ok {
+		t.Fatalf("promotion stored transcript payload: %+v", record.Payload)
+	}
+}
+
+func TestServicePromoteInsightCreatesApprovedRecord(t *testing.T) {
+	ctx := context.Background()
+	insights := &fakeInsights{insight: &domain.ObjectiveInsight{ID: "insight-1", ProjectID: "project-1", ObjectiveID: "obj-1", Summary: "Use Bun", Detail: "Use Bun for scripts", Payload: map[string]string{"source": "human"}}}
+	store := newFakePromotionStore()
+	service := NewService(&fakeCandidates{}, insights, store)
+
+	record, err := service.PromoteSource(ctx, "project-1", "insight-1", domain.PromotionTargetProjectMemory)
+	if err != nil {
+		t.Fatalf("PromoteSource: %v", err)
+	}
+	if record.Status != domain.PromotionStatusApproved || record.Target != domain.PromotionTargetProjectMemory {
+		t.Fatalf("record status/target = %s/%s", record.Status, record.Target)
+	}
+	if record.SourceCandidateID != "" || len(record.SourceInsightIDs) != 1 || record.SourceInsightIDs[0] != "insight-1" {
+		t.Fatalf("record source = %+v", record)
+	}
+	if record.Summary != "Use Bun" || record.Detail != "Use Bun for scripts" || record.Payload["source"] != "human" {
+		t.Fatalf("record content = %+v", record)
+	}
 }
 
 func TestServicePromoteCandidateIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	candidates := &fakeCandidates{candidate: &domain.CodificationCandidate{ID: "candidate-1", ProjectID: "project-1", ObjectiveID: "obj-1", EvidenceCount: 2}}
 	store := newFakePromotionStore()
-	service := NewService(candidates, store)
+	service := NewService(candidates, nil, store)
 
 	first, err := service.PromoteCandidate(ctx, "project-1", "candidate-1", domain.PromotionTargetCodification)
 	if err != nil {
@@ -77,7 +101,7 @@ func TestServiceRejectCandidateAndInvalidTransition(t *testing.T) {
 	ctx := context.Background()
 	candidates := &fakeCandidates{candidate: &domain.CodificationCandidate{ID: "candidate-1", ProjectID: "project-1", ObjectiveID: "obj-1", EvidenceCount: 2}}
 	store := newFakePromotionStore()
-	service := NewService(candidates, store)
+	service := NewService(candidates, nil, store)
 
 	rejected, err := service.RejectCandidate(ctx, "project-1", "candidate-1")
 	if err != nil {
@@ -94,12 +118,43 @@ func TestServiceRejectCandidateAndInvalidTransition(t *testing.T) {
 func TestServiceValidatesTargetAndProject(t *testing.T) {
 	ctx := context.Background()
 	candidates := &fakeCandidates{candidate: &domain.CodificationCandidate{ID: "candidate-1", ProjectID: "project-1", ObjectiveID: "obj-1"}}
-	service := NewService(candidates, newFakePromotionStore())
+	service := NewService(candidates, nil, newFakePromotionStore())
 
 	if _, err := service.PromoteCandidate(ctx, "project-1", "candidate-1", "global"); !errors.Is(err, ErrInvalidTarget) {
 		t.Fatalf("invalid target err = %v", err)
 	}
 	if _, err := service.PromoteCandidate(ctx, "other-project", "candidate-1", domain.PromotionTargetCodification); !errors.Is(err, ErrWrongProject) {
+		t.Fatalf("wrong project err = %v", err)
+	}
+}
+
+func TestServiceRejectInsightAndInvalidTransition(t *testing.T) {
+	ctx := context.Background()
+	insights := &fakeInsights{insight: &domain.ObjectiveInsight{ID: "insight-1", ProjectID: "project-1", ObjectiveID: "obj-1", Summary: "Noisy learning"}}
+	store := newFakePromotionStore()
+	service := NewService(&fakeCandidates{}, insights, store)
+
+	rejected, err := service.RejectSource(ctx, "project-1", "insight-1")
+	if err != nil {
+		t.Fatalf("RejectSource: %v", err)
+	}
+	if rejected.Status != domain.PromotionStatusRejected || rejected.Target != domain.PromotionTargetCodification {
+		t.Fatalf("rejected = %+v", rejected)
+	}
+	if _, err := service.PromoteSource(ctx, "project-1", "insight-1", domain.PromotionTargetCodification); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("promote rejected err = %v, want ErrInvalidTransition", err)
+	}
+}
+
+func TestServiceValidatesInsightTargetAndProject(t *testing.T) {
+	ctx := context.Background()
+	insights := &fakeInsights{insight: &domain.ObjectiveInsight{ID: "insight-1", ProjectID: "project-1", ObjectiveID: "obj-1"}}
+	service := NewService(&fakeCandidates{}, insights, newFakePromotionStore())
+
+	if _, err := service.PromoteSource(ctx, "project-1", "insight-1", "global"); !errors.Is(err, ErrInvalidTarget) {
+		t.Fatalf("invalid target err = %v", err)
+	}
+	if _, err := service.PromoteSource(ctx, "other-project", "insight-1", domain.PromotionTargetCodification); !errors.Is(err, ErrWrongProject) {
 		t.Fatalf("wrong project err = %v", err)
 	}
 }
@@ -115,6 +170,17 @@ func (f *fakeCandidates) Get(context.Context, string) (*domain.CodificationCandi
 	return f.candidate, nil
 }
 
+type fakeInsights struct {
+	insight *domain.ObjectiveInsight
+}
+
+func (f *fakeInsights) Get(context.Context, string) (*domain.ObjectiveInsight, error) {
+	if f.insight == nil {
+		return nil, sql.ErrNoRows
+	}
+	return f.insight, nil
+}
+
 type fakePromotionStore struct {
 	records map[string]*domain.PromotionRecord
 }
@@ -125,12 +191,23 @@ func newFakePromotionStore() *fakePromotionStore {
 
 func (f *fakePromotionStore) Create(_ context.Context, record *domain.PromotionRecord) error {
 	key := string(record.Target)
+	if len(record.SourceInsightIDs) > 0 {
+		key = record.SourceInsightIDs[0] + ":" + key
+	}
 	f.records[key] = record
 	return nil
 }
 
 func (f *fakePromotionStore) GetByCandidateAndTarget(_ context.Context, _ string, _ string, target domain.PromotionTarget) (*domain.PromotionRecord, error) {
 	record := f.records[string(target)]
+	if record == nil {
+		return nil, sql.ErrNoRows
+	}
+	return record, nil
+}
+
+func (f *fakePromotionStore) GetByInsightAndTarget(_ context.Context, _ string, insightID string, target domain.PromotionTarget) (*domain.PromotionRecord, error) {
+	record := f.records[insightID+":"+string(target)]
 	if record == nil {
 		return nil, sql.ErrNoRows
 	}

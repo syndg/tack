@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 const migrationSQL = `
@@ -205,7 +206,7 @@ CREATE TABLE IF NOT EXISTS promotion_records (
     payload TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    UNIQUE(project_id, source_candidate_id, target)
+    UNIQUE(project_id, source_candidate_id, source_insight_ids, target)
 );
 
 CREATE INDEX IF NOT EXISTS idx_projects_root_path ON projects(root_path);
@@ -234,6 +235,7 @@ CREATE INDEX IF NOT EXISTS idx_objective_insights_stream_created ON objective_in
 CREATE INDEX IF NOT EXISTS idx_codification_candidates_objective_updated ON codification_candidates(objective_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_promotion_records_objective_updated ON promotion_records(objective_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_promotion_records_source_candidate ON promotion_records(source_candidate_id);
+CREATE INDEX IF NOT EXISTS idx_promotion_records_source_insights ON promotion_records(source_insight_ids);
 `
 
 // RunMigrations executes the clean-break multi-project schema migration.
@@ -244,11 +246,67 @@ func RunMigrations(db *sql.DB) error {
 	if _, err := db.ExecContext(context.Background(), migrationSQL); err != nil {
 		return fmt.Errorf("running migrations: %w", err)
 	}
+	if err := ensurePromotionRecordInsightUniqueness(db); err != nil {
+		return fmt.Errorf("ensuring promotion record insight uniqueness: %w", err)
+	}
 	if _, err := db.ExecContext(context.Background(), `UPDATE agent_sessions SET role = 'builder' WHERE role = 'worker'`); err != nil {
 		return fmt.Errorf("normalizing agent session roles: %w", err)
 	}
 	if err := addColumnIfMissing(db, "streams", "stream_card", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("ensuring stream card column: %w", err)
+	}
+	return nil
+}
+
+func ensurePromotionRecordInsightUniqueness(db *sql.DB) error {
+	var schema string
+	err := db.QueryRowContext(context.Background(), `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'promotion_records'`).Scan(&schema)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading promotion_records schema: %w", err)
+	}
+	if !strings.Contains(schema, "UNIQUE(project_id, source_candidate_id, target)") {
+		return nil
+	}
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("beginning promotion_records rebuild: %w", err)
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`ALTER TABLE promotion_records RENAME TO promotion_records_old_uniqueness`,
+		`CREATE TABLE promotion_records (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    objective_id TEXT NOT NULL REFERENCES objectives(id) ON DELETE CASCADE,
+    source_candidate_id TEXT NOT NULL DEFAULT '',
+    source_insight_ids TEXT NOT NULL DEFAULT '[]',
+    target TEXT NOT NULL,
+    status TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    support_count INTEGER NOT NULL DEFAULT 0,
+    summary TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '',
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(project_id, source_candidate_id, source_insight_ids, target)
+)`,
+		`INSERT INTO promotion_records (id, project_id, objective_id, source_candidate_id, source_insight_ids, target, status, confidence, support_count, summary, detail, payload, created_at, updated_at)
+SELECT id, project_id, objective_id, source_candidate_id, source_insight_ids, target, status, confidence, support_count, summary, detail, payload, created_at, updated_at FROM promotion_records_old_uniqueness`,
+		`DROP TABLE promotion_records_old_uniqueness`,
+		`CREATE INDEX IF NOT EXISTS idx_promotion_records_objective_updated ON promotion_records(objective_id, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_promotion_records_source_candidate ON promotion_records(source_candidate_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_promotion_records_source_insights ON promotion_records(source_insight_ids)`,
+	} {
+		if _, err := tx.ExecContext(context.Background(), stmt); err != nil {
+			return fmt.Errorf("rebuilding promotion_records: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing promotion_records rebuild: %w", err)
 	}
 	return nil
 }
