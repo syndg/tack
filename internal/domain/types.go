@@ -525,6 +525,38 @@ type CodificationCandidate struct {
 	UpdatedAt     time.Time                   `json:"updated_at"`
 }
 
+type PromotionStatus string
+
+const (
+	PromotionStatusProposed PromotionStatus = "proposed"
+	PromotionStatusApproved PromotionStatus = "approved"
+	PromotionStatusRejected PromotionStatus = "rejected"
+)
+
+type PromotionTarget string
+
+const (
+	PromotionTargetProjectMemory PromotionTarget = "project-memory"
+	PromotionTargetCodification  PromotionTarget = "codification"
+)
+
+type PromotionRecord struct {
+	ID                string            `json:"id"`
+	ProjectID         string            `json:"project_id"`
+	ObjectiveID       string            `json:"objective_id"`
+	SourceCandidateID string            `json:"source_candidate_id,omitempty"`
+	SourceInsightIDs  []string          `json:"source_insight_ids,omitempty"`
+	Target            PromotionTarget   `json:"target"`
+	Status            PromotionStatus   `json:"status"`
+	Confidence        float64           `json:"confidence"`
+	SupportCount      int               `json:"support_count"`
+	Summary           string            `json:"summary"`
+	Detail            string            `json:"detail,omitempty"`
+	Payload           map[string]string `json:"payload,omitempty"`
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
+}
+
 // RunStreamState is a snapshot of a single stream within a run.
 type RunStreamState struct {
 	StreamID  string       `json:"stream_id"`

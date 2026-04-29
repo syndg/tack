@@ -34,3 +34,15 @@ func TestFormatInsightReportShowsGroupsAndCandidates(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatPromotionRecordShowsDecision(t *testing.T) {
+	record := domain.PromotionRecord{ID: "promotion-1", SourceCandidateID: "candidate-1", Target: domain.PromotionTargetProjectMemory, Status: domain.PromotionStatusApproved, SupportCount: 2, Confidence: 0.67, Summary: "Preserve review coverage"}
+	var out bytes.Buffer
+	formatPromotionRecord(&out, "Approved", record)
+	got := out.String()
+	for _, want := range []string{"Approved promotion: promotion-1", "Source: candidate-1", "Target: project-memory", "Status: approved", "Support: 2 confidence=0.67", "Preserve review coverage"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+}

@@ -314,6 +314,39 @@ func (c *Client) GetObjectiveInsightReport(ctx context.Context, objectiveID stri
 	return &report, nil
 }
 
+func (c *Client) PromoteInsightSource(ctx context.Context, sourceID string, target domain.PromotionTarget) (*domain.PromotionRecord, error) {
+	body := struct {
+		Target domain.PromotionTarget `json:"target"`
+	}{Target: target}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling promotion request: %w", err)
+	}
+	resp, err := c.do(ctx, http.MethodPost, "/insights/"+sourceID+"/promote", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("promoting insight source: %w", err)
+	}
+	defer closeBody(resp)
+	var record domain.PromotionRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, fmt.Errorf("decoding promotion response: %w", err)
+	}
+	return &record, nil
+}
+
+func (c *Client) RejectInsightSource(ctx context.Context, sourceID string) (*domain.PromotionRecord, error) {
+	resp, err := c.do(ctx, http.MethodPost, "/insights/"+sourceID+"/reject", nil)
+	if err != nil {
+		return nil, fmt.Errorf("rejecting insight source: %w", err)
+	}
+	defer closeBody(resp)
+	var record domain.PromotionRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, fmt.Errorf("decoding promotion response: %w", err)
+	}
+	return &record, nil
+}
+
 // UpdatePlanQualityGates replaces a plan's quality gates.
 func (c *Client) UpdatePlanQualityGates(ctx context.Context, planID string, qualityGates []string) (*domain.Plan, error) {
 	body := struct {

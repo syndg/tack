@@ -13,9 +13,12 @@ import (
 )
 
 var insightsJSON bool
+var insightPromotionTarget string
 
 func init() {
 	insightsCmd.Flags().BoolVar(&insightsJSON, "json", false, "print machine-readable JSON")
+	insightsPromoteCmd.Flags().StringVar(&insightPromotionTarget, "target", "", "promotion target: project-memory or codification")
+	insightsCmd.AddCommand(insightsPromoteCmd, insightsRejectCmd)
 	rootCmd.AddCommand(insightsCmd)
 }
 
@@ -46,6 +49,53 @@ var insightsCmd = &cobra.Command{
 			return enc.Encode(report)
 		}
 		formatInsightReport(cmd.OutOrStdout(), *objective, *report)
+		return nil
+	},
+}
+
+var insightsPromoteCmd = &cobra.Command{
+	Use:   "promote <candidate-id>",
+	Short: "Approve a codification candidate promotion",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
+		target := domain.PromotionTarget(strings.TrimSpace(insightPromotionTarget))
+		record, err := c.PromoteInsightSource(cmd.Context(), args[0], target)
+		if err != nil {
+			return err
+		}
+		if insightsJSON {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(record)
+		}
+		formatPromotionRecord(cmd.OutOrStdout(), "Approved", *record)
+		return nil
+	},
+}
+
+var insightsRejectCmd = &cobra.Command{
+	Use:   "reject <candidate-id>",
+	Short: "Reject a codification candidate promotion",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := newDaemonClient(cmd, true)
+		if err != nil {
+			return err
+		}
+		record, err := c.RejectInsightSource(cmd.Context(), args[0])
+		if err != nil {
+			return err
+		}
+		if insightsJSON {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(record)
+		}
+		formatPromotionRecord(cmd.OutOrStdout(), "Rejected", *record)
 		return nil
 	},
 }
@@ -83,6 +133,19 @@ func formatInsightReport(w io.Writer, objective domain.Objective, report insight
 		parts := []string{string(candidate.Target), string(candidate.Status), fmt.Sprintf("evidence=%d", candidate.EvidenceCount)}
 		fmt.Fprintf(w, "  - %s [%s]\n", candidate.ID, strings.Join(parts, ", "))
 		fmt.Fprintf(w, "    %s\n", truncateObjectiveText(candidate.Instruction, 100))
+	}
+}
+
+func formatPromotionRecord(w io.Writer, action string, record domain.PromotionRecord) {
+	fmt.Fprintf(w, "%s promotion: %s\n", action, record.ID)
+	fmt.Fprintf(w, "Source: %s\n", record.SourceCandidateID)
+	fmt.Fprintf(w, "Target: %s\n", record.Target)
+	fmt.Fprintf(w, "Status: %s\n", record.Status)
+	if record.SupportCount > 0 {
+		fmt.Fprintf(w, "Support: %d confidence=%.2f\n", record.SupportCount, record.Confidence)
+	}
+	if record.Summary != "" {
+		fmt.Fprintf(w, "Summary: %s\n", truncateObjectiveText(record.Summary, 100))
 	}
 }
 

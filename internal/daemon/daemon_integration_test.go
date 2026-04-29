@@ -197,6 +197,79 @@ func TestObjectiveInsightReportRouteIsProjectScoped(t *testing.T) {
 	}
 }
 
+func TestInsightPromotionRoutesAreProjectScopedAndIdempotent(t *testing.T) {
+	cfg := config.Default()
+	cfg.Daemon.DataDir = t.TempDir()
+	d, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer d.Shutdown(context.Background())
+	registerDaemonTestProject(t, d, t.TempDir())
+
+	obj := &domain.Objective{ProjectID: "test-project", Description: "Promote captured learning"}
+	if err := d.objectives.Create(context.Background(), obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := d.insights.Create(context.Background(), &domain.ObjectiveInsight{ProjectID: "test-project", ObjectiveID: obj.ID, Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "Keep auth middleware coverage explicit", CreatedAt: time.Unix(int64(10+i), 0)}); err != nil {
+			t.Fatalf("Create insight %d: %v", i, err)
+		}
+	}
+	candidates, err := d.candidates.ListByObjective(context.Background(), obj.ID)
+	if err != nil {
+		t.Fatalf("ListByObjective candidates: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d", len(candidates))
+	}
+
+	ts := httptest.NewServer(d.authMiddleware(d.mux))
+	defer ts.Close()
+	promoteReq := authedRequest(t, http.MethodPost, ts.URL+"/insights/"+candidates[0].ID+"/promote", bytes.NewBufferString(`{"target":"project-memory"}`))
+	promoteReq.Header.Set(projectHeader, "test-project")
+	promoteReq.Header.Set("Content-Type", "application/json")
+	promoteResp, err := http.DefaultClient.Do(promoteReq)
+	if err != nil {
+		t.Fatalf("POST promote: %v", err)
+	}
+	defer promoteResp.Body.Close()
+	if promoteResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(promoteResp.Body)
+		t.Fatalf("promote status = %d body=%s", promoteResp.StatusCode, body)
+	}
+	var record domain.PromotionRecord
+	if err := json.NewDecoder(promoteResp.Body).Decode(&record); err != nil {
+		t.Fatalf("Decode promotion: %v", err)
+	}
+	if record.Status != domain.PromotionStatusApproved || record.Target != domain.PromotionTargetProjectMemory || record.SourceCandidateID != candidates[0].ID {
+		t.Fatalf("promotion record = %+v", record)
+	}
+
+	idempotentReq := authedRequest(t, http.MethodPost, ts.URL+"/insights/"+candidates[0].ID+"/promote", bytes.NewBufferString(`{"target":"project-memory"}`))
+	idempotentReq.Header.Set(projectHeader, "test-project")
+	idempotentReq.Header.Set("Content-Type", "application/json")
+	idempotentResp, err := http.DefaultClient.Do(idempotentReq)
+	if err != nil {
+		t.Fatalf("POST idempotent promote: %v", err)
+	}
+	defer idempotentResp.Body.Close()
+	if idempotentResp.StatusCode != http.StatusOK {
+		t.Fatalf("idempotent status = %d", idempotentResp.StatusCode)
+	}
+
+	wrongProjectReq := authedRequest(t, http.MethodPost, ts.URL+"/insights/"+candidates[0].ID+"/reject", nil)
+	wrongProjectReq.Header.Set(projectHeader, "other-project")
+	wrongProjectResp, err := http.DefaultClient.Do(wrongProjectReq)
+	if err != nil {
+		t.Fatalf("POST wrong project reject: %v", err)
+	}
+	defer wrongProjectResp.Body.Close()
+	if wrongProjectResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("wrong project status = %d", wrongProjectResp.StatusCode)
+	}
+}
+
 func TestBlueprintEndpoints(t *testing.T) {
 	cfg := config.Default()
 	cfg.Daemon.Listen = "127.0.0.1:19802"

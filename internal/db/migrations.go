@@ -190,6 +190,24 @@ CREATE TABLE IF NOT EXISTS codification_candidates (
     updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS promotion_records (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    objective_id TEXT NOT NULL REFERENCES objectives(id) ON DELETE CASCADE,
+    source_candidate_id TEXT NOT NULL DEFAULT '',
+    source_insight_ids TEXT NOT NULL DEFAULT '[]',
+    target TEXT NOT NULL,
+    status TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    support_count INTEGER NOT NULL DEFAULT 0,
+    summary TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '',
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(project_id, source_candidate_id, target)
+);
+
 CREATE INDEX IF NOT EXISTS idx_projects_root_path ON projects(root_path);
 CREATE INDEX IF NOT EXISTS idx_objectives_project_created ON objectives(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_dossiers_project_updated ON dossiers(project_id, updated_at DESC);
@@ -214,6 +232,8 @@ CREATE INDEX IF NOT EXISTS idx_attempts_run_created ON attempts(run_id, created_
 CREATE INDEX IF NOT EXISTS idx_objective_insights_objective_created ON objective_insights(objective_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_objective_insights_stream_created ON objective_insights(stream_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_codification_candidates_objective_updated ON codification_candidates(objective_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_promotion_records_objective_updated ON promotion_records(objective_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_promotion_records_source_candidate ON promotion_records(source_candidate_id);
 `
 
 // RunMigrations executes the clean-break multi-project schema migration.
@@ -270,6 +290,7 @@ func resetSchema(db *sql.DB) error {
 		"attempts",
 		"objective_insights",
 		"codification_candidates",
+		"promotion_records",
 		"agent_sessions",
 		"events",
 		"executions",

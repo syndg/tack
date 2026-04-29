@@ -75,6 +75,15 @@ func (s *CodificationCandidateStore) ListByObjective(ctx context.Context, object
 	return out, nil
 }
 
+func (s *CodificationCandidateStore) Get(ctx context.Context, id string) (*domain.CodificationCandidate, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, project_id, objective_id, status, target, title, instruction, rationale, evidence_count, payload, created_at, updated_at FROM codification_candidates WHERE id = ?`, id)
+	candidate, err := scanCodificationCandidate(row)
+	if err != nil {
+		return nil, err
+	}
+	return &candidate, nil
+}
+
 func scanCodificationCandidate(scanner interface{ Scan(dest ...any) error }) (domain.CodificationCandidate, error) {
 	var candidate domain.CodificationCandidate
 	var status, target, payload string
