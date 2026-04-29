@@ -68,6 +68,16 @@ type stubMergeEnqueuer struct{}
 func (s *stubMergeEnqueuer) EnqueueStream(_ context.Context, _ string) error { return nil }
 func (s *stubMergeEnqueuer) MergerSandboxID(_ string) string                 { return "" }
 
+type stubPreflight struct {
+	checkedBlueprint string
+	err              error
+}
+
+func (s *stubPreflight) Check(_ context.Context, blueprintID string) error {
+	s.checkedBlueprint = blueprintID
+	return s.err
+}
+
 // stubPlanCreator satisfies PlanCreator with no-ops.
 type stubPlanCreator struct{}
 
@@ -280,6 +290,61 @@ func TestApprove_RejectsNonWaitingExecution(t *testing.T) {
 	}
 	if !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("expected ErrInvalidState, got: %v", err)
+	}
+}
+
+func TestApprove_BlocksWhenPreflightFails(t *testing.T) {
+	env := setupTestCoordinator(t)
+	ctx := context.Background()
+	env.coord.ctx = ctx
+
+	obj := &domain.Objective{
+		ID:          "obj-preflight",
+		Description: "test preflight",
+		Status:      domain.ObjectiveStatusApproved,
+		Blueprint:   "standard",
+	}
+	if err := env.objectives.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+
+	if err := env.coord.Execute(ctx, obj.ID); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var exec *blueprint.Execution
+	deadline := time.After(2 * time.Second)
+	for exec == nil {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for execution")
+		default:
+		}
+		execs, _ := env.executions.List(ctx)
+		for i := range execs {
+			if execs[i].ObjectiveID == obj.ID && execs[i].Status == "waiting_human" {
+				exec = &execs[i]
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	pf := &stubPreflight{err: errors.New("missing git auth")}
+	env.coord.preflight = pf
+	err := env.coord.Approve(ctx, exec.ID)
+	if err == nil || !strings.Contains(err.Error(), "missing git auth") {
+		t.Fatalf("Approve error = %v, want preflight error", err)
+	}
+	if pf.checkedBlueprint != "standard" {
+		t.Fatalf("checked blueprint = %q, want standard", pf.checkedBlueprint)
+	}
+	updated, err := env.executions.Get(ctx, exec.ID)
+	if err != nil {
+		t.Fatalf("getting execution: %v", err)
+	}
+	if updated.Status != "waiting_human" {
+		t.Fatalf("execution status = %q, want waiting_human", updated.Status)
 	}
 }
 

@@ -79,6 +79,7 @@ import (
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/harness/gates"
+	"github.com/syndg/tack/internal/harness/preflight"
 	"github.com/syndg/tack/internal/harness/rules"
 	"github.com/syndg/tack/internal/harness/tools"
 	"github.com/syndg/tack/internal/naming"
@@ -148,8 +149,9 @@ type MergeOrchestrator interface {
 // stack. The runs service owns construction of internal helpers (scheduler,
 // step handlers, coordinator) — callers provide raw infrastructure only.
 type Config struct {
-	ProjectID string
-	Discovery DossierEnsurer
+	ProjectID   string
+	ProjectRoot string
+	Discovery   DossierEnsurer
 
 	// Orchestrator overrides internal coordinator construction (testing only).
 	// When non-nil, the service uses this orchestrator directly and ignores
@@ -191,10 +193,12 @@ type Config struct {
 	// Credentials provides API keys and tokens for agent injection.
 	Credentials *credentials.Store
 
-	RuntimeAuth        config.RuntimeAuthConfig
-	AgentModel         string
-	PlannerModel       string
-	DeterministicModel string
+	RuntimeAuth         config.RuntimeAuthConfig
+	SandboxProviderName string
+	DaemonExternalURL   string
+	AgentModel          string
+	PlannerModel        string
+	DeterministicModel  string
 
 	// DaemonURL is the URL agents use to call back to the daemon.
 	DaemonURL string
@@ -331,6 +335,15 @@ func New(cfg Config) (*Service, error) {
 
 		// Coordinator: drives blueprint execution, owns agent tracker.
 		// Agent and blueprint_ref step handlers are registered inside NewCoordinator.
+		preflightChecker := preflight.New(preflight.Options{
+			Blueprints:          cfg.Engine,
+			ProjectRoot:         cfg.ProjectRoot,
+			Credentials:         cfg.Credentials,
+			RuntimeAuthMode:     cfg.RuntimeAuth.Mode,
+			RuntimeAuthProvider: cfg.RuntimeAuth.Provider,
+			SandboxProvider:     cfg.SandboxProviderName,
+			DaemonExternalURL:   cfg.DaemonExternalURL,
+		})
 		var err error
 		coordinator, err = dispatch.NewCoordinator(dispatch.Config{
 			ProjectID:     cfg.ProjectID,
@@ -353,6 +366,7 @@ func New(cfg Config) (*Service, error) {
 			EventBus:      cfg.EventBus,
 			Observability: cfg.Observability,
 			Timeouts:      cfg.Timeouts,
+			Preflight:     preflightChecker,
 			Logger:        logger,
 		})
 		if err != nil {

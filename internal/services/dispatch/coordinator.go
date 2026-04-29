@@ -12,6 +12,7 @@ import (
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/preflight"
 	"github.com/syndg/tack/internal/observability"
 	events "github.com/syndg/tack/internal/services/events"
 	"github.com/syndg/tack/internal/services/lifecycle"
@@ -82,7 +83,12 @@ type Config struct {
 	EventBus      *events.PersistentBus   // event pub/sub
 	Observability *observability.Recorder // optional: nil disables canonical operator logging
 	Timeouts      config.TimeoutConfig    // per-role timeout configuration
+	Preflight     PreflightChecker        // optional: validates runtime requirements before dispatch
 	Logger        *slog.Logger            // structured logger
+}
+
+type PreflightChecker interface {
+	Check(ctx context.Context, blueprintID string) error
 }
 
 // Validate checks that all required Config fields are set.
@@ -152,6 +158,7 @@ type Coordinator struct {
 	obs           *observability.Recorder
 	tracker       AgentTracker
 	logger        *slog.Logger
+	preflight     PreflightChecker
 	projectID     string
 	agentModel    string
 	plannerModel  string
@@ -187,6 +194,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		obs:           cfg.Observability,
 		tracker:       newAgentTracker(cfg.Spawner, cfg.Observability, cfg.EventBus, cfg.Timeouts, cfg.Logger),
 		logger:        cfg.Logger,
+		preflight:     cfg.Preflight,
 		projectID:     cfg.ProjectID,
 		agentModel:    cfg.AgentModel,
 		plannerModel:  cfg.PlannerModel,
@@ -478,6 +486,9 @@ func (c *Coordinator) Approve(ctx context.Context, executionID string) error {
 	if exec.Status != "waiting_human" {
 		return fmt.Errorf("execution %s is not waiting for approval (status: %s): %w", executionID, exec.Status, ErrInvalidState)
 	}
+	if err := c.checkPreflight(ctx, exec.BlueprintID); err != nil {
+		return err
+	}
 
 	exec, err = c.engine.ApproveHuman(ctx, exec)
 	if err != nil {
@@ -533,6 +544,11 @@ func (c *Coordinator) Execute(ctx context.Context, objectiveID string) error {
 		}
 		blueprintID = bp.ID
 	}
+	if obj.Status == domain.ObjectiveStatusApproved {
+		if err := c.checkPreflight(ctx, blueprintID); err != nil {
+			return err
+		}
+	}
 
 	exec, err := c.engine.Start(ctx, blueprintID, objectiveID)
 	if err != nil {
@@ -579,6 +595,20 @@ func (c *Coordinator) Execute(ctx context.Context, objectiveID string) error {
 		"objective_id", objectiveID,
 		"blueprint_id", blueprintID,
 	)
+	return nil
+}
+
+func (c *Coordinator) checkPreflight(ctx context.Context, blueprintID string) error {
+	if c.preflight == nil {
+		return nil
+	}
+	if err := c.preflight.Check(ctx, blueprintID); err != nil {
+		var failure preflight.Failure
+		if errors.As(err, &failure) {
+			return err
+		}
+		return fmt.Errorf("preflight failed: %w", err)
+	}
 	return nil
 }
 

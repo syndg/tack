@@ -16,6 +16,7 @@ import (
 
 	"github.com/syndg/tack/internal/client"
 	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/credentials"
 	"github.com/syndg/tack/internal/daemonauth"
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
@@ -1201,6 +1202,13 @@ func setupGitRepo(t *testing.T) func() {
 	}
 	runCmd("git", "add", "README.md")
 	runCmd("git", "commit", "-q", "-m", "init")
+	blueprintDir := filepath.Join(repo, ".tack", "blueprints")
+	if err := os.MkdirAll(blueprintDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll blueprints: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(blueprintDir, "standard.yaml"), []byte(testStandardNoPRBlueprintYAML()), 0o644); err != nil {
+		t.Fatalf("WriteFile standard blueprint: %v", err)
+	}
 
 	return func() { /* t.Chdir restores cwd automatically */ }
 }
@@ -1235,6 +1243,7 @@ func startExecutionDaemonWithInstance(t *testing.T, listen string, qualityGates 
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	installDaemonTestCredentials(t, d)
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
@@ -1279,8 +1288,60 @@ func registerDaemonTestProject(t *testing.T, d *Daemon, root string) {
 	d.projectCtxs.Invalidate(project.ID)
 }
 
+func installDaemonTestCredentials(t *testing.T, d *Daemon) {
+	t.Helper()
+	store, err := credentials.Load(filepath.Join(t.TempDir(), "credentials.yaml"))
+	if err != nil {
+		t.Fatalf("Load credentials: %v", err)
+	}
+	store.SetModelProvider("anthropic", credentials.ProviderCredential{Type: credentials.TypeAPIKey, APIKey: "sk-ant-test"})
+	store.SetGit(credentials.GitCredential{Type: credentials.TypePAT, Host: "github.com", Token: "ghp_test"})
+	d.creds = store
+	d.projectCtxs.creds = store
+}
+
 func testClaudeCodeConfigYAML() string {
 	return "sandbox:\n  provider: local\nagents:\n  runtime: claude-code\nruntime_auth:\n  mode: tack\n  runtime: claude-code\n  provider: anthropic\n  method: api_key\n  credential_ref: anthropic\n"
+}
+
+func testStandardNoPRBlueprintYAML() string {
+	return `id: standard
+name: Standard workflow without PR
+description: Plan, build, review, and merge for daemon integration tests
+steps:
+  - id: plan
+    type: agent
+    role: planner
+    description: Explore codebase and decompose into work items
+    commit: none
+    next: approve
+  - id: approve
+    type: human
+    description: Review and approve the plan
+    next: dispatch
+  - id: dispatch
+    type: deterministic
+    action: dispatch_streams
+    description: Spawn sandboxes and agents per work item
+    next: execute
+  - id: execute
+    type: blueprint_ref
+    ref: build-review
+    foreach: work_item
+    on_work_item_failure: escalate
+    escalation:
+      context: full
+      include_agent_history: true
+    next: merge
+  - id: merge
+    type: deterministic
+    action: merge_queue
+    description: Merge all work item branches and run quality gates
+    next: complete
+  - id: complete
+    type: deterministic
+    action: mark_complete
+`
 }
 
 func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool) {
