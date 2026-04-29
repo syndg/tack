@@ -13,6 +13,7 @@ import (
 	"github.com/syndg/tack/internal/daemonauth"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/insightreport"
 	"github.com/syndg/tack/internal/services/merge"
 )
 
@@ -297,6 +298,20 @@ func (c *Client) GetObjectivePlan(ctx context.Context, objectiveID string) (*Pla
 		return nil, fmt.Errorf("decoding plan response: %w", err)
 	}
 	return &pr, nil
+}
+
+func (c *Client) GetObjectiveInsightReport(ctx context.Context, objectiveID string) (*insightreport.Report, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/objectives/"+objectiveID+"/insights", nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting objective insight report: %w", err)
+	}
+	defer closeBody(resp)
+
+	var report insightreport.Report
+	if err := json.NewDecoder(resp.Body).Decode(&report); err != nil {
+		return nil, fmt.Errorf("decoding insight report response: %w", err)
+	}
+	return &report, nil
 }
 
 // UpdatePlanQualityGates replaces a plan's quality gates.

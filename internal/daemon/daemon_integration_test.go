@@ -142,6 +142,61 @@ func TestCreateObjectiveValidation(t *testing.T) {
 	}
 }
 
+func TestObjectiveInsightReportRouteIsProjectScoped(t *testing.T) {
+	cfg := config.Default()
+	cfg.Daemon.DataDir = t.TempDir()
+	d, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer d.Shutdown(context.Background())
+	registerDaemonTestProject(t, d, t.TempDir())
+
+	obj := &domain.Objective{ProjectID: "test-project", Description: "Inspect captured learnings"}
+	if err := d.objectives.Create(context.Background(), obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	if err := d.insights.Create(context.Background(), &domain.ObjectiveInsight{ProjectID: "test-project", ObjectiveID: obj.ID, Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "Keep tests focused", CreatedAt: time.Unix(10, 0)}); err != nil {
+		t.Fatalf("Create insight: %v", err)
+	}
+
+	ts := httptest.NewServer(d.authMiddleware(d.mux))
+	defer ts.Close()
+	req := authedRequest(t, http.MethodGet, ts.URL+"/objectives/"+obj.ID+"/insights", nil)
+	req.Header.Set(projectHeader, "test-project")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET insight report: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var report struct {
+		ObjectiveID string `json:"objective_id"`
+		Summary     struct {
+			TotalInsights int `json:"total_insights"`
+		} `json:"summary"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&report); err != nil {
+		t.Fatalf("Decode report: %v", err)
+	}
+	if report.ObjectiveID != obj.ID || report.Summary.TotalInsights != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+
+	wrongProjectReq := authedRequest(t, http.MethodGet, ts.URL+"/objectives/"+obj.ID+"/insights", nil)
+	wrongProjectReq.Header.Set(projectHeader, "other-project")
+	wrongProjectResp, err := http.DefaultClient.Do(wrongProjectReq)
+	if err != nil {
+		t.Fatalf("GET wrong project insight report: %v", err)
+	}
+	defer wrongProjectResp.Body.Close()
+	if wrongProjectResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("wrong project status = %d", wrongProjectResp.StatusCode)
+	}
+}
+
 func TestBlueprintEndpoints(t *testing.T) {
 	cfg := config.Default()
 	cfg.Daemon.Listen = "127.0.0.1:19802"

@@ -24,6 +24,7 @@ func (d *Daemon) registerRoutes() {
 	d.mux.HandleFunc("GET /objectives/{id}", d.handleGetObjective)
 	d.mux.HandleFunc("GET /objectives", d.handleListObjectives)
 	d.mux.HandleFunc("GET /objectives/{id}/dossier", d.handleGetObjectiveDossier)
+	d.mux.HandleFunc("GET /objectives/{id}/insights", d.handleGetObjectiveInsightReport)
 	d.mux.HandleFunc("GET /objectives/{id}/codification-candidates", d.handleListObjectiveCodificationCandidates)
 	d.mux.HandleFunc("PUT /objectives/{id}/dossier", d.handleUpdateObjectiveDossier)
 	d.mux.HandleFunc("GET /objectives/{id}/plan", d.handleGetObjectivePlan)
