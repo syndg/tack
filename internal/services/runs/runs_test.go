@@ -122,6 +122,8 @@ func (l *memoryRunLedger) ListAttemptsByStream(ctx context.Context, streamID str
 
 // mockOrchestrator is a minimal test double for dispatch.Orchestrator.
 type mockOrchestrator struct {
+	startCalled bool
+
 	executeCalled bool
 	executeID     string
 	executeErr    error
@@ -146,7 +148,7 @@ type mockOrchestrator struct {
 	killErr          error
 }
 
-func (m *mockOrchestrator) Start(ctx context.Context) error { return nil }
+func (m *mockOrchestrator) Start(ctx context.Context) error { m.startCalled = true; return nil }
 func (m *mockOrchestrator) Stop()                           { m.stopCalled = true }
 func (m *mockOrchestrator) Approve(ctx context.Context, executionID string) error {
 	m.approveCalled = true
@@ -1822,6 +1824,50 @@ func TestRecoverRunsSyncsTerminalObjectives(t *testing.T) {
 		if snap.Outcome == nil {
 			t.Errorf("run %s: expected terminal outcome", tc.name)
 		}
+	}
+}
+
+func TestRecoverBoundaryDoesNotStartWorkers(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+	logger := slog.Default()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+	orch := &mockOrchestrator{}
+	merger := &mockMergeService{}
+
+	obj := &domain.Objective{Description: "recover-boundary", Status: domain.ObjectiveStatusCompleted}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+	run := &domain.Run{ObjectiveID: obj.ID}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+
+	svc := newTestService(t, runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, merger, newTestEventBus(t, database), logger)
+	if err := svc.Recover(ctx); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+
+	if orch.startCalled {
+		t.Fatal("Recover started coordinator")
+	}
+	if merger.started {
+		t.Fatal("Recover started merge processor")
+	}
+	snap, err := svc.Snapshot(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.Status != domain.RunStatusCompleted {
+		t.Fatalf("status = %q, want %q", snap.Status, domain.RunStatusCompleted)
 	}
 }
 

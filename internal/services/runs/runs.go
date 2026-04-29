@@ -103,6 +103,7 @@ type RunView = domain.Snapshot
 // Act sends an intervention (approve, retry, abort, kill_worker) to a run.
 // Command is the legacy name for Act and remains available for compatibility.
 // Snapshot returns the observable state of a run at a point in time.
+// Recover reconciles durable run state after process restart.
 // Run starts the background orchestration loop (coordinator, merge processor,
 // run status synchronization, and recovery/reconciliation).
 type Runs interface {
@@ -111,6 +112,7 @@ type Runs interface {
 	Start(ctx context.Context, objectiveID string) (domain.Snapshot, error)
 	Command(ctx context.Context, runID string, cmd domain.Command) (domain.Snapshot, error)
 	Snapshot(ctx context.Context, runID string) (domain.Snapshot, error)
+	Recover(ctx context.Context) error
 	Run(ctx context.Context) error
 	Stop()
 }
@@ -120,6 +122,7 @@ type RunRuntime interface {
 	Ensure(ctx context.Context, objectiveID string) (RunView, error)
 	Act(ctx context.Context, runID string, action domain.Command) (RunView, error)
 	View(ctx context.Context, runID string) (RunView, error)
+	Recover(ctx context.Context) error
 }
 
 type DossierEnsurer interface {
@@ -800,8 +803,9 @@ func (s *Service) Run(ctx context.Context) error {
 	// Reconcile run records that were in-flight before the daemon restarted.
 	// This must happen after coordinator.Start() so that execution recovery
 	// has already claimed running executions.
-	s.recoverRuns(ctx)
-	s.recoverMergeCompletions(ctx)
+	if err := s.Recover(ctx); err != nil {
+		return err
+	}
 
 	// Subscribe to objective lifecycle events to keep Run records in sync.
 	// When the coordinator transitions an objective (completed, partial, failed,
@@ -833,6 +837,16 @@ func (s *Service) Run(ctx context.Context) error {
 	}()
 
 	s.logger.Info("runs orchestration loop started")
+	return nil
+}
+
+// Recover reconciles persisted run state after restart without starting or
+// stopping background workers. Run calls this after internal services start;
+// tests and future startup callers can exercise recovery through the runtime
+// boundary directly.
+func (s *Service) Recover(ctx context.Context) error {
+	s.recoverRuns(ctx)
+	s.recoverMergeCompletions(ctx)
 	return nil
 }
 
