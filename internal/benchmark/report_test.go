@@ -106,15 +106,43 @@ func TestBuildReportAggregatesStreamMetrics(t *testing.T) {
 		}
 	}
 	insightStore := db.NewObjectiveInsightStore(database.Conn())
-	if err := insightStore.Create(ctx, &domain.ObjectiveInsight{
+	candidateStore := db.NewCodificationCandidateStore(database.Conn())
+	insightStore.BindCodificationStore(candidateStore)
+	validationInsight := &domain.ObjectiveInsight{
 		ObjectiveID: objective.ID,
 		Source:      domain.InsightSourceBenchmark,
 		Kind:        domain.InsightKindBenchmarkValidationPassed,
 		Summary:     "Final benchmark validation passed.",
 		Detail:      "integration ok",
 		CreatedAt:   now.Add(36 * time.Minute),
-	}); err != nil {
+	}
+	if err := insightStore.Create(ctx, validationInsight); err != nil {
 		t.Fatalf("Create validation insight: %v", err)
+	}
+	for _, insight := range []*domain.ObjectiveInsight{
+		{ObjectiveID: objective.ID, StreamID: streamB.ID, Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "cover command navigation", Detail: "review found missing edge coverage", CreatedAt: now.Add(37 * time.Minute)},
+		{ObjectiveID: objective.ID, StreamID: streamB.ID, Source: domain.InsightSourceReviewer, Kind: domain.InsightKindReviewRejection, Summary: "cover command navigation", Detail: "review found missing edge coverage", CreatedAt: now.Add(38 * time.Minute)},
+	} {
+		if err := insightStore.Create(ctx, insight); err != nil {
+			t.Fatalf("Create memory insight: %v", err)
+		}
+	}
+	candidates, err := candidateStore.ListByObjective(ctx, objective.ID)
+	if err != nil {
+		t.Fatalf("List candidates: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count = %d, want 1", len(candidates))
+	}
+	promotionStore := db.NewPromotionRecordStore(database.Conn())
+	for _, promotion := range []*domain.PromotionRecord{
+		{ProjectID: project.ID, ObjectiveID: objective.ID, SourceCandidateID: candidates[0].ID, Target: domain.PromotionTargetCodification, Status: domain.PromotionStatusApproved, Confidence: 1, SupportCount: 2, Summary: "Promote repeated review check", CreatedAt: now.Add(39 * time.Minute)},
+		{ProjectID: project.ID, ObjectiveID: objective.ID, SourceInsightIDs: []string{validationInsight.ID}, Target: domain.PromotionTargetProjectMemory, Status: domain.PromotionStatusRejected, Confidence: 0.5, SupportCount: 1, Summary: "Do not preserve validation event", CreatedAt: now.Add(40 * time.Minute)},
+		{ProjectID: project.ID, ObjectiveID: objective.ID, SourceInsightIDs: []string{validationInsight.ID}, Target: domain.PromotionTargetCodification, Status: domain.PromotionStatusProposed, Confidence: 0.5, SupportCount: 1, Summary: "Review validation event", CreatedAt: now.Add(41 * time.Minute)},
+	} {
+		if err := promotionStore.Create(ctx, promotion); err != nil {
+			t.Fatalf("Create promotion: %v", err)
+		}
 	}
 
 	report, err := BuildReport(dataDir, Run{ID: "bench-1", BenchmarkID: "lazygit.undo-basic-commit-checkout", ObjectiveID: objective.ID, ProjectID: project.ID, RunID: daemonRun.ID, Status: "completed"})
@@ -151,6 +179,15 @@ func TestBuildReportAggregatesStreamMetrics(t *testing.T) {
 	if report.Validation == nil || report.Validation.Status != "passed" {
 		t.Fatalf("validation = %+v, want passed", report.Validation)
 	}
+	if report.Memory.TotalInsights != 3 || report.Memory.CandidateClusters != 1 {
+		t.Fatalf("memory insight summary = %+v", report.Memory)
+	}
+	if report.Memory.ProposedPromotions != 1 || report.Memory.ApprovedPromotions != 1 || report.Memory.RejectedPromotions != 1 {
+		t.Fatalf("memory promotion summary = %+v", report.Memory)
+	}
+	if report.Memory.ProjectMemoryTargets != 1 || report.Memory.CodificationTargets != 2 {
+		t.Fatalf("memory target summary = %+v", report.Memory)
+	}
 	streamBReport := report.Streams[1]
 	if streamBReport.ExecutionCount != 2 || streamBReport.HumanEscalations != 1 || streamBReport.HumanResumes != 1 {
 		t.Fatalf("stream B report = %+v", streamBReport)
@@ -161,10 +198,56 @@ func TestBuildReportAggregatesStreamMetrics(t *testing.T) {
 		"# Benchmark Telemetry",
 		"- Human escalations: `1`",
 		"- Human resumes: `1`",
+		"- Objective insights: `3`",
+		"- Codification candidate clusters: `1`",
+		"- Promotions: `1 proposed`, `1 approved`, `1 rejected`",
+		"- Promotion targets: `1 project-memory`, `2 codification`",
 		"- Final validation: `passed`",
 		"## Final Validation",
 		"### `stream-b` Coverage",
 		"- Stream executions: `2`",
+	} {
+		if !strings.Contains(markdown, needle) {
+			t.Fatalf("markdown missing %q:\n%s", needle, markdown)
+		}
+	}
+}
+
+func TestBuildReportHandlesEmptyMemoryReviewData(t *testing.T) {
+	dataDir := t.TempDir()
+	database, err := db.Open(dataDir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer database.Close()
+	if err := database.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	ctx := context.Background()
+	projectStore := db.NewProjectStore(database.Conn())
+	project := &domain.Project{Name: "test", RootPath: t.TempDir(), ConfigPath: t.TempDir()}
+	if err := projectStore.Upsert(ctx, project); err != nil {
+		t.Fatalf("Upsert project: %v", err)
+	}
+	objectiveStore := db.NewObjectiveStore(database.Conn())
+	objective := &domain.Objective{ProjectID: project.ID, ID: "obj-empty-memory", Description: "benchmark objective", Status: domain.ObjectiveStatusCompleted}
+	if err := objectiveStore.Create(ctx, objective); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+
+	report, err := BuildReport(dataDir, Run{ID: "bench-empty-memory", BenchmarkID: "lazygit.command-log-nav-keybindings", ObjectiveID: objective.ID, ProjectID: project.ID, Status: "completed", ScoreStatus: "passed"})
+	if err != nil {
+		t.Fatalf("BuildReport: %v", err)
+	}
+	if report.Memory != (MemoryReviewSummary{}) {
+		t.Fatalf("memory summary = %+v, want empty", report.Memory)
+	}
+	markdown := RenderReportMarkdown(report)
+	for _, needle := range []string{
+		"- Objective insights: `0`",
+		"- Codification candidate clusters: `0`",
+		"- Promotions: `0 proposed`, `0 approved`, `0 rejected`",
+		"- Promotion targets: `0 project-memory`, `0 codification`",
 	} {
 		if !strings.Contains(markdown, needle) {
 			t.Fatalf("markdown missing %q:\n%s", needle, markdown)

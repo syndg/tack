@@ -10,6 +10,7 @@ import (
 	"github.com/syndg/tack/internal/db"
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/insightreport"
 )
 
 type Report struct {
@@ -18,9 +19,20 @@ type Report struct {
 	Objective  *domain.Objective
 	Plan       *domain.Plan
 	Summary    ReportSummary
+	Memory     MemoryReviewSummary
 	Streams    []StreamReport
 	Validation *ValidationReport
 	Notes      []string
+}
+
+type MemoryReviewSummary struct {
+	TotalInsights        int
+	CandidateClusters    int
+	ProposedPromotions   int
+	ApprovedPromotions   int
+	RejectedPromotions   int
+	ProjectMemoryTargets int
+	CodificationTargets  int
 }
 
 type ValidationReport struct {
@@ -91,6 +103,8 @@ func BuildReport(dataDir string, run Run) (Report, error) {
 		agents:     db.NewAgentStore(database.Conn()),
 		merges:     db.NewMergeQueueStore(database.Conn()),
 		insights:   db.NewObjectiveInsightStore(database.Conn()),
+		candidates: db.NewCodificationCandidateStore(database.Conn()),
+		promotions: db.NewPromotionRecordStore(database.Conn()),
 	}
 
 	report := Report{Run: run}
@@ -117,6 +131,8 @@ type reportStores struct {
 	agents     *db.AgentStore
 	merges     *db.MergeQueueStore
 	insights   *db.ObjectiveInsightStore
+	candidates *db.CodificationCandidateStore
+	promotions *db.PromotionRecordStore
 }
 
 func resolveReportContext(ctx context.Context, stores *reportStores, report *Report) error {
@@ -214,6 +230,15 @@ func populateReport(ctx context.Context, stores *reportStores, report *Report) e
 	if err != nil {
 		return fmt.Errorf("list benchmark insights: %w", err)
 	}
+	candidates, err := stores.candidates.ListByObjective(ctx, report.Run.ObjectiveID)
+	if err != nil {
+		return fmt.Errorf("list benchmark codification candidates: %w", err)
+	}
+	promotionRecords, err := stores.promotions.ListByObjective(ctx, report.Run.ObjectiveID)
+	if err != nil {
+		return fmt.Errorf("list benchmark promotion records: %w", err)
+	}
+	report.Memory = buildMemoryReviewSummary(insights, candidates, promotionRecords)
 
 	executionsByStream := map[string][]blueprint.Execution{}
 	executionIDsByStream := map[string]map[string]struct{}{}
@@ -272,6 +297,19 @@ func populateReport(ctx context.Context, stores *reportStores, report *Report) e
 		return left.ID < right.ID
 	})
 	return nil
+}
+
+func buildMemoryReviewSummary(insights []domain.ObjectiveInsight, candidates []domain.CodificationCandidate, promotions []domain.PromotionRecord) MemoryReviewSummary {
+	summary := insightreport.Build("", insights, candidates, promotions).Summary
+	return MemoryReviewSummary{
+		TotalInsights:        summary.TotalInsights,
+		CandidateClusters:    summary.Candidates,
+		ProposedPromotions:   summary.Promotions.Proposed,
+		ApprovedPromotions:   summary.Promotions.Approved,
+		RejectedPromotions:   summary.Promotions.Rejected,
+		ProjectMemoryTargets: summary.PromotionTargets.ProjectMemory,
+		CodificationTargets:  summary.PromotionTargets.Codification,
+	}
 }
 
 func buildValidationReport(benchmarkID string, insights []domain.ObjectiveInsight) *ValidationReport {
@@ -477,6 +515,10 @@ func RenderReportMarkdown(report Report) string {
 	fmt.Fprintf(&b, "- Human guidance provided: `%d`\n", report.Summary.HumanGuidanceProvided)
 	fmt.Fprintf(&b, "- Human guidance required: `%s`\n", yesNo(report.Summary.HumanGuidanceRequired))
 	fmt.Fprintf(&b, "- Merge attempts: `%d`\n", report.Summary.MergeAttempts)
+	fmt.Fprintf(&b, "- Objective insights: `%d`\n", report.Memory.TotalInsights)
+	fmt.Fprintf(&b, "- Codification candidate clusters: `%d`\n", report.Memory.CandidateClusters)
+	fmt.Fprintf(&b, "- Promotions: `%d proposed`, `%d approved`, `%d rejected`\n", report.Memory.ProposedPromotions, report.Memory.ApprovedPromotions, report.Memory.RejectedPromotions)
+	fmt.Fprintf(&b, "- Promotion targets: `%d project-memory`, `%d codification`\n", report.Memory.ProjectMemoryTargets, report.Memory.CodificationTargets)
 	if report.Validation != nil {
 		fmt.Fprintf(&b, "- Final validation: `%s`\n", report.Validation.Status)
 	}
