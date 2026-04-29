@@ -64,9 +64,9 @@ func (d *Daemon) handleCreateObjective(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Start execution through the run-centric boundary. The event above
-	// is informational (SSE); execution is driven by runsService.Start().
-	if _, err := projectCtx.RunsService.Start(r.Context(), obj.ID); err != nil {
+	// Start execution through the run runtime boundary. The event above
+	// is informational (SSE); execution is driven by runsService.Ensure().
+	if _, err := projectCtx.RunsService.Ensure(r.Context(), obj.ID); err != nil {
 		d.logger.Error("starting run for objective", "objective_id", obj.ID, "error", err)
 		writeError(w, http.StatusInternalServerError, "objective created but failed to start execution")
 		return
@@ -193,7 +193,7 @@ func (d *Daemon) handleExecuteObjective(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("project configuration invalid: %v", err))
 		return
 	}
-	snap, err := projectCtx.RunsService.Start(r.Context(), id)
+	snap, err := projectCtx.RunsService.Ensure(r.Context(), id)
 	if err != nil {
 		switch {
 		case errors.Is(err, dispatch.ErrNotFound):

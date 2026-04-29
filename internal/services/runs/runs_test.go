@@ -428,6 +428,88 @@ func TestStartCreatesRunAndDelegates(t *testing.T) {
 	}
 }
 
+func TestEnsureStartsRunAndReturnsRunView(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+	logger := slog.Default()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+
+	orch := &mockOrchestrator{}
+	svc := newTestService(t, runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+
+	obj := &domain.Objective{Description: "ensure start", Status: domain.ObjectiveStatusApproved}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+
+	view, err := svc.Ensure(ctx, obj.ID)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if view.RunID == "" {
+		t.Fatal("RunID is empty")
+	}
+	if view.ObjectiveID != obj.ID {
+		t.Fatalf("ObjectiveID = %q, want %q", view.ObjectiveID, obj.ID)
+	}
+	if view.Status != domain.RunStatusActive {
+		t.Fatalf("Status = %q, want %q", view.Status, domain.RunStatusActive)
+	}
+	if !orch.executeCalled {
+		t.Fatal("coordinator.Execute was not called")
+	}
+	if orch.executeID != obj.ID {
+		t.Fatalf("coordinator.Execute called with %q, want %q", orch.executeID, obj.ID)
+	}
+}
+
+func TestEnsureResumesExistingRunWithoutDuplicateStart(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+	logger := slog.Default()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+
+	orch := &mockOrchestrator{}
+	svc := newTestService(t, runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+
+	obj := &domain.Objective{Description: "ensure resume", Status: domain.ObjectiveStatusExecuting}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+	run := &domain.Run{ObjectiveID: obj.ID, Status: domain.RunStatusActive}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+
+	view, err := svc.Ensure(ctx, obj.ID)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if view.RunID != run.ID {
+		t.Fatalf("RunID = %q, want existing %q", view.RunID, run.ID)
+	}
+	if view.Status != domain.RunStatusActive {
+		t.Fatalf("Status = %q, want %q", view.Status, domain.RunStatusActive)
+	}
+	if orch.executeCalled {
+		t.Fatal("coordinator.Execute was called for existing run")
+	}
+}
+
 func TestStartRejectsExecutingObjective(t *testing.T) {
 	database := openTestDB(t)
 	conn := database.Conn()

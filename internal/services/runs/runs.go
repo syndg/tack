@@ -91,19 +91,31 @@ import (
 // ErrInvalidState is returned when an operation is invalid for the current state.
 var ErrInvalidState = errors.New("invalid state")
 
+// RunView is the operator-facing view returned by the runtime boundary.
+type RunView = domain.Snapshot
+
 // Runs is the run-centric orchestration boundary.
 //
+// Ensure creates or resumes a run for an objective and returns the run view.
 // Start creates a new run for an objective and begins execution.
 // Command sends an intervention (approve, retry, abort) to a run.
 // Snapshot returns the observable state of a run at a point in time.
 // Run starts the background orchestration loop (coordinator, merge processor,
 // run status synchronization, and recovery/reconciliation).
 type Runs interface {
+	Ensure(ctx context.Context, objectiveID string) (RunView, error)
 	Start(ctx context.Context, objectiveID string) (domain.Snapshot, error)
 	Command(ctx context.Context, runID string, cmd domain.Command) (domain.Snapshot, error)
 	Snapshot(ctx context.Context, runID string) (domain.Snapshot, error)
 	Run(ctx context.Context) error
 	Stop()
+}
+
+// RunRuntime is the caller-first runtime seam for objective execution.
+type RunRuntime interface {
+	Ensure(ctx context.Context, objectiveID string) (RunView, error)
+	Act(ctx context.Context, runID string, action domain.Command) (RunView, error)
+	View(ctx context.Context, runID string) (RunView, error)
 }
 
 type DossierEnsurer interface {
@@ -351,11 +363,24 @@ func New(cfg Config) (*Service, error) {
 	}, nil
 }
 
+// Ensure creates or resumes a run for an objective and returns the current
+// operator-facing run view. Existing runs are not duplicated.
+func (s *Service) Ensure(ctx context.Context, objectiveID string) (RunView, error) {
+	if run, err := s.runs.GetByObjective(ctx, objectiveID); err == nil {
+		return s.View(ctx, run.ID)
+	}
+	return s.startNew(ctx, objectiveID)
+}
+
 // Start creates a new run for an objective and begins execution.
 // It validates the objective is in a startable state, creates a durable
 // Run record, delegates execution to the coordinator, and returns a
 // snapshot reflecting the run's initial state.
 func (s *Service) Start(ctx context.Context, objectiveID string) (domain.Snapshot, error) {
+	return s.startNew(ctx, objectiveID)
+}
+
+func (s *Service) startNew(ctx context.Context, objectiveID string) (RunView, error) {
 	obj, err := s.objectives.Get(ctx, objectiveID)
 	if err != nil {
 		return domain.Snapshot{}, fmt.Errorf("getting objective: %w", err)
@@ -393,6 +418,11 @@ func (s *Service) Start(ctx context.Context, objectiveID string) (domain.Snapsho
 	}
 
 	return snap, nil
+}
+
+// Act sends an intervention through the runtime boundary.
+func (s *Service) Act(ctx context.Context, runID string, action domain.Command) (RunView, error) {
+	return s.Command(ctx, runID, action)
 }
 
 // Command sends an intervention (approve, retry, abort) to a run.
@@ -656,6 +686,11 @@ func (s *Service) Snapshot(ctx context.Context, runID string) (domain.Snapshot, 
 	snap.Streams = s.resolveStreams(ctx, run.ObjectiveID)
 
 	return snap, nil
+}
+
+// View returns the operator-facing state of a run.
+func (s *Service) View(ctx context.Context, runID string) (RunView, error) {
+	return s.Snapshot(ctx, runID)
 }
 
 // SnapshotByObjective returns a snapshot for the most recent run of an objective.

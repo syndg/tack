@@ -12,7 +12,7 @@ import (
 // RunController is the run-boundary surface the planning workflow needs.
 // runs.Service satisfies this interface.
 type RunController interface {
-	Start(ctx context.Context, objectiveID string) (domain.Snapshot, error)
+	Ensure(ctx context.Context, objectiveID string) (domain.Snapshot, error)
 	Command(ctx context.Context, runID string, cmd domain.Command) (domain.Snapshot, error)
 }
 
@@ -34,7 +34,7 @@ func (s *Service) StartSimpleExecution(ctx context.Context, description string, 
 		return obj, plan, nil
 	}
 
-	if _, err := s.runController.Start(ctx, obj.ID); err != nil {
+	if _, err := s.runController.Ensure(ctx, obj.ID); err != nil {
 		return nil, nil, fmt.Errorf("starting run for simple objective: %w", err)
 	}
 

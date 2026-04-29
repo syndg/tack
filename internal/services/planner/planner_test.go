@@ -12,9 +12,9 @@ import (
 )
 
 type mockRunController struct {
-	startCalled bool
-	startID     string
-	startErr    error
+	ensureCalled bool
+	ensureID     string
+	ensureErr    error
 
 	commandCalled bool
 	commandRunID  string
@@ -22,10 +22,10 @@ type mockRunController struct {
 	commandErr    error
 }
 
-func (m *mockRunController) Start(ctx context.Context, objectiveID string) (domain.Snapshot, error) {
-	m.startCalled = true
-	m.startID = objectiveID
-	return domain.Snapshot{}, m.startErr
+func (m *mockRunController) Ensure(ctx context.Context, objectiveID string) (domain.Snapshot, error) {
+	m.ensureCalled = true
+	m.ensureID = objectiveID
+	return domain.Snapshot{}, m.ensureErr
 }
 
 func (m *mockRunController) Command(ctx context.Context, runID string, cmd domain.Command) (domain.Snapshot, error) {
@@ -399,11 +399,11 @@ func TestStartSimpleExecution_StartsRunWhenAutoApproved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartSimpleExecution: %v", err)
 	}
-	if !controller.startCalled {
-		t.Fatal("expected run controller Start to be called")
+	if !controller.ensureCalled {
+		t.Fatal("expected run controller Ensure to be called")
 	}
-	if controller.startID != obj.ID {
-		t.Fatalf("run controller start objective = %q, want %q", controller.startID, obj.ID)
+	if controller.ensureID != obj.ID {
+		t.Fatalf("run controller ensure objective = %q, want %q", controller.ensureID, obj.ID)
 	}
 	if plan.Status != domain.PlanStatusApproved {
 		t.Fatalf("plan status = %q, want approved", plan.Status)
