@@ -81,6 +81,7 @@ import (
 	"github.com/syndg/tack/internal/harness/gates"
 	"github.com/syndg/tack/internal/harness/rules"
 	"github.com/syndg/tack/internal/harness/tools"
+	"github.com/syndg/tack/internal/naming"
 	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/runtime"
 	"github.com/syndg/tack/internal/sandbox"
@@ -252,6 +253,8 @@ type Service struct {
 	// the coordinator and never escape the runs boundary.
 	coordinator    dispatch.Orchestrator
 	mergeProcessor MergeOrchestrator
+	lifecycle      *lifecycle.Manager
+	sandboxProv    sandbox.SandboxProvider
 	eventBus       *events.PersistentBus
 	projectID      string
 	discovery      DossierEnsurer
@@ -379,6 +382,8 @@ func New(cfg Config) (*Service, error) {
 		agents:         cfg.Agents,
 		coordinator:    coordinator,
 		mergeProcessor: cfg.MergeProcessor,
+		lifecycle:      cfg.Lifecycle,
+		sandboxProv:    cfg.SandboxProvider,
 		eventBus:       cfg.EventBus,
 		projectID:      cfg.ProjectID,
 		discovery:      cfg.Discovery,
@@ -796,6 +801,7 @@ func (s *Service) Run(ctx context.Context) error {
 	// This must happen after coordinator.Start() so that execution recovery
 	// has already claimed running executions.
 	s.recoverRuns(ctx)
+	s.recoverMergeCompletions(ctx)
 
 	// Subscribe to objective lifecycle events to keep Run records in sync.
 	// When the coordinator transitions an objective (completed, partial, failed,
@@ -813,6 +819,10 @@ func (s *Service) Run(ctx context.Context) error {
 				}
 				if event.Type == domain.EventObjectiveUpdated && event.Objective != "" {
 					s.syncRunStatus(ctx, event)
+					continue
+				}
+				if event.Type == domain.EventMergeCompleted && event.Objective != "" {
+					s.completeMerge(ctx, event.Objective)
 					continue
 				}
 				if (event.Type == domain.EventRecoveryBlocked || event.Type == domain.EventRecoveryResumed) && event.Objective != "" {
@@ -908,6 +918,132 @@ func (s *Service) recoverRuns(ctx context.Context) {
 			"run_id", run.ID, "objective_id", run.ObjectiveID,
 			"old_status", run.Status, "new_status", newStatus)
 	}
+}
+
+func (s *Service) recoverMergeCompletions(ctx context.Context) {
+	objectives, err := s.listPartialObjectives(ctx)
+	if err != nil {
+		s.logger.Warn("failed to list partial objectives for merge recovery", "error", err)
+		return
+	}
+	for _, obj := range objectives {
+		s.completeMerge(ctx, obj.ID)
+	}
+}
+
+func (s *Service) listPartialObjectives(ctx context.Context) ([]domain.Objective, error) {
+	if s.objectives == nil {
+		return nil, nil
+	}
+	var objectives []domain.Objective
+	var err error
+	if s.projectID != "" {
+		objectives, err = s.objectives.ListByProject(ctx, s.projectID)
+	} else {
+		objectives, err = s.objectives.List(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+	partials := make([]domain.Objective, 0, len(objectives))
+	for _, obj := range objectives {
+		if obj.Status == domain.ObjectiveStatusPartial {
+			partials = append(partials, obj)
+		}
+	}
+	return partials, nil
+}
+
+func (s *Service) completeMerge(ctx context.Context, objectiveID string) {
+	run, err := s.ledger.GetRunByObjective(ctx, objectiveID)
+	if err != nil {
+		return
+	}
+	unlock := s.lockRun(run.ID)
+	defer unlock()
+
+	obj, err := s.ledger.GetObjective(ctx, objectiveID)
+	if err != nil || obj.Status != domain.ObjectiveStatusPartial {
+		return
+	}
+	if !s.allStreamsMerged(ctx, objectiveID) {
+		return
+	}
+	if !s.rePushMergerBranch(ctx, objectiveID) {
+		s.logger.Warn("staying partial; merger branch re-push failed", "objective_id", objectiveID)
+		return
+	}
+
+	if s.lifecycle != nil {
+		if !lifecycle.IsValidTransition(obj.Status, domain.ObjectiveStatusCompleted) {
+			return
+		}
+		if err := s.lifecycle.Transition(ctx, objectiveID, domain.ObjectiveStatusCompleted); err != nil {
+			s.logger.Warn("failed to complete partial objective after merge", "objective_id", objectiveID, "error", err)
+			return
+		}
+	} else if s.objectives != nil {
+		if err := s.objectives.UpdateStatus(ctx, objectiveID, domain.ObjectiveStatusCompleted); err != nil {
+			s.logger.Warn("failed to complete partial objective after merge", "objective_id", objectiveID, "error", err)
+			return
+		}
+	}
+
+	if run.Status != domain.RunStatusCompleted {
+		if err := s.ledger.UpdateRunStatus(ctx, run.ID, domain.RunStatusCompleted); err != nil {
+			s.logger.Warn("failed to complete run after merge", "run_id", run.ID, "objective_id", objectiveID, "error", err)
+			return
+		}
+	}
+	s.logger.Info("run completed after merge", "run_id", run.ID, "objective_id", objectiveID)
+}
+
+func (s *Service) allStreamsMerged(ctx context.Context, objectiveID string) bool {
+	plan, err := s.ledger.GetPlanByObjective(ctx, objectiveID)
+	if err != nil {
+		return false
+	}
+	streams, err := s.ledger.ListStreamsByPlan(ctx, plan.ID)
+	if err != nil || len(streams) == 0 {
+		return false
+	}
+	for _, stream := range streams {
+		if stream.Status != domain.StreamStatusMerged && stream.Status != domain.StreamStatusCompleted {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) rePushMergerBranch(ctx context.Context, objectiveID string) bool {
+	if s.mergeProcessor == nil || s.sandboxProv == nil {
+		return true
+	}
+	mergerID := s.mergeProcessor.MergerSandboxID(objectiveID)
+	if mergerID == "" {
+		return true
+	}
+	sb, err := s.sandboxProv.Get(ctx, mergerID)
+	if err != nil {
+		s.logger.Warn("failed to get merger sandbox", "sandbox_id", mergerID, "error", err)
+		return false
+	}
+	remoteCheck, err := sb.Exec(ctx, "git remote get-url origin", sandbox.ExecOpts{})
+	if err != nil || remoteCheck.ExitCode != 0 {
+		return true
+	}
+	branchResult, err := sb.Exec(ctx, "git rev-parse --abbrev-ref HEAD", sandbox.ExecOpts{})
+	if err != nil || branchResult.ExitCode != 0 {
+		s.logger.Warn("failed to get merger branch name", "objective_id", objectiveID)
+		return false
+	}
+	branch := strings.TrimSpace(branchResult.Stdout)
+	pushResult, err := sb.Exec(ctx, fmt.Sprintf("git push -f origin %s", naming.ShellQuote(branch)), sandbox.ExecOpts{})
+	if err != nil || pushResult.ExitCode != 0 {
+		s.logger.Warn("failed to re-push merger branch after merge completion", "objective_id", objectiveID, "branch", branch, "error", pushResult.Stderr)
+		return false
+	}
+	return true
 }
 
 // Stop shuts down all internal orchestration services.

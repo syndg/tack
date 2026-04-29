@@ -348,10 +348,6 @@ func (p *Processor) processEntry(ctx context.Context, entry *domain.MergeEntry) 
 		p.handleMergeConflict(ctx, entry, result)
 	}
 
-	// Check if all streams for the objective are merged.
-	if err := p.checkObjectiveComplete(ctx, entry.ObjectiveID); err != nil {
-		p.logger.Error("checking objective completion", "objective", entry.ObjectiveID, "error", err)
-	}
 }
 
 // handleMergeSuccess runs post-merge gates and finalizes a successful merge.
@@ -850,54 +846,6 @@ func (p *Processor) runPostMergeGates(ctx context.Context, sb sandbox.Sandbox, p
 	}
 
 	return p.gateRunner.Run(ctx, sb, gateList, false)
-}
-
-// checkObjectiveComplete upgrades a partial objective to completed once all
-// streams are merged. For still-executing objectives, completion remains owned
-// by the blueprint engine to avoid racing the initial execution lifecycle.
-func (p *Processor) checkObjectiveComplete(ctx context.Context, objectiveID string) error {
-	plan, err := p.plans.GetByObjective(ctx, objectiveID)
-	if err != nil {
-		return fmt.Errorf("getting plan for objective: %w", err)
-	}
-
-	streams, err := p.streams.ListByPlan(ctx, plan.ID)
-	if err != nil {
-		return fmt.Errorf("listing streams for plan: %w", err)
-	}
-
-	for _, s := range streams {
-		if s.Status != domain.StreamStatusMerged {
-			return nil
-		}
-	}
-
-	p.logger.Info("all streams merged for objective",
-		"objective_id", objectiveID,
-	)
-	obj, err := p.objectives.Get(ctx, objectiveID)
-	if err != nil {
-		return fmt.Errorf("getting objective for completion check: %w", err)
-	}
-	if obj.Status != domain.ObjectiveStatusPartial {
-		return nil
-	}
-	if err := p.objectives.UpdateStatus(ctx, objectiveID, domain.ObjectiveStatusCompleted); err != nil {
-		return fmt.Errorf("updating partial objective to completed: %w", err)
-	}
-	if p.obs != nil {
-		p.obs.RecordMilestone(observability.Milestone{
-			EventType:   domain.EventObjectiveUpdated,
-			ProjectID:   obj.ProjectID,
-			ObjectiveID: objectiveID,
-			Status:      string(domain.ObjectiveStatusCompleted),
-			Details: map[string]any{
-				"from": string(obj.Status),
-				"to":   string(domain.ObjectiveStatusCompleted),
-			},
-		})
-	}
-	return nil
 }
 
 // publishMergeCompleted publishes an EventMergeCompleted event.

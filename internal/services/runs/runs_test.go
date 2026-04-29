@@ -14,6 +14,7 @@ import (
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/services/dispatch"
 	"github.com/syndg/tack/internal/services/events"
+	"github.com/syndg/tack/internal/services/lifecycle"
 )
 
 type memoryRunLedger struct {
@@ -2332,5 +2333,145 @@ func TestRetryFailedStreamEndToEnd(t *testing.T) {
 	// 5. Verify run transitioned back to active after retry.
 	if retrySnap.Status != domain.RunStatusActive {
 		t.Errorf("post-retry status = %q, want %q", retrySnap.Status, domain.RunStatusActive)
+	}
+}
+
+func TestRunCompletesPartialObjectiveAfterMergeEvent(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+	eventBus := newTestEventBus(t, database)
+	lifecycleMgr := lifecycle.New(objectiveStore, planStore, streamStore, agentStore, eventBus, nil, slog.Default())
+	svc, err := New(Config{
+		Orchestrator:   &mockOrchestrator{},
+		MergeProcessor: &mockMergeService{},
+		Lifecycle:      lifecycleMgr,
+		Runs:           runStore,
+		Objectives:     objectiveStore,
+		Plans:          planStore,
+		Streams:        streamStore,
+		Executions:     executionStore,
+		Agents:         agentStore,
+		EventBus:       eventBus,
+		Logger:         slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	obj := &domain.Objective{Description: "partial merge completion", Status: domain.ObjectiveStatusPartial}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+	plan := &domain.Plan{ObjectiveID: obj.ID}
+	if err := planStore.Create(ctx, plan); err != nil {
+		t.Fatalf("creating plan: %v", err)
+	}
+	stream := &domain.Stream{PlanID: plan.ID, Title: "merged stream", Status: domain.StreamStatusMerged}
+	if err := streamStore.Create(ctx, stream); err != nil {
+		t.Fatalf("creating stream: %v", err)
+	}
+	run := &domain.Run{ObjectiveID: obj.ID, Status: domain.RunStatusPartial}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+
+	if err := svc.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	eventBus.Emit(domain.EventMergeCompleted, obj.ID, stream.ID, "")
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		snap, err := svc.View(ctx, run.ID)
+		if err != nil {
+			t.Fatalf("View: %v", err)
+		}
+		updated, err := objectiveStore.Get(ctx, obj.ID)
+		if err != nil {
+			t.Fatalf("Get objective: %v", err)
+		}
+		if snap.Status == domain.RunStatusCompleted && updated.Status == domain.ObjectiveStatusCompleted {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("status after merge event: run=%s objective=%s, want completed/completed", snap.Status, updated.Status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestRunRecoversCompletedPostMergePartial(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+	eventBus := newTestEventBus(t, database)
+	lifecycleMgr := lifecycle.New(objectiveStore, planStore, streamStore, agentStore, eventBus, nil, slog.Default())
+	svc, err := New(Config{
+		Orchestrator:   &mockOrchestrator{},
+		MergeProcessor: &mockMergeService{},
+		Lifecycle:      lifecycleMgr,
+		Runs:           runStore,
+		Objectives:     objectiveStore,
+		Plans:          planStore,
+		Streams:        streamStore,
+		Executions:     executionStore,
+		Agents:         agentStore,
+		EventBus:       eventBus,
+		Logger:         slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	obj := &domain.Objective{Description: "post-merge restart", Status: domain.ObjectiveStatusPartial}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+	plan := &domain.Plan{ObjectiveID: obj.ID}
+	if err := planStore.Create(ctx, plan); err != nil {
+		t.Fatalf("creating plan: %v", err)
+	}
+	stream := &domain.Stream{PlanID: plan.ID, Title: "merged before restart", Status: domain.StreamStatusMerged}
+	if err := streamStore.Create(ctx, stream); err != nil {
+		t.Fatalf("creating stream: %v", err)
+	}
+	run := &domain.Run{ObjectiveID: obj.ID, Status: domain.RunStatusPartial}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+
+	if err := svc.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	snap, err := svc.View(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("View: %v", err)
+	}
+	if snap.Status != domain.RunStatusCompleted {
+		t.Fatalf("run status = %s, want %s", snap.Status, domain.RunStatusCompleted)
+	}
+	updated, err := objectiveStore.Get(ctx, obj.ID)
+	if err != nil {
+		t.Fatalf("Get objective: %v", err)
+	}
+	if updated.Status != domain.ObjectiveStatusCompleted {
+		t.Fatalf("objective status = %s, want %s", updated.Status, domain.ObjectiveStatusCompleted)
 	}
 }

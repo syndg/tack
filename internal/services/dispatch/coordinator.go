@@ -200,36 +200,11 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	return c, nil
 }
 
-// Start subscribes to events and begins processing.
+// Start begins recovery processing.
 // Execution is triggered exclusively through runs.Start() — the coordinator
-// no longer listens for EventObjectiveCreated. It still listens for
-// EventMergeCompleted to drive partial→completed upgrades on the retry path.
+// no longer listens for EventObjectiveCreated or merge-completion events.
 func (c *Coordinator) Start(ctx context.Context) error {
 	c.ctx = ctx
-	sub, unsub := c.eventBus.Subscribe(128)
-
-	go func() {
-		defer unsub()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case event, ok := <-sub:
-				if !ok {
-					return
-				}
-				switch event.Type {
-				case domain.EventMergeCompleted:
-					// After a merge completes, check if a partial objective
-					// can now be upgraded to completed (retry path).
-					if event.Objective != "" {
-						c.checkPartialToCompleted(ctx, event.Objective)
-					}
-				}
-			}
-		}
-	}()
-
 	go c.recoverExecutions(ctx)
 
 	c.logger.Info("coordinator started")
