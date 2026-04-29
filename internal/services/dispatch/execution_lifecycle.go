@@ -290,6 +290,148 @@ func (c *Coordinator) Retry(ctx context.Context, failedExecID string, guidance s
 	return nil
 }
 
+func (c *Coordinator) RetryStream(ctx context.Context, streamID string, guidance string) error {
+	stream, err := c.streams.Get(ctx, streamID)
+	if err != nil {
+		return fmt.Errorf("getting stream %s: %w", streamID, err)
+	}
+	if stream.Status != domain.StreamStatusFailed {
+		return fmt.Errorf("stream %s is not failed (status: %s)", stream.ID, stream.Status)
+	}
+	if stream.ExecutionID != "" {
+		return c.Retry(ctx, stream.ExecutionID, guidance)
+	}
+	if !c.streamDependenciesMerged(ctx, stream) {
+		return fmt.Errorf("stream %s dependencies are not merged: %w", stream.ID, ErrInvalidState)
+	}
+
+	plan, err := c.plans.Get(ctx, stream.PlanID)
+	if err != nil {
+		return fmt.Errorf("getting plan for stream %s: %w", stream.ID, err)
+	}
+	topExec, err := c.executions.GetByObjective(ctx, plan.ObjectiveID)
+	if err != nil {
+		return fmt.Errorf("getting parent execution for objective %s: %w", plan.ObjectiveID, err)
+	}
+	refBP, err := c.streamBlueprintForRetry(ctx, topExec)
+	if err != nil {
+		return err
+	}
+
+	if err := c.streams.UpdateStatus(ctx, stream.ID, domain.StreamStatusPending); err != nil {
+		return fmt.Errorf("resetting stream %s to pending: %w", stream.ID, err)
+	}
+	if err := c.scheduler.MarkExecuting(ctx, stream.ID); err != nil {
+		return fmt.Errorf("marking stream %s executing: %w", stream.ID, err)
+	}
+
+	subExec, err := c.engine.Start(ctx, refBP.ID, plan.ObjectiveID)
+	if err != nil {
+		_ = c.scheduler.MarkFailed(ctx, stream.ID)
+		return fmt.Errorf("starting stream retry sub-execution: %w", err)
+	}
+	subExec.ParentID = topExec.ID
+	subExec.StreamID = stream.ID
+	if strings.TrimSpace(guidance) != "" {
+		for _, step := range refBP.Steps {
+			if step.Type == blueprint.StepTypeAgent {
+				if state := subExec.StepStates[step.ID]; state != nil {
+					state.Metadata = mergeStepMetadata(map[string]string{"fix_context": guidance}, &agents.RetryContext{HumanGuidance: guidance})
+				}
+				break
+			}
+		}
+	}
+	if err := c.executions.Create(ctx, subExec); err != nil {
+		_ = c.scheduler.MarkFailed(ctx, stream.ID)
+		return fmt.Errorf("persisting stream retry sub-execution: %w", err)
+	}
+	if err := c.streams.UpdateExecutionID(ctx, stream.ID, subExec.ID); err != nil {
+		c.logger.Warn("failed to link stream to retry sub-execution", "stream_id", stream.ID, "execution_id", subExec.ID, "error", err)
+	}
+
+	baseCtx := c.ctx
+	if baseCtx == nil {
+		baseCtx = ctx
+	}
+	execCtx, cancel := context.WithCancel(baseCtx)
+	retryKey := "retry:" + subExec.ID
+	c.mu.Lock()
+	c.activeExecs[retryKey] = cancel
+	c.mu.Unlock()
+
+	go func() {
+		defer func() {
+			c.mu.Lock()
+			delete(c.activeExecs, retryKey)
+			c.mu.Unlock()
+			cancel()
+		}()
+
+		results := make(chan streamResult, 1)
+		c.advanceSubExecution(execCtx, subExec, stream, plan.ID, results)
+		res := <-results
+		if res.Error != "" {
+			c.logger.Warn("stream retry sub-execution failed", "stream_id", stream.ID, "execution_id", subExec.ID, "error", res.Error)
+			return
+		}
+		c.logger.Info("stream retry sub-execution completed", "stream_id", stream.ID, "execution_id", subExec.ID)
+	}()
+
+	return nil
+}
+
+func (c *Coordinator) streamDependenciesMerged(ctx context.Context, stream *domain.Stream) bool {
+	streams, err := c.streams.ListByPlan(ctx, stream.PlanID)
+	if err != nil {
+		return false
+	}
+	statusByID := make(map[string]domain.StreamStatus, len(streams))
+	titleToID := make(map[string]string, len(streams))
+	for _, st := range streams {
+		statusByID[st.ID] = st.Status
+		titleToID[st.Title] = st.ID
+	}
+	for _, dep := range append(append([]string{}, stream.Dependencies...), stream.EffectiveCard().BlockedBy...) {
+		depID := dep
+		if id := titleToID[dep]; id != "" {
+			depID = id
+		}
+		if statusByID[depID] != domain.StreamStatusMerged {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Coordinator) streamBlueprintForRetry(ctx context.Context, topExec *blueprint.Execution) (*blueprint.Blueprint, error) {
+	children, err := c.executions.ListByParent(ctx, topExec.ID)
+	if err != nil {
+		return nil, fmt.Errorf("listing stream executions for parent %s: %w", topExec.ID, err)
+	}
+	for _, child := range children {
+		if child.StreamID == "" {
+			continue
+		}
+		if bp, ok := c.engine.GetBlueprint(child.BlueprintID); ok {
+			return bp, nil
+		}
+	}
+	parentBP, ok := c.engine.GetBlueprint(topExec.BlueprintID)
+	if !ok {
+		return nil, fmt.Errorf("workflow %q not found", topExec.BlueprintID)
+	}
+	for _, step := range parentBP.Steps {
+		if step.Type == blueprint.StepTypeBlueprintRef && step.Foreach == "work_item" {
+			if bp, ok := c.engine.GetBlueprint(step.Ref); ok {
+				return bp, nil
+			}
+			return nil, fmt.Errorf("workflow %q not found", step.Ref)
+		}
+	}
+	return nil, fmt.Errorf("no stream workflow found for objective execution %s", topExec.ID)
+}
+
 // checkPartialToCompleted checks if an objective in "partial" status can be
 // upgraded to "completed" (all streams now completed).
 func (c *Coordinator) checkPartialToCompleted(ctx context.Context, objectiveID string) {

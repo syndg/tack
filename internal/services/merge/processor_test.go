@@ -570,6 +570,52 @@ func TestPublishNewlyReadyStreams_EmitsEventBusReady(t *testing.T) {
 	}
 }
 
+func TestPublishNewlyReadyStreams_RevivesDependencyBlockedStream(t *testing.T) {
+	f := setupProcessor(t)
+	ctx := context.Background()
+
+	obj := &domain.Objective{Description: "test", Status: domain.ObjectiveStatusPartial}
+	if err := f.objectives.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	plan := &domain.Plan{ObjectiveID: obj.ID, QualityGates: []string{}}
+	if err := f.plans.Create(ctx, plan); err != nil {
+		t.Fatalf("Create plan: %v", err)
+	}
+	upstream := &domain.Stream{PlanID: plan.ID, Title: "upstream", FileScope: []string{"a/**"}}
+	if err := f.streams.Create(ctx, upstream); err != nil {
+		t.Fatalf("Create upstream stream: %v", err)
+	}
+	advanceStreamTo(t, f.streams, ctx, upstream.ID, domain.StreamStatusMerged)
+	downstream := &domain.Stream{PlanID: plan.ID, Title: "downstream", FileScope: []string{"b/**"}, Dependencies: []string{upstream.ID}}
+	if err := f.streams.Create(ctx, downstream); err != nil {
+		t.Fatalf("Create downstream stream: %v", err)
+	}
+	advanceStreamTo(t, f.streams, ctx, downstream.ID, domain.StreamStatusFailed)
+
+	sub, unsub := f.bus.Subscribe(10)
+	defer unsub()
+	f.processor.publishNewlyReadyStreams(ctx, plan.ID)
+
+	got, err := f.streams.Get(ctx, downstream.ID)
+	if err != nil {
+		t.Fatalf("Get downstream: %v", err)
+	}
+	if got.Status != domain.StreamStatusPending {
+		t.Fatalf("downstream status = %q, want pending", got.Status)
+	}
+	for {
+		select {
+		case ev := <-sub:
+			if ev.Type == domain.EventStreamReady && ev.Stream == downstream.ID {
+				return
+			}
+		default:
+			t.Fatal("expected EventStreamReady to be published for revived downstream stream")
+		}
+	}
+}
+
 func TestProcessNext_FailedGates(t *testing.T) {
 	f := setupProcessor(t)
 	ctx := context.Background()

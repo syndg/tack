@@ -109,8 +109,10 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 		spawnRequest.Dossier = dossier
 	}
 
+	const maxPlannerDossierExpansions = 2
 	var result *SpawnResult
 	plannerExpansionAttempts := 0
+	basePlannerGuidance := spawnRequest.Guidance
 	for {
 		result, err = c.spawner.Spawn(ctx, spawnRequest)
 		if err == nil {
@@ -339,7 +341,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 							return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: msg}, nil
 						}
 						plannerExpansionAttempts++
-						if plannerExpansionAttempts > 2 {
+						if plannerExpansionAttempts > maxPlannerDossierExpansions {
 							msg := "planner requested dossier expansion too many times"
 							c.spawner.MarkFailed(ctx, result.Session, msg)
 							return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: msg}, nil
@@ -350,6 +352,7 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 							return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: fmt.Sprintf("expanding dossier from planner request: %s", expandErr)}, nil
 						}
 						spawnRequest.Dossier = expanded
+						spawnRequest.Guidance = plannerDossierExpansionGuidance(basePlannerGuidance, plannerExpansionAttempts, maxPlannerDossierExpansions)
 						c.spawner.MarkCompleted(ctx, result.Session, strings.TrimSpace(expansionErr.Error()))
 						if err := c.spawner.DeleteSandbox(ctx, result.Sandbox.ID()); err != nil {
 							c.logger.Warn("failed to delete planner sandbox after dossier expansion", "sandbox_id", result.Sandbox.ID(), "error", err)
@@ -493,6 +496,23 @@ func (c *Coordinator) modelForAgentStep(step *blueprint.Step) string {
 	return c.agentModel
 }
 
+func plannerDossierExpansionGuidance(base string, attempts, maxAttempts int) string {
+	base = strings.TrimSpace(base)
+	remaining := maxAttempts - attempts
+	message := fmt.Sprintf("Planner note: dossier expansion has already run %d time(s) for this planning step. Prefer producing the YAML plan from the current dossier if it is sufficient.", attempts)
+	if remaining <= 0 {
+		message = "Planner note: dossier expansion limit reached for this planning step. Do not request dossier expansion again. Produce the best valid YAML plan from the current dossier; encode uncertainty as acceptance criteria, proof scope, risks, or narrow file scopes instead of asking for more discovery."
+	} else if remaining == 1 {
+		message += " You may request at most 1 more dossier expansion."
+	} else {
+		message += fmt.Sprintf(" You may request at most %d more dossier expansions.", remaining)
+	}
+	if base == "" {
+		return message
+	}
+	return base + "\n\n" + message
+}
+
 // streamResult reports the outcome of a stream's sub-execution.
 type streamResult struct {
 	StreamID string
@@ -552,6 +572,8 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 	// merged, failed) that will never emit a new result. Count them as resolved
 	// so the collection loop doesn't block forever.
 	streamSet := make(map[string]bool, totalStreams)
+	resolvedStreams := make(map[string]bool, totalStreams)
+	failedStreams := make(map[string]bool, totalStreams)
 	resolvedCount := 0
 	var failures []string
 	for _, s := range allStreams {
@@ -559,8 +581,11 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 		switch s.Status {
 		case domain.StreamStatusCompleted, domain.StreamStatusMergeReady, domain.StreamStatusMerged:
 			resolvedCount++
+			resolvedStreams[s.ID] = true
 		case domain.StreamStatusFailed:
 			resolvedCount++
+			resolvedStreams[s.ID] = true
+			failedStreams[s.ID] = true
 			failures = append(failures, fmt.Sprintf("stream %s: previously failed", s.ID))
 		}
 	}
@@ -617,8 +642,13 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 			}, nil
 
 		case res := <-results:
+			if resolvedStreams[res.StreamID] {
+				continue
+			}
+			resolvedStreams[res.StreamID] = true
 			resolvedCount++
 			if res.Error != "" {
+				failedStreams[res.StreamID] = true
 				failures = append(failures, fmt.Sprintf("stream %s: %s", res.StreamID, res.Error))
 
 				if onWorkItemFailure == "escalate" {
@@ -631,6 +661,10 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 					"resolved", resolvedCount,
 					"total", totalStreams,
 				)
+
+				newResolved, newFailures := c.failStreamsBlockedByFailedDependencies(ctx, plan.ID, allStreams, resolvedStreams, failedStreams)
+				resolvedCount += newResolved
+				failures = append(failures, newFailures...)
 			} else {
 				c.logger.Info("stream sub-execution completed",
 					"stream_id", res.StreamID,
@@ -678,6 +712,61 @@ func (c *Coordinator) HandleBlueprintRefStep(ctx context.Context, exec *blueprin
 	}
 
 	return blueprint.StepResult{Status: blueprint.StepStatusCompleted}, nil
+}
+
+func (c *Coordinator) failStreamsBlockedByFailedDependencies(ctx context.Context, planID string, streams []domain.Stream, resolved, failed map[string]bool) (int, []string) {
+	titleToID := make(map[string]string, len(streams))
+	for _, stream := range streams {
+		titleToID[stream.Title] = stream.ID
+	}
+
+	resolvedCount := 0
+	var failures []string
+	changed := true
+	for changed {
+		changed = false
+		for _, stream := range streams {
+			if resolved[stream.ID] || stream.Status != domain.StreamStatusPending {
+				continue
+			}
+			blockedBy := failedDependency(stream, titleToID, failed)
+			if blockedBy == "" {
+				continue
+			}
+			if err := c.scheduler.MarkFailed(ctx, stream.ID); err != nil {
+				c.logger.Warn("failed to mark dependency-blocked stream failed", "plan_id", planID, "stream_id", stream.ID, "dependency", blockedBy, "error", err)
+				continue
+			}
+			resolved[stream.ID] = true
+			failed[stream.ID] = true
+			resolvedCount++
+			changed = true
+			failure := fmt.Sprintf("stream %s: blocked by failed dependency %s", stream.ID, blockedBy)
+			failures = append(failures, failure)
+			c.logger.Warn("stream blocked by failed dependency", "plan_id", planID, "stream_id", stream.ID, "dependency", blockedBy)
+		}
+	}
+	return resolvedCount, failures
+}
+
+func failedDependency(stream domain.Stream, titleToID map[string]string, failed map[string]bool) string {
+	for _, dep := range stream.Dependencies {
+		if failed[dep] {
+			return dep
+		}
+		if id := titleToID[dep]; id != "" && failed[id] {
+			return id
+		}
+	}
+	for _, dep := range stream.EffectiveCard().BlockedBy {
+		if failed[dep] {
+			return dep
+		}
+		if id := titleToID[dep]; id != "" && failed[id] {
+			return id
+		}
+	}
+	return ""
 }
 
 // resolveBlueprint resolves a blueprint ref by blueprint ID.

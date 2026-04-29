@@ -49,7 +49,7 @@ func syncBenchmarkRun(cmd *cobra.Command, cfg *config.Config, run *benchmark.Run
 		return nil
 	}
 	switch run.Status {
-	case "superseded", "partial":
+	case "superseded":
 		return nil
 	case "completed":
 		if run.StatusReason == "" {

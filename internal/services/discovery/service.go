@@ -293,7 +293,8 @@ func compileRulePriors(engine *rules.Engine) ([]domain.DossierPrior, []domain.Do
 
 func (s *Service) discoverRelevantFiles(citationPrefix string, texts ...string) ([]domain.DossierReference, []domain.DossierCitation) {
 	tokens := objectiveTokens(texts...)
-	if len(tokens) == 0 || strings.TrimSpace(s.projectRoot) == "" {
+	phrases := objectivePathPhrases(texts...)
+	if (len(tokens) == 0 && len(phrases) == 0) || strings.TrimSpace(s.projectRoot) == "" {
 		return nil, nil
 	}
 	type scoredFile struct {
@@ -320,7 +321,7 @@ func (s *Service) discoverRelevantFiles(citationPrefix string, texts ...string) 
 		if shouldSkipFile(rel) {
 			return nil
 		}
-		score, reason := scoreFile(path, rel, tokens)
+		score, reason := scoreFile(path, rel, tokens, phrases)
 		if score > 0 {
 			matches = append(matches, scoredFile{path: rel, score: score, reason: reason})
 		}
@@ -437,6 +438,25 @@ func objectiveTokens(texts ...string) []string {
 	return out
 }
 
+func objectivePathPhrases(texts ...string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, text := range texts {
+		for _, raw := range strings.Fields(strings.ToLower(text)) {
+			phrase := strings.Trim(raw, "`'\".,:;()[]{}")
+			if len(phrase) < 2 || !strings.HasPrefix(phrase, "/") {
+				continue
+			}
+			if _, ok := seen[phrase]; ok {
+				continue
+			}
+			seen[phrase] = struct{}{}
+			out = append(out, phrase)
+		}
+	}
+	return out
+}
+
 func shouldSkipDir(rel string) bool {
 	parts := strings.Split(rel, "/")
 	for _, part := range parts {
@@ -457,11 +477,18 @@ func shouldSkipFile(rel string) bool {
 	return strings.HasPrefix(rel, ".git/")
 }
 
-func scoreFile(absPath, rel string, tokens []string) (int, string) {
+func scoreFile(absPath, rel string, tokens []string, phrases []string) (int, string) {
 	base := strings.ToLower(filepath.Base(rel))
 	relLower := strings.ToLower(rel)
 	score := 0
 	reasons := []string{}
+	for _, phrase := range phrases {
+		pathPhrase := strings.TrimPrefix(phrase, "/")
+		if pathPhrase != "" && strings.Contains(relLower, pathPhrase) {
+			score += 6
+			reasons = append(reasons, fmt.Sprintf("path matches %q", phrase))
+		}
+	}
 	for _, token := range tokens {
 		if strings.Contains(base, token) {
 			score += 8
@@ -473,12 +500,15 @@ func scoreFile(absPath, rel string, tokens []string) (int, string) {
 			reasons = append(reasons, fmt.Sprintf("path matches %q", token))
 		}
 	}
-	if score == 0 {
-		return 0, ""
-	}
 	if info, err := os.Stat(absPath); err == nil && info.Size() > 0 && info.Size() <= 256*1024 {
 		if content, err := os.ReadFile(absPath); err == nil {
 			text := strings.ToLower(string(content))
+			for _, phrase := range phrases {
+				if strings.Contains(text, phrase) {
+					score += 20
+					reasons = append(reasons, fmt.Sprintf("content mentions %q", phrase))
+				}
+			}
 			for _, token := range tokens {
 				if strings.Contains(text, token) {
 					score += 2
@@ -486,6 +516,9 @@ func scoreFile(absPath, rel string, tokens []string) (int, string) {
 				}
 			}
 		}
+	}
+	if score == 0 {
+		return 0, ""
 	}
 	return score, dedupeReasons(reasons)
 }

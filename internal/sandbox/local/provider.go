@@ -228,9 +228,20 @@ func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox
 		"path", worktreePath,
 	)
 
-	// git worktree add {path} -b {branch} [baseRef]
-	args := []string{"worktree", "add", worktreePath, "-b", branch}
-	if opts.BaseRef != "" {
+	branchAlreadyExists := branchExists(ctx, p.repoRoot, branch)
+	if opts.ReuseBranch && branchAlreadyExists {
+		if err := p.removeExistingWorktreeForBranch(ctx, branch); err != nil {
+			return nil, err
+		}
+	}
+
+	args := []string{"worktree", "add", worktreePath}
+	if branchAlreadyExists {
+		args = append(args, branch)
+	} else {
+		args = append(args, "-b", branch)
+	}
+	if opts.BaseRef != "" && !branchAlreadyExists {
 		args = append(args, opts.BaseRef)
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
@@ -286,6 +297,90 @@ func (p *Provider) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbox
 	p.mu.Unlock()
 
 	return sb, nil
+}
+
+func branchExists(ctx context.Context, repoRoot, branch string) bool {
+	cmd := exec.CommandContext(ctx, "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = repoRoot
+	return cmd.Run() == nil
+}
+
+func (p *Provider) removeExistingWorktreeForBranch(ctx context.Context, branch string) error {
+	path, ok, err := worktreePathForBranch(ctx, p.repoRoot, p.worktreeDir, branch)
+	if err != nil || !ok {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "git", "worktree", "remove", path, "--force")
+	cmd.Dir = p.repoRoot
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("removing existing worktree for branch %q: %w (stderr: %s)", branch, err, stderr.String())
+	}
+	p.forgetSandboxWorktree(branch, path)
+	return nil
+}
+
+func (p *Provider) forgetSandboxWorktree(branch, path string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for id, sb := range p.sandboxes {
+		if sb.branch == branch || samePath(sb.path, path) {
+			delete(p.sandboxes, id)
+		}
+	}
+}
+
+func worktreePathForBranch(ctx context.Context, repoRoot, worktreeDir, branch string) (string, bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
+	cmd.Dir = repoRoot
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false, fmt.Errorf("listing worktrees: %w", err)
+	}
+	canonicalWorktreeDir := worktreeDir
+	if resolved, err := filepath.EvalSymlinks(worktreeDir); err == nil {
+		canonicalWorktreeDir = resolved
+	}
+
+	var curPath, curBranch string
+	flush := func() (string, bool) {
+		if curPath == "" || curBranch != branch {
+			return "", false
+		}
+		rel, relErr := filepath.Rel(canonicalWorktreeDir, curPath)
+		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", false
+		}
+		return curPath, true
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			curPath = strings.TrimPrefix(line, "worktree ")
+		case strings.HasPrefix(line, "branch "):
+			curBranch = strings.TrimPrefix(line, "branch refs/heads/")
+		case line == "":
+			if path, ok := flush(); ok {
+				return path, true, nil
+			}
+			curPath, curBranch = "", ""
+		}
+	}
+	if path, ok := flush(); ok {
+		return path, true, nil
+	}
+	return "", false, nil
+}
+
+func samePath(a, b string) bool {
+	if ar, err := filepath.EvalSymlinks(a); err == nil {
+		a = ar
+	}
+	if br, err := filepath.EvalSymlinks(b); err == nil {
+		b = br
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 // Get retrieves a sandbox by ID from the internal map.

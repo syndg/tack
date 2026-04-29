@@ -126,6 +126,67 @@ func TestCreatePlan_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestCreatePlan_FallsBackToDefaultQualityGatesForNaturalLanguageGates(t *testing.T) {
+	svc, objStore, planStore, _, _, _ := setupService(t)
+	ctx := context.Background()
+
+	obj := &domain.Objective{Description: "update health endpoint"}
+	if err := objStore.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+
+	_, err := svc.CreatePlan(ctx, obj.ID, `streams:
+  - title: "health"
+    description: "Update health endpoint"
+    file_scope:
+      - "src/index.ts"
+    dependencies: []
+quality_gates:
+  - "Run the repository's discovered health test command"
+  - "Run the discovered targeted validation command"`)
+	if err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+	plan, err := planStore.GetByObjective(ctx, obj.ID)
+	if err != nil {
+		t.Fatalf("GetByObjective: %v", err)
+	}
+	if len(plan.QualityGates) != 2 || plan.QualityGates[0] != "go test ./..." || plan.QualityGates[1] != "go vet ./..." {
+		t.Fatalf("quality gates = %#v, want defaults", plan.QualityGates)
+	}
+}
+
+func TestCreatePlan_FallsBackToDefaultQualityGatesForWrongPackageManager(t *testing.T) {
+	svc, objStore, planStore, _, _, _ := setupService(t)
+	svc.defaultQualityGates = []string{"bun install --frozen-lockfile", "bunx tsc --noEmit", "bun test"}
+	ctx := context.Background()
+
+	obj := &domain.Objective{Description: "update health endpoint"}
+	if err := objStore.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+
+	_, err := svc.CreatePlan(ctx, obj.ID, `streams:
+  - title: "health"
+    description: "Update health endpoint"
+    file_scope:
+      - "src/index.ts"
+    dependencies: []
+quality_gates:
+  - "npm test"
+  - "npm test -- tests/health.test.ts"`)
+	if err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+	plan, err := planStore.GetByObjective(ctx, obj.ID)
+	if err != nil {
+		t.Fatalf("GetByObjective: %v", err)
+	}
+	if len(plan.QualityGates) != 3 || plan.QualityGates[0] != "bun install --frozen-lockfile" || plan.QualityGates[1] != "bunx tsc --noEmit" || plan.QualityGates[2] != "bun test" {
+		t.Fatalf("quality gates = %#v, want bun defaults", plan.QualityGates)
+	}
+}
+
 func TestCreatePlan_AttachesContractPatchesToStreamCards(t *testing.T) {
 	svc, objStore, _, streamStore, _, insightStore := setupService(t)
 	ctx := context.Background()

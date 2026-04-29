@@ -24,10 +24,12 @@ type mockOrchestrator struct {
 	approveID     string
 	approveErr    error
 
-	retryCalled   bool
-	retryID       string
-	retryGuidance string
-	retryErr      error
+	retryCalled       bool
+	retryID           string
+	retryGuidance     string
+	retryErr          error
+	retryStreamCalled bool
+	retryStreamID     string
 
 	stopCalled bool
 }
@@ -42,6 +44,12 @@ func (m *mockOrchestrator) Approve(ctx context.Context, executionID string) erro
 func (m *mockOrchestrator) Retry(ctx context.Context, id string, g string) error {
 	m.retryCalled = true
 	m.retryID = id
+	m.retryGuidance = g
+	return m.retryErr
+}
+func (m *mockOrchestrator) RetryStream(ctx context.Context, id string, g string) error {
+	m.retryStreamCalled = true
+	m.retryStreamID = id
 	m.retryGuidance = g
 	return m.retryErr
 }
@@ -248,6 +256,40 @@ func TestSnapshotByObjective(t *testing.T) {
 	}
 	if snap.RunID != run.ID {
 		t.Errorf("RunID = %q, want %q", snap.RunID, run.ID)
+	}
+}
+
+func TestSyncRunRecoveryStatusMarksRunBlocked(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+
+	runStore := db.NewRunStore(conn)
+	attemptStore := db.NewAttemptStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+	svc := newTestServiceWithAttempts(t, runStore, attemptStore, objectiveStore, planStore, streamStore, executionStore, agentStore, &mockOrchestrator{}, &mockMergeService{}, newTestEventBus(t, database), slog.Default())
+
+	obj := &domain.Objective{ID: "obj-recovery-block", Description: "blocked objective", Status: domain.ObjectiveStatusExecuting}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	run := &domain.Run{ObjectiveID: obj.ID, Status: domain.RunStatusActive}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("Create run: %v", err)
+	}
+
+	svc.syncRunRecoveryStatus(ctx, domain.Event{Type: domain.EventRecoveryBlocked, Objective: obj.ID})
+
+	updated, err := runStore.Get(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Get run: %v", err)
+	}
+	if updated.Status != domain.RunStatusBlocked {
+		t.Fatalf("run status = %s, want blocked", updated.Status)
 	}
 }
 
@@ -896,9 +938,10 @@ func TestCommandRetryDelegatesToCoordinator(t *testing.T) {
 
 	// Retry through Command.
 	snap, err := svc.Command(ctx, run.ID, domain.Command{
-		Kind:     domain.CommandRetry,
-		StreamID: stream.ID,
-		Guidance: "try a different approach",
+		Kind:           domain.CommandRetry,
+		StreamID:       stream.ID,
+		Guidance:       "try a different approach",
+		ScopeAdditions: []string{"src/runtime.go", "src/config.go"},
 	})
 	if err != nil {
 		t.Fatalf("Command(retry): %v", err)
@@ -925,6 +968,84 @@ func TestCommandRetryDelegatesToCoordinator(t *testing.T) {
 	}
 	if len(insights) != 1 || insights[0].Kind != domain.InsightKindRetryGuidance {
 		t.Fatalf("insights = %#v", insights)
+	}
+	updatedStream, err := streamStore.Get(ctx, stream.ID)
+	if err != nil {
+		t.Fatalf("Get stream: %v", err)
+	}
+	for _, want := range []string{"src/runtime.go", "src/config.go"} {
+		found := false
+		for _, got := range updatedStream.FileScope {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("file scope = %#v, missing %s", updatedStream.FileScope, want)
+		}
+	}
+}
+
+func TestCommandRetryWithoutExecutionDelegatesToStreamRetry(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	orch := &mockOrchestrator{}
+	svc, err := New(Config{
+		Orchestrator:   orch,
+		MergeProcessor: &mockMergeService{},
+		Runs:           runStore,
+		Insights:       db.NewObjectiveInsightStore(conn),
+		Objectives:     objectiveStore,
+		Plans:          planStore,
+		Streams:        streamStore,
+		Executions:     db.NewExecutionStore(conn),
+		Agents:         db.NewAgentStore(conn),
+		EventBus:       newTestEventBus(t, database),
+		Logger:         slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	obj := &domain.Objective{Description: "retry dependency-blocked stream", Status: domain.ObjectiveStatusPartial}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+	plan := &domain.Plan{ObjectiveID: obj.ID}
+	if err := planStore.Create(ctx, plan); err != nil {
+		t.Fatalf("creating plan: %v", err)
+	}
+	stream := &domain.Stream{PlanID: plan.ID, Title: "dependency-blocked", Description: "never executed"}
+	if err := streamStore.Create(ctx, stream); err != nil {
+		t.Fatalf("creating stream: %v", err)
+	}
+	if err := streamStore.UpdateStatus(ctx, stream.ID, domain.StreamStatusFailed); err != nil {
+		t.Fatalf("marking stream failed: %v", err)
+	}
+	run := &domain.Run{ObjectiveID: obj.ID, Status: domain.RunStatusPartial}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+
+	_, err = svc.Command(ctx, run.ID, domain.Command{Kind: domain.CommandRetry, StreamID: stream.ID, Guidance: "dependency is merged now"})
+	if err != nil {
+		t.Fatalf("Command(retry): %v", err)
+	}
+	if !orch.retryStreamCalled {
+		t.Fatal("coordinator.RetryStream was not called")
+	}
+	if orch.retryStreamID != stream.ID {
+		t.Fatalf("RetryStream id = %q, want %q", orch.retryStreamID, stream.ID)
+	}
+	if orch.retryCalled {
+		t.Fatal("coordinator.Retry should not be called for stream without execution")
 	}
 }
 

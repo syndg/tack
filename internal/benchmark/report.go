@@ -261,7 +261,15 @@ func populateReport(ctx context.Context, stores *reportStores, report *Report) e
 		report.Validation = validation
 	}
 	sort.Slice(report.Streams, func(i, j int) bool {
-		return report.Streams[i].StartedAt.Before(report.Streams[j].StartedAt)
+		left := report.Streams[i]
+		right := report.Streams[j]
+		if left.StartedAt.IsZero() != right.StartedAt.IsZero() {
+			return !left.StartedAt.IsZero()
+		}
+		if !left.StartedAt.Equal(right.StartedAt) {
+			return left.StartedAt.Before(right.StartedAt)
+		}
+		return left.ID < right.ID
 	})
 	return nil
 }

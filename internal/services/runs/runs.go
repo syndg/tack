@@ -508,12 +508,22 @@ func (s *Service) commandRetry(ctx context.Context, run *domain.Run, cmd domain.
 			cmd.StreamID, stream.Status, ErrInvalidState,
 		)
 	}
-	if stream.ExecutionID == "" {
-		return domain.Snapshot{}, fmt.Errorf("stream %s has no execution to retry: %w", cmd.StreamID, ErrInvalidState)
+	if len(cmd.ScopeAdditions) > 0 {
+		mergedScope := mergeFileScope(stream.FileScope, cmd.ScopeAdditions)
+		if err := s.streams.UpdateFileScope(ctx, stream.ID, mergedScope); err != nil {
+			return domain.Snapshot{}, fmt.Errorf("updating stream retry scope: %w", err)
+		}
+		stream.FileScope = mergedScope
 	}
 
-	if err := s.coordinator.Retry(ctx, stream.ExecutionID, cmd.Guidance); err != nil {
-		return domain.Snapshot{}, fmt.Errorf("retrying stream execution: %w", err)
+	var retryErr error
+	if stream.ExecutionID == "" {
+		retryErr = s.coordinator.RetryStream(ctx, stream.ID, cmd.Guidance)
+	} else {
+		retryErr = s.coordinator.Retry(ctx, stream.ExecutionID, cmd.Guidance)
+	}
+	if retryErr != nil {
+		return domain.Snapshot{}, fmt.Errorf("retrying stream execution: %w", retryErr)
 	}
 	if strings.TrimSpace(cmd.Guidance) != "" && s.insights != nil {
 		if err := s.insights.Create(ctx, &domain.ObjectiveInsight{ProjectID: run.ProjectID, ObjectiveID: run.ObjectiveID, StreamID: cmd.StreamID, ExecutionID: stream.ExecutionID, Source: domain.InsightSourceHuman, Kind: domain.InsightKindRetryGuidance, Summary: cmd.Guidance, Detail: cmd.Guidance, Payload: map[string]string{"command": string(cmd.Kind)}}); err != nil {
@@ -533,6 +543,29 @@ func (s *Service) commandRetry(ctx context.Context, run *domain.Run, cmd domain.
 	s.logger.Info("run stream retry initiated",
 		"run_id", run.ID, "stream_id", cmd.StreamID, "has_guidance", cmd.Guidance != "")
 	return s.Snapshot(ctx, run.ID)
+}
+
+func mergeFileScope(existing, additions []string) []string {
+	merged := append([]string(nil), existing...)
+	seen := make(map[string]struct{}, len(merged)+len(additions))
+	for _, item := range merged {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			seen[item] = struct{}{}
+		}
+	}
+	for _, item := range additions {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		merged = append(merged, item)
+	}
+	return merged
 }
 
 // commandAbort handles the abort intervention.
@@ -682,6 +715,10 @@ func (s *Service) Run(ctx context.Context) error {
 				}
 				if event.Type == domain.EventObjectiveUpdated && event.Objective != "" {
 					s.syncRunStatus(ctx, event)
+					continue
+				}
+				if (event.Type == domain.EventRecoveryBlocked || event.Type == domain.EventRecoveryResumed) && event.Objective != "" {
+					s.syncRunRecoveryStatus(ctx, event)
 				}
 			}
 		}
@@ -856,6 +893,26 @@ func (s *Service) syncRunStatus(ctx context.Context, event domain.Event) {
 		"objective_id", event.Objective,
 		"status", runStatus,
 	)
+}
+
+func (s *Service) syncRunRecoveryStatus(ctx context.Context, event domain.Event) {
+	run, err := s.runs.GetByObjective(ctx, event.Objective)
+	if err != nil {
+		return
+	}
+
+	target := domain.RunStatusActive
+	if event.Type == domain.EventRecoveryBlocked {
+		target = domain.RunStatusBlocked
+	}
+	if run.Status == target || run.Status == domain.RunStatusCompleted || run.Status == domain.RunStatusFailed || run.Status == domain.RunStatusPartial {
+		return
+	}
+	if err := s.runs.UpdateStatus(ctx, run.ID, target); err != nil {
+		s.logger.Warn("failed to sync run status from recovery event", "run_id", run.ID, "objective_id", event.Objective, "target_status", target, "error", err)
+		return
+	}
+	s.logger.Info("run status synced from recovery event", "run_id", run.ID, "objective_id", event.Objective, "status", target)
 }
 
 // resolveBlocked checks execution state to determine why a run is blocked.

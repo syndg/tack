@@ -31,6 +31,7 @@ type Orchestrator interface {
 	Execute(ctx context.Context, objectiveID string) error
 	Approve(ctx context.Context, executionID string) error
 	Retry(ctx context.Context, executionID string, guidance string) error
+	RetryStream(ctx context.Context, streamID string, guidance string) error
 	Kill(ctx context.Context, sessionID string) error
 }
 

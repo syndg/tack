@@ -69,11 +69,12 @@ func (d *Daemon) handleRunCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Kind      domain.CommandKind `json:"kind"`
-		StreamID  string             `json:"stream_id"`
-		SessionID string             `json:"session_id"`
-		Guidance  string             `json:"guidance"`
-		Reason    string             `json:"reason"`
+		Kind           domain.CommandKind `json:"kind"`
+		StreamID       string             `json:"stream_id"`
+		SessionID      string             `json:"session_id"`
+		Guidance       string             `json:"guidance"`
+		Reason         string             `json:"reason"`
+		ScopeAdditions []string           `json:"scope_additions"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -81,11 +82,12 @@ func (d *Daemon) handleRunCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cmd := domain.Command{
-		Kind:      req.Kind,
-		StreamID:  req.StreamID,
-		SessionID: req.SessionID,
-		Guidance:  req.Guidance,
-		Reason:    req.Reason,
+		Kind:           req.Kind,
+		StreamID:       req.StreamID,
+		SessionID:      req.SessionID,
+		Guidance:       req.Guidance,
+		Reason:         req.Reason,
+		ScopeAdditions: req.ScopeAdditions,
 	}
 
 	snap, err := projectCtx.RunsService.Command(r.Context(), runID, cmd)

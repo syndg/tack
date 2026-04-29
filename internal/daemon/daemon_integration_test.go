@@ -376,6 +376,9 @@ func TestRetryMergePublishesQueuedEvent(t *testing.T) {
 	if err := d.mergeQueueStore.UpdateStatus(ctx, entry.ID, domain.MergeStatusFailed, 2, "merge failed", ""); err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
+	if err := d.streams.UpdateStatus(ctx, stream.ID, domain.StreamStatusFailed); err != nil {
+		t.Fatalf("Update stream failed: %v", err)
+	}
 
 	sub, unsub := d.eventBus.Subscribe(10)
 	defer unsub()
@@ -394,6 +397,13 @@ func TestRetryMergePublishesQueuedEvent(t *testing.T) {
 	}
 	if got.Status != domain.MergeStatusPending || got.Tier != 0 {
 		t.Fatalf("merge entry after retry = status=%q tier=%d, want pending/0", got.Status, got.Tier)
+	}
+	streamAfterRetry, err := d.streams.Get(ctx, stream.ID)
+	if err != nil {
+		t.Fatalf("Get stream: %v", err)
+	}
+	if streamAfterRetry.Status != domain.StreamStatusMergeReady {
+		t.Fatalf("stream after retry = %q, want merge_ready", streamAfterRetry.Status)
 	}
 
 	select {
@@ -500,7 +510,7 @@ steps:
 	if err := os.WriteFile(filepath.Join(project, ".tack", "blueprints", "build-review.yaml"), []byte(projectBlueprint), 0o644); err != nil {
 		t.Fatalf("WriteFile project blueprint: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(project, ".tack", "config.yaml"), []byte("{}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(project, ".tack", "config.yaml"), []byte(testClaudeCodeConfigYAML()), 0o644); err != nil {
 		t.Fatalf("WriteFile project config: %v", err)
 	}
 
@@ -920,6 +930,8 @@ func startExecutionDaemonWithInstance(t *testing.T, listen string, qualityGates 
 	cfg.Daemon.Listen = listen
 	cfg.Daemon.DataDir = t.TempDir()
 	cfg.Sandbox.Provider = "local"
+	cfg.Agents.Runtime = "claude-code"
+	cfg.RuntimeAuth = config.RuntimeAuthConfig{Mode: "tack", Runtime: "claude-code", Provider: "anthropic", Method: "api_key", CredentialRef: "anthropic"}
 	cfg.QualityGates = append([]string(nil), qualityGates...)
 
 	d, err := New(cfg)
@@ -959,7 +971,7 @@ func registerDaemonTestProject(t *testing.T, d *Daemon, root string) {
 	}
 	configPath := filepath.Join(root, ".tack", "config.yaml")
 	if _, err := os.Stat(configPath); err != nil {
-		if err := os.WriteFile(configPath, []byte("sandbox:\n  provider: local\n"), 0o644); err != nil {
+		if err := os.WriteFile(configPath, []byte(testClaudeCodeConfigYAML()), 0o644); err != nil {
 			t.Fatalf("WriteFile config: %v", err)
 		}
 	}
@@ -968,6 +980,10 @@ func registerDaemonTestProject(t *testing.T, d *Daemon, root string) {
 		t.Fatalf("register daemon test project: %v", err)
 	}
 	d.projectCtxs.Invalidate(project.ID)
+}
+
+func testClaudeCodeConfigYAML() string {
+	return "sandbox:\n  provider: local\nagents:\n  runtime: claude-code\nruntime_auth:\n  mode: tack\n  runtime: claude-code\n  provider: anthropic\n  method: api_key\n  credential_ref: anthropic\n"
 }
 
 func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool) {

@@ -42,6 +42,17 @@ func runGitInDir(t *testing.T, dir string, args ...string) {
 	}
 }
 
+func currentBranch(t *testing.T, dir string) string {
+	t.Helper()
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func newTestProvider(t *testing.T, repoDir string) *Provider {
 	t.Helper()
 	worktreeDir := filepath.Join(repoDir, "worktrees")
@@ -122,6 +133,74 @@ func TestCreate_UsesBaseRefWhenProvided(t *testing.T) {
 	}
 	if res.ExitCode != 0 || strings.TrimSpace(res.Stdout) != "merged" {
 		t.Fatalf("sandbox did not start from base ref: exit=%d stdout=%q stderr=%q", res.ExitCode, res.Stdout, res.Stderr)
+	}
+}
+
+func TestCreate_ReusesExistingBranchWhenRequested(t *testing.T) {
+	repoDir := initTestRepo(t)
+	p := newTestProvider(t, repoDir)
+	ctx := context.Background()
+	branch := "tack/objective/merge"
+	mainBranch := currentBranch(t, repoDir)
+
+	runGitInDir(t, repoDir, "checkout", "-b", branch)
+	if err := os.WriteFile(filepath.Join(repoDir, "merge.txt"), []byte("existing\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile merge.txt: %v", err)
+	}
+	runGitInDir(t, repoDir, "add", "merge.txt")
+	runGitInDir(t, repoDir, "commit", "-m", "existing merge branch")
+	runGitInDir(t, repoDir, "checkout", mainBranch)
+
+	sb, err := p.Create(ctx, sandbox.CreateOpts{
+		Branch:      branch,
+		ReuseBranch: true,
+		Labels:      map[string]string{"tack.objective": "obj-reuse", "tack.role": "merger"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	res, err := sb.Exec(ctx, "cat merge.txt", sandbox.ExecOpts{})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if res.ExitCode != 0 || strings.TrimSpace(res.Stdout) != "existing" {
+		t.Fatalf("reused branch content: exit=%d stdout=%q stderr=%q", res.ExitCode, res.Stdout, res.Stderr)
+	}
+}
+
+func TestCreate_ReusesBranchCheckedOutInExistingTackWorktree(t *testing.T) {
+	repoDir := initTestRepo(t)
+	p := newTestProvider(t, repoDir)
+	ctx := context.Background()
+	branch := "tack/objective/merge"
+
+	first, err := p.Create(ctx, sandbox.CreateOpts{
+		Branch:      branch,
+		ReuseBranch: true,
+		Labels:      map[string]string{"tack.objective": "obj-reuse", "tack.role": "merger"},
+	})
+	if err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	firstPath := first.(*LocalSandbox).path
+
+	second, err := p.Create(ctx, sandbox.CreateOpts{
+		Branch:      branch,
+		ReuseBranch: true,
+		Labels:      map[string]string{"tack.objective": "obj-reuse", "tack.role": "merger"},
+	})
+	if err != nil {
+		t.Fatalf("second Create: %v", err)
+	}
+	secondPath := second.(*LocalSandbox).path
+	if firstPath == secondPath {
+		t.Fatal("expected replacement worktree path")
+	}
+	if _, ok, err := worktreePathForBranch(ctx, repoDir, p.worktreeDir, branch); err != nil || !ok {
+		t.Fatalf("expected branch to be checked out in replacement worktree, ok=%v err=%v", ok, err)
+	}
+	if _, err := os.Stat(firstPath); !os.IsNotExist(err) {
+		t.Fatalf("expected original worktree to be removed, err=%v", err)
 	}
 }
 

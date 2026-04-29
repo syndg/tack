@@ -71,8 +71,8 @@ func TestAcquire_FirstCallCreatesDedicatedMergerSandbox(t *testing.T) {
 	if !gotOpts.Ephemeral {
 		t.Fatal("expected merger sandbox to be ephemeral")
 	}
-	if !gotOpts.SkipIgnoredCopy {
-		t.Fatal("expected merger sandbox to skip ignored-file copy")
+	if gotOpts.SkipIgnoredCopy {
+		t.Fatal("expected merger sandbox to copy ignored files for dependency parity with stream sandboxes")
 	}
 
 	if id := pool.SandboxID("obj-1234567890"); id != "sb-1" {

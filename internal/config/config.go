@@ -172,7 +172,11 @@ func (c *Config) EffectiveRuntimeAuth() RuntimeAuthConfig {
 		}
 	}
 	if binding.Mode == "" {
-		binding.Mode = "tack"
+		if c.Sandbox.Provider == "local" {
+			binding.Mode = "native"
+		} else {
+			binding.Mode = "tack"
+		}
 	}
 	if binding.Method == "" && binding.Mode == "tack" {
 		binding.Method = "api_key"

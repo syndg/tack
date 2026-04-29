@@ -101,7 +101,7 @@ func (s *Service) CreatePlan(ctx context.Context, objectiveID string, agentOutpu
 	} else {
 		applyContractPatchesToStreams(plan.ProjectID, objectiveID, streams, insights)
 	}
-	plan.QualityGates = sanitizeQualityGates(plan.QualityGates)
+	plan.QualityGates = sanitizeQualityGates(plan.QualityGates, s.defaultQualityGates)
 
 	if err := s.plans.Create(ctx, plan); err != nil {
 		return nil, fmt.Errorf("storing plan: %w", err)
@@ -251,11 +251,22 @@ func (s *Service) UpdateStream(ctx context.Context, stream *domain.Stream) error
 	return nil
 }
 
-func sanitizeQualityGates(gates []string) []string {
+func sanitizeQualityGates(gates []string, fallback []string) []string {
+	fallbackExecutables := qualityGateExecutables(fallback)
 	out := make([]string, 0, len(gates))
 	for _, gate := range gates {
 		gate = strings.TrimSpace(gate)
 		if gate == "" {
+			continue
+		}
+		if len(fallbackExecutables) > 0 {
+			if executable := qualityGateExecutable(gate); executable != "" {
+				if _, ok := fallbackExecutables[executable]; !ok {
+					continue
+				}
+			}
+		}
+		if isNaturalLanguageGate(gate) {
 			continue
 		}
 		if strings.HasPrefix(gate, "cd ") {
@@ -268,10 +279,58 @@ func sanitizeQualityGates(gates []string) []string {
 		}
 		out = append(out, gate)
 	}
+	if len(out) == 0 && len(fallback) > 0 {
+		return append([]string(nil), fallback...)
+	}
 	if out == nil {
 		return []string{}
 	}
 	return out
+}
+
+func qualityGateExecutables(gates []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, gate := range gates {
+		if executable := qualityGateExecutable(gate); executable != "" {
+			out[executable] = struct{}{}
+		}
+	}
+	return out
+}
+
+func qualityGateExecutable(gate string) string {
+	gate = strings.TrimSpace(gate)
+	for strings.HasPrefix(gate, "cd ") {
+		idx := strings.Index(gate, "&&")
+		if idx < 0 {
+			return ""
+		}
+		gate = strings.TrimSpace(gate[idx+2:])
+	}
+	fields := strings.Fields(gate)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+func isNaturalLanguageGate(gate string) bool {
+	gate = strings.TrimSpace(strings.ToLower(gate))
+	for _, prefix := range []string{
+		"run the ",
+		"run a ",
+		"run an ",
+		"execute the ",
+		"use the ",
+		"verify ",
+		"ensure ",
+		"check ",
+	} {
+		if strings.HasPrefix(gate, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) listObjectiveInsights(ctx context.Context, objectiveID string) ([]domain.ObjectiveInsight, error) {

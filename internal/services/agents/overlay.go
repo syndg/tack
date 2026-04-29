@@ -58,6 +58,7 @@ func BuildOverlay(input OverlayInput) string {
 	hasCard := false
 	if input.Stream != nil {
 		fmt.Fprintf(&b, "Stream: %s\n", input.Stream.Title)
+		b.WriteString("Stream responsibility: satisfy this stream card only. Other streams may satisfy other parts of the objective. Do not block merely because a sibling stream must modify files outside your scope.\n")
 		card = input.Stream.EffectiveCard()
 		hasCard = true
 		if strings.TrimSpace(card.Goal) != "" {
@@ -163,6 +164,7 @@ func BuildOverlay(input OverlayInput) string {
 		b.WriteString("End your final response with `REVIEW_DECISION: approve` or `REVIEW_DECISION: reject`.\n")
 		b.WriteString("If you reject, add `REVIEW_FEEDBACK:` followed by the actionable issues the builder must fix.\n")
 		b.WriteString("If the contract itself is missing a necessary dossier-backed requirement that was not part of the builder's contract, do not reject. End with:\n")
+		b.WriteString("If the fix requires changing files outside this stream's File Scope, treat that as a contract gap, not a builder failure. Do not spend retry budget asking the builder to make out-of-scope edits.\n")
 		b.WriteString("`CONTRACT_OUTCOME: contract_gap`\n")
 		b.WriteString("`CONTRACT_REASON: short explanation of the missing requirement`\n")
 		b.WriteString("`CONTRACT_STREAM_CARD:` followed by a fenced YAML replacement for this stream card only with `goal`, `acceptance_criteria`, `implementation_scope`, `proof_scope`, `hard_anchors`, and optional `seam_override_rationale`.\n")
@@ -298,6 +300,7 @@ func BuildOverlay(input OverlayInput) string {
 	b.WriteString("## Constraints\n")
 	if hasCard {
 		b.WriteString("- Execute the stream card narrowly; do not reinterpret architecture beyond the contract\n")
+		b.WriteString("- Treat the Objective as context; your deliverable is the Stream, Goal, Acceptance Criteria, Implementation Scope, and Proof Scope\n")
 	}
 	b.WriteString("- Do NOT modify files outside your scope\n")
 	b.WriteString("- Do NOT push to git (Tack handles merging)\n")
@@ -429,10 +432,12 @@ func BuildPlannerOverlay(objective *domain.Objective, dossier *domain.Dossier, g
 	b.WriteString("3. Implementation scope - what code surface the stream may change\n")
 	b.WriteString("4. Proof scope - what evidence the stream must provide\n")
 	b.WriteString("5. Hard anchors - repo-specific constraints, each with dossier citation_ids\n")
-	b.WriteString("6. File scopes - which files each stream owns (use globs)\n")
+	b.WriteString("6. File scopes - concrete files or globs each stream owns; include every cited file the stream must edit\n")
 	b.WriteString("7. Dependencies - which streams must complete before others start\n")
 	b.WriteString("8. Quality gates - commands to validate each stream\n\n")
 	b.WriteString("Use the dossier's suggested seams when they fit. If you override them, explain why in the affected stream descriptions.\n\n")
+	b.WriteString("File scopes are enforced. Do not invent name-derived globs like `**/*health*` unless the dossier proves all required edits live in matching files. Prefer exact cited paths such as `src/index.ts` and `tests/health.test.ts` when the dossier identifies them.\n\n")
+	b.WriteString("Keep tightly coupled source-and-test edits in one stream when the test cannot pass until the source edit exists. If you split them, add a dependency from the test/proof stream to the implementation stream and make each stream's acceptance criteria narrow to its own scope.\n\n")
 	b.WriteString("If the dossier is insufficient for a trustworthy plan, do not guess and do not inspect the repository. Output this instead:\n")
 	b.WriteString("```text\n")
 	b.WriteString("PLANNER_OUTCOME: needs_dossier_expansion\n")

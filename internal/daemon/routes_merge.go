@@ -85,6 +85,20 @@ func (d *Daemon) handleRetryMerge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	stream, err := d.streams.Get(r.Context(), entry.StreamID)
+	if err != nil {
+		d.logger.Error("getting stream for merge retry", "stream_id", entry.StreamID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to retry merge entry")
+		return
+	}
+	if stream.Status == domain.StreamStatusFailed {
+		if err := d.streams.UpdateStatus(r.Context(), entry.StreamID, domain.StreamStatusMergeReady); err != nil {
+			d.logger.Error("resetting stream for merge retry", "stream_id", entry.StreamID, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to retry merge entry")
+			return
+		}
+	}
+
 	if err := d.mergeQueue.UpdateStatus(r.Context(), id, domain.MergeStatusPending, 0, "", ""); err != nil {
 		d.logger.Error("retrying merge entry", "id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to retry merge entry")

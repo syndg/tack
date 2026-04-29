@@ -252,6 +252,25 @@ func (s *StreamStore) UpdateStatus(ctx context.Context, id string, status domain
 	return &InvalidTransitionError{StreamID: id, From: currentStatus, To: status}
 }
 
+func (s *StreamStore) UpdateFileScope(ctx context.Context, id string, fileScope []string) error {
+	encoded, err := json.Marshal(fileScope)
+	if err != nil {
+		return fmt.Errorf("marshalling file_scope: %w", err)
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE streams SET file_scope = ? WHERE id = ?`, string(encoded), id)
+	if err != nil {
+		return fmt.Errorf("updating stream file_scope: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("stream not found: %s", id)
+	}
+	return nil
+}
+
 func scanStreams(rows *sql.Rows) ([]domain.Stream, error) {
 	var streams []domain.Stream
 	for rows.Next() {

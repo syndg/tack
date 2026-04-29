@@ -942,6 +942,7 @@ func (p *Processor) publishMergeFailed(entry *domain.MergeEntry, errMsg string) 
 }
 
 func (p *Processor) publishNewlyReadyStreams(ctx context.Context, planID string) {
+	p.reviveDependencyBlockedStreams(ctx, planID)
 	ready, err := p.streams.ListReady(ctx, planID)
 	if err != nil {
 		p.logger.Warn("listing ready streams after merge", "plan_id", planID, "error", err)
@@ -968,6 +969,50 @@ func (p *Processor) publishNewlyReadyStreams(ctx context.Context, planID string)
 		}
 		p.logger.Info("stream ready after dependency merge", "stream_id", st.ID, "plan_id", planID)
 	}
+}
+
+func (p *Processor) reviveDependencyBlockedStreams(ctx context.Context, planID string) {
+	streams, err := p.streams.ListByPlan(ctx, planID)
+	if err != nil {
+		p.logger.Warn("listing streams for dependency-blocked revival", "plan_id", planID, "error", err)
+		return
+	}
+	statusByID := make(map[string]domain.StreamStatus, len(streams))
+	titleToID := make(map[string]string, len(streams))
+	for _, st := range streams {
+		statusByID[st.ID] = st.Status
+		titleToID[st.Title] = st.ID
+	}
+	for _, st := range streams {
+		if st.Status != domain.StreamStatusFailed || st.ExecutionID != "" {
+			continue
+		}
+		if !dependenciesMerged(st, statusByID, titleToID) {
+			continue
+		}
+		if err := p.streams.UpdateStatus(ctx, st.ID, domain.StreamStatusPending); err != nil {
+			p.logger.Warn("reviving dependency-blocked stream", "plan_id", planID, "stream_id", st.ID, "error", err)
+			continue
+		}
+		p.logger.Info("revived dependency-blocked stream", "plan_id", planID, "stream_id", st.ID)
+	}
+}
+
+func dependenciesMerged(stream domain.Stream, statusByID map[string]domain.StreamStatus, titleToID map[string]string) bool {
+	deps := append(append([]string{}, stream.Dependencies...), stream.EffectiveCard().BlockedBy...)
+	if len(deps) == 0 {
+		return false
+	}
+	for _, dep := range deps {
+		depID := dep
+		if id := titleToID[dep]; id != "" {
+			depID = id
+		}
+		if statusByID[depID] != domain.StreamStatusMerged {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *Processor) pushMergeBranch(ctx context.Context, sb sandbox.Sandbox, objectiveID string) {

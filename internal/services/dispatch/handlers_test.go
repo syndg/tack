@@ -427,11 +427,11 @@ func TestCreatePR_UsesRuntimeGeneratedMessages(t *testing.T) {
 				return sandbox.ExecResult{ExitCode: 0, Stdout: "git@github.com:syndg/repo.git\n"}, nil
 			case "git rev-parse --abbrev-ref HEAD":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: "tack/obj-runtime-pr/merge\n"}, nil
-			case "git diff --name-only origin/main...HEAD":
+			case "git diff --name-only 'origin/main...HEAD'":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: "README.md\ndocs/guide.md\n"}, nil
-			case "git diff --stat origin/main...HEAD":
+			case "git diff --stat 'origin/main...HEAD'":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: " README.md | 10 +++++\n"}, nil
-			case "git diff --unified=1 origin/main...HEAD":
+			case "git diff --unified=1 'origin/main...HEAD'":
 				return sandbox.ExecResult{ExitCode: 0, Stdout: "diff --git a/README.md b/README.md\n+hello\n"}, nil
 			default:
 				return sandbox.ExecResult{ExitCode: 0}, nil

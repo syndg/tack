@@ -108,13 +108,12 @@ func formatWatchEvent(event domain.Event) string {
 
 	switch event.Type {
 	case domain.EventAgentActivity:
-		if watchSummary {
-			return "" // skip activity in summary mode
-		}
-
 		switch stringPayload(payload, "kind") {
 		case "agent.tool_start":
 			summary := stringPayload(payload, "summary")
+			if watchSummary {
+				return fmt.Sprintf("%s [%s] %s: %s", ts, stream, role, summary)
+			}
 			if watchVerbose {
 				content := stringPayload(payload, "content")
 				if len(content) > 200 {
@@ -124,6 +123,9 @@ func formatWatchEvent(event domain.Event) string {
 			}
 			return fmt.Sprintf("%s [%s] %s: %s", ts, stream, role, summary)
 		case "agent.tool_end":
+			if watchSummary {
+				return ""
+			}
 			summary := stringPayload(payload, "summary")
 			if boolPayload(payload, "is_error") {
 				return fmt.Sprintf("%s [%s] %s: %s", ts, stream, role, summary)
@@ -133,6 +135,9 @@ func formatWatchEvent(event domain.Event) string {
 			}
 			return fmt.Sprintf("%s [%s] %s: %s", ts, stream, role, summary)
 		case "agent.message":
+			if watchSummary {
+				return ""
+			}
 			if !watchVerbose {
 				return ""
 			}

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 	"github.com/syndg/tack/internal/client"
 )
@@ -24,8 +22,8 @@ var planCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Created objective %s: %s\n", obj.ID, obj.Description)
-		fmt.Println("Execution started.")
+		cmd.Printf("Created objective %s: %s\n", obj.ID, obj.Description)
+		cmd.Println("Planning started. Run `tack show` to inspect the latest plan, then `tack approve` to continue.")
 		return nil
 	},
 }

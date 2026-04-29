@@ -177,6 +177,51 @@ func TestHandleBlueprintRefStep_FailedStreamEscalates(t *testing.T) {
 	}
 }
 
+func TestHandleBlueprintRefStep_FailedDependencyTerminatesPendingDependents(t *testing.T) {
+	env := setupDispatchEnv(t)
+	ctx := context.Background()
+	env.coord.ctx = ctx
+
+	env.engine.RegisterHandler(blueprint.StepTypeAgent, func(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error) {
+		return blueprint.StepResult{Status: blueprint.StepStatusFailed, Error: "upstream failed"}, nil
+	})
+
+	env.createObjective(t, "obj-dep-fail", domain.ObjectiveStatusApproved)
+	plan := &domain.Plan{ID: "plan-dep-fail", ObjectiveID: "obj-dep-fail", Status: domain.PlanStatusExecuting, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := env.plans.Create(ctx, plan); err != nil {
+		t.Fatalf("creating plan: %v", err)
+	}
+	streamA := &domain.Stream{ID: "stream-a", PlanID: plan.ID, Title: "stream A", Status: domain.StreamStatusPending, CreatedAt: time.Now()}
+	streamB := &domain.Stream{ID: "stream-b", PlanID: plan.ID, Title: "stream B", Status: domain.StreamStatusPending, Dependencies: []string{streamA.ID}, CreatedAt: time.Now()}
+	for _, stream := range []*domain.Stream{streamA, streamB} {
+		if err := env.streams.Create(ctx, stream); err != nil {
+			t.Fatalf("creating stream %s: %v", stream.ID, err)
+		}
+	}
+
+	exec := &blueprint.Execution{ID: "exec-dep-fail", ObjectiveID: "obj-dep-fail", Status: "running", StepStates: map[string]*blueprint.StepState{}, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	step := &blueprint.Step{ID: "execute", Type: blueprint.StepTypeBlueprintRef, Ref: "build-review", Foreach: "work_item", OnWorkItemFailure: "escalate"}
+	result, err := env.coord.HandleBlueprintRefStep(ctx, exec, step)
+	if err != nil {
+		t.Fatalf("HandleBlueprintRefStep: %v", err)
+	}
+	if result.Metadata["partial"] != "true" {
+		t.Fatalf("result = %+v, want partial metadata", result)
+	}
+
+	streams, err := env.streams.ListByPlan(ctx, plan.ID)
+	if err != nil {
+		t.Fatalf("ListByPlan: %v", err)
+	}
+	statuses := map[string]domain.StreamStatus{}
+	for _, stream := range streams {
+		statuses[stream.ID] = stream.Status
+	}
+	if statuses[streamA.ID] != domain.StreamStatusFailed || statuses[streamB.ID] != domain.StreamStatusFailed {
+		t.Fatalf("stream statuses = %v, want both failed", statuses)
+	}
+}
+
 type sequenceRuntime struct {
 	results  []runtime.AgentResult
 	spawned  int
@@ -417,6 +462,59 @@ PLANNER_QUESTIONS:
 	}
 	if !strings.Contains(rt.lastOpts[1].Overlay, "src/auth/handlers/login.go") {
 		t.Fatalf("second overlay missing expanded file hint\n%s", rt.lastOpts[1].Overlay)
+	}
+}
+
+func TestHandleAgentStep_PlannerFinalExpansionGuidanceForcesPlan(t *testing.T) {
+	env := setupDispatchEnv(t)
+	ctx := context.Background()
+	env.createObjective(t, "obj-planner-final-expansion", domain.ObjectiveStatusExecuting)
+
+	expansionSummary := `PLANNER_OUTCOME: needs_dossier_expansion
+PLANNER_REASON: Need more route evidence
+PLANNER_FOCUS_AREAS:
+- routes
+PLANNER_FILE_HINTS:
+- src/routes/**
+PLANNER_QUESTIONS:
+- Which routes need health coverage?`
+	rt := &sequenceRuntime{results: []runtime.AgentResult{
+		{Success: true, Summary: expansionSummary},
+		{Success: true, Summary: expansionSummary},
+		{Success: true, Summary: plannerValidPlanYAML},
+	}}
+	sp := newMockSandboxProvider()
+	recorder, err := observability.New(t.TempDir(), env.eventBus, slog.Default())
+	if err != nil {
+		t.Fatalf("New recorder: %v", err)
+	}
+	spawner := NewSpawner(env.agents, rt, sp, rules.NewEngine(slog.Default()), tools.NewCurator(slog.Default()), env.eventBus, recorder, nil, config.RuntimeAuthConfig{}, slog.Default(), "http://localhost:8080", "Tack", "tack@local")
+	env.coord.spawner = spawner
+	env.coord.tracker = newAgentTracker(spawner, recorder, env.eventBus, config.TimeoutConfig{}, slog.Default())
+	env.coord.planCreator = &sequencePlanCreator{}
+	env.coord.discovery = &stubDossierProvider{
+		dossier:  &domain.Dossier{Summary: "Initial dossier summary", Unknowns: []string{"Need route evidence"}},
+		expanded: &domain.Dossier{Summary: "Expanded dossier summary", RelevantFiles: []domain.DossierReference{{Path: "src/routes/health.ts", Reason: "route evidence"}}},
+	}
+
+	exec := &blueprint.Execution{ID: "exec-planner-final-expansion", ObjectiveID: "obj-planner-final-expansion", StepStates: map[string]*blueprint.StepState{"plan": {StepID: "plan", Metadata: map[string]string{}}}}
+	step := &blueprint.Step{ID: "plan", Type: blueprint.StepTypeAgent, Role: "planner", Commit: "none"}
+
+	result, err := env.coord.HandleAgentStep(ctx, exec, step)
+	if err != nil {
+		t.Fatalf("HandleAgentStep: %v", err)
+	}
+	if result.Status != blueprint.StepStatusCompleted {
+		t.Fatalf("status = %s, want completed", result.Status)
+	}
+	if rt.spawned != 3 {
+		t.Fatalf("spawn count = %d, want 3", rt.spawned)
+	}
+	if !strings.Contains(rt.lastOpts[1].Overlay, "You may request at most 1 more dossier expansion") {
+		t.Fatalf("second overlay missing remaining expansion guidance\n%s", rt.lastOpts[1].Overlay)
+	}
+	if !strings.Contains(rt.lastOpts[2].Overlay, "Do not request dossier expansion again") {
+		t.Fatalf("third overlay missing final expansion guidance\n%s", rt.lastOpts[2].Overlay)
 	}
 }
 

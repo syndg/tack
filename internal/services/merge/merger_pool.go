@@ -79,8 +79,8 @@ func (m *MergerPool) Acquire(ctx context.Context, objectiveID string) (sandbox.S
 			"tack.objective": objectiveID,
 			"tack.role":      "merger",
 		},
-		Ephemeral:       true,
-		SkipIgnoredCopy: true,
+		Ephemeral:   true,
+		ReuseBranch: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating dedicated merger sandbox: %w", err)

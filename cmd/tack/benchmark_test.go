@@ -596,6 +596,57 @@ func TestBenchmarkShowRunUsesConfiguredDaemonListenAndResyncsTransientFailure(t 
 	}
 }
 
+func TestBenchmarkShowRunResyncsPartialRun(t *testing.T) {
+	resetBenchmarkTestState()
+	dataDir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/objectives/obj-1/run" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(domain.Snapshot{RunID: "daemon-run-1", ProjectID: "proj-1", ObjectiveID: "obj-1", Status: domain.RunStatusCompleted})
+	}))
+	defer server.Close()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	listenAddr := strings.TrimPrefix(server.URL, "http://")
+	if err := os.WriteFile(configPath, []byte("daemon:\n  listen: "+listenAddr+"\n  data_dir: "+dataDir+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	t.Setenv("TACK_USER_CONFIG_PATH", configPath)
+
+	run, ok := benchmark.PrepareRun("lazygit.undo-basic-commit-checkout", "", "")
+	if !ok {
+		t.Fatal("expected built-in benchmark spec")
+	}
+	run.ID = "bench-partial"
+	run.RunID = "daemon-run-1"
+	run.ProjectID = "proj-1"
+	run.ObjectiveID = "obj-1"
+	run.Status = "partial"
+	if err := benchmark.SaveRun(dataDir, run); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	rootCmd.SetOut(stdout)
+	rootCmd.SetErr(stderr)
+	rootCmd.SetArgs([]string{"benchmark", "show-run", run.ID})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("show-run Execute: %v\nstderr: %s", err, stderr.String())
+	}
+	updated, found, err := benchmark.FindRun(dataDir, run.ID)
+	if err != nil {
+		t.Fatalf("FindRun: %v", err)
+	}
+	if !found {
+		t.Fatal("expected saved benchmark run")
+	}
+	if updated.Status != "completed" {
+		t.Fatalf("status = %q, want completed", updated.Status)
+	}
+}
+
 func TestBenchmarkRunCreatesPlannedRun(t *testing.T) {
 	resetBenchmarkTestState()
 	stdout := new(bytes.Buffer)

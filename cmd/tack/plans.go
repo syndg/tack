@@ -2,11 +2,12 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/syndg/tack/internal/domain"
 )
 
 func init() {
@@ -25,19 +26,39 @@ var plansCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		objectives, err := c.ListObjectives(cmd.Context())
+		if err != nil {
+			return err
+		}
+		objectiveByID := objectivesByID(objectives)
 
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		_, _ = fmt.Fprintln(w, "ID\tOBJECTIVE\tSTATUS\tCREATED")
+		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		_, _ = fmt.Fprintln(w, "PLAN\tSTATUS\tCREATED\tOBJECTIVE")
 		for _, p := range plans {
 			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 				truncateID(p.ID),
-				truncateID(p.ObjectiveID),
 				string(p.Status),
 				timeAgo(p.CreatedAt),
+				objectiveLabel(p, objectiveByID),
 			)
 		}
 		return w.Flush()
 	},
+}
+
+func objectivesByID(objectives []domain.Objective) map[string]domain.Objective {
+	byID := make(map[string]domain.Objective, len(objectives))
+	for _, obj := range objectives {
+		byID[obj.ID] = obj
+	}
+	return byID
+}
+
+func objectiveLabel(plan domain.Plan, objectiveByID map[string]domain.Objective) string {
+	if obj, ok := objectiveByID[plan.ObjectiveID]; ok {
+		return truncateObjectiveText(obj.Description, 64)
+	}
+	return truncateID(plan.ObjectiveID)
 }
 
 func truncateID(s string) string {
@@ -45,6 +66,17 @@ func truncateID(s string) string {
 		return s
 	}
 	return s[:8]
+}
+
+func truncateObjectiveText(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max <= 3 {
+		return s[:max]
+	}
+	return strings.TrimRight(s[:max-3], " ") + "..."
 }
 
 func timeAgo(t time.Time) string {

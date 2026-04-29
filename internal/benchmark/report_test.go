@@ -206,3 +206,57 @@ func TestBuildReportInfersSingleObjectiveWhenRunMissingObjectiveID(t *testing.T)
 		t.Fatalf("notes = %#v, want inference note", report.Notes)
 	}
 }
+
+func TestBuildReportSortsPendingStreamsAfterStartedStreams(t *testing.T) {
+	dataDir := t.TempDir()
+	database, err := db.Open(dataDir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer database.Close()
+	if err := database.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	ctx := context.Background()
+	projectStore := db.NewProjectStore(database.Conn())
+	project := &domain.Project{Name: "test", RootPath: t.TempDir(), ConfigPath: t.TempDir()}
+	if err := projectStore.Upsert(ctx, project); err != nil {
+		t.Fatalf("Upsert project: %v", err)
+	}
+	objectiveStore := db.NewObjectiveStore(database.Conn())
+	objective := &domain.Objective{ProjectID: project.ID, ID: "obj-sort", Description: "benchmark objective", Status: domain.ObjectiveStatusExecuting}
+	if err := objectiveStore.Create(ctx, objective); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	planStore := db.NewPlanStore(database.Conn())
+	plan := &domain.Plan{ProjectID: project.ID, ID: "plan-sort", ObjectiveID: objective.ID, Status: domain.PlanStatusApproved}
+	if err := planStore.Create(ctx, plan); err != nil {
+		t.Fatalf("Create plan: %v", err)
+	}
+	streamStore := db.NewStreamStore(database.Conn())
+	started := &domain.Stream{ProjectID: project.ID, ID: "stream-started", PlanID: plan.ID, Title: "Started", Status: domain.StreamStatusMerged}
+	pending := &domain.Stream{ProjectID: project.ID, ID: "stream-pending", PlanID: plan.ID, Title: "Pending", Status: domain.StreamStatusPending}
+	for _, stream := range []*domain.Stream{pending, started} {
+		if err := streamStore.Create(ctx, stream); err != nil {
+			t.Fatalf("Create stream %s: %v", stream.ID, err)
+		}
+	}
+	executionStore := db.NewExecutionStore(database.Conn())
+	now := time.Now().UTC().Truncate(time.Second)
+	topExec := &blueprint.Execution{ID: "exec-top-sort", ProjectID: project.ID, BlueprintID: "benchmark-baseline", ObjectiveID: objective.ID, CurrentStep: "execute", StepStates: map[string]*blueprint.StepState{}, Status: "running", CreatedAt: now, UpdatedAt: now}
+	if err := executionStore.Create(ctx, topExec); err != nil {
+		t.Fatalf("Create top execution: %v", err)
+	}
+	childExec := &blueprint.Execution{ID: "exec-started", ProjectID: project.ID, BlueprintID: "benchmark-build-review", ObjectiveID: objective.ID, ParentID: topExec.ID, StreamID: started.ID, StepStates: map[string]*blueprint.StepState{}, Status: "completed", CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(2 * time.Minute)}
+	if err := executionStore.Create(ctx, childExec); err != nil {
+		t.Fatalf("Create child execution: %v", err)
+	}
+
+	report, err := BuildReport(dataDir, Run{ID: "bench-sort", BenchmarkID: "lazygit.command-log-nav-keybindings", ObjectiveID: objective.ID, ProjectID: project.ID, Status: "executing"})
+	if err != nil {
+		t.Fatalf("BuildReport: %v", err)
+	}
+	if len(report.Streams) != 2 || report.Streams[0].ID != started.ID || report.Streams[1].ID != pending.ID {
+		t.Fatalf("stream order = %#v, want started before pending", report.Streams)
+	}
+}

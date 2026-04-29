@@ -110,6 +110,12 @@ func TestBuildOverlay_AllSections(t *testing.T) {
 	if !strings.Contains(result, "Implement JWT token validation") {
 		t.Error("missing task spec")
 	}
+	if !strings.Contains(result, "satisfy this stream card only") {
+		t.Error("missing stream responsibility boundary")
+	}
+	if !strings.Contains(result, "Treat the Objective as context") {
+		t.Error("missing objective-as-context constraint")
+	}
 	if !strings.Contains(result, "Keep auth checks in middleware") {
 		t.Error("missing hard anchor")
 	}
@@ -380,6 +386,9 @@ func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 		"## Suggested Seams",
 		"## Project Guidance",
 		"## Instructions",
+		"File scopes are enforced",
+		"Do not invent name-derived globs",
+		"Keep tightly coupled source-and-test edits in one stream",
 		"streams:",
 		"hard_anchors:",
 		"acceptance_criteria:",
@@ -399,6 +408,22 @@ func TestBuildPlannerOverlay_AllSections(t *testing.T) {
 	}
 	if !strings.Contains(result, "Do not explore the codebase") {
 		t.Error("missing dossier-only constraint")
+	}
+}
+
+func TestBuildOverlay_ReviewerTreatsOutOfScopeFixAsContractGap(t *testing.T) {
+	result := BuildOverlay(OverlayInput{
+		AgentName: "reviewer-auth-1",
+		Role:      DefaultRoles()["reviewer"],
+		Objective: testObjective(),
+		Stream:    testStream(),
+		FileScope: []string{"src/auth/config.go"},
+	})
+
+	for _, want := range []string{"requires changing files outside this stream's File Scope", "contract gap", "Do not spend retry budget"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("reviewer overlay missing %q\n%s", want, result)
+		}
 	}
 }
 

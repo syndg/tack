@@ -155,20 +155,35 @@ func TestEffectiveModelsFallBackToLegacyConfig(t *testing.T) {
 func TestEffectiveRuntimeAuthDefaults(t *testing.T) {
 	cfg := Default()
 	binding := cfg.EffectiveRuntimeAuth()
+	if binding.Mode != "native" {
+		t.Fatalf("Mode = %q, want native", binding.Mode)
+	}
+	if binding.Method != "" {
+		t.Fatalf("Method = %q, want empty", binding.Method)
+	}
+	if binding.Provider != "anthropic" {
+		t.Fatalf("Provider = %q, want anthropic", binding.Provider)
+	}
+	if binding.CredentialRef != "" {
+		t.Fatalf("CredentialRef = %q, want empty", binding.CredentialRef)
+	}
+	if binding.Runtime != cfg.Agents.Runtime {
+		t.Fatalf("Runtime = %q, want %q", binding.Runtime, cfg.Agents.Runtime)
+	}
+}
+
+func TestEffectiveRuntimeAuthDefaultsToTackForRemoteSandbox(t *testing.T) {
+	cfg := Default()
+	cfg.Sandbox.Provider = "daytona"
+	binding := cfg.EffectiveRuntimeAuth()
 	if binding.Mode != "tack" {
 		t.Fatalf("Mode = %q, want tack", binding.Mode)
 	}
 	if binding.Method != "api_key" {
 		t.Fatalf("Method = %q, want api_key", binding.Method)
 	}
-	if binding.Provider != "anthropic" {
-		t.Fatalf("Provider = %q, want anthropic", binding.Provider)
-	}
 	if binding.CredentialRef != "anthropic" {
 		t.Fatalf("CredentialRef = %q, want anthropic", binding.CredentialRef)
-	}
-	if binding.Runtime != cfg.Agents.Runtime {
-		t.Fatalf("Runtime = %q, want %q", binding.Runtime, cfg.Agents.Runtime)
 	}
 }
 

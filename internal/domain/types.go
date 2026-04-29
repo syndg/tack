@@ -358,7 +358,7 @@ var streamValidTransitions = map[StreamStatus][]StreamStatus{
 	StreamStatusCompleted:  {StreamStatusMergeReady, StreamStatusFailed},
 	StreamStatusMergeReady: {StreamStatusMerging, StreamStatusFailed},
 	StreamStatusMerging:    {StreamStatusMerged, StreamStatusFailed, StreamStatusMergeReady},
-	StreamStatusFailed:     {StreamStatusPending},
+	StreamStatusFailed:     {StreamStatusPending, StreamStatusMergeReady},
 	// StreamStatusMerged is terminal — no outbound transitions.
 }
 
@@ -434,11 +434,12 @@ const (
 
 // Command represents an intervention on a run.
 type Command struct {
-	Kind      CommandKind `json:"kind"`
-	StreamID  string      `json:"stream_id,omitempty"`
-	SessionID string      `json:"session_id,omitempty"` // for kill: target agent session
-	Guidance  string      `json:"guidance,omitempty"`
-	Reason    string      `json:"reason,omitempty"`
+	Kind           CommandKind `json:"kind"`
+	StreamID       string      `json:"stream_id,omitempty"`
+	SessionID      string      `json:"session_id,omitempty"` // for kill: target agent session
+	Guidance       string      `json:"guidance,omitempty"`
+	Reason         string      `json:"reason,omitempty"`
+	ScopeAdditions []string    `json:"scope_additions,omitempty"`
 }
 
 // BlockedState describes why a run is blocked.

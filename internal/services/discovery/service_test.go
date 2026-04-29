@@ -86,6 +86,60 @@ func TestGenerateBuildsPersistedDossier(t *testing.T) {
 	}
 }
 
+func TestGenerateFindsEndpointRouteByContent(t *testing.T) {
+	projectRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projectRoot, "src"), 0o755); err != nil {
+		t.Fatalf("MkdirAll src: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(projectRoot, "tests"), 0o755); err != nil {
+		t.Fatalf("MkdirAll tests: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "src", "index.ts"), []byte("app.get(\"/health\", (c) => c.json({ status: \"ok\" }))\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile index: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "tests", "health.test.ts"), []byte("expect(await app.request(\"/health\"))\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile test: %v", err)
+	}
+
+	database, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer database.Close()
+	if err := database.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	ctx := context.Background()
+	projectStore := db.NewProjectStore(database.Conn())
+	project := &domain.Project{Name: "demo", RootPath: projectRoot, ConfigPath: filepath.Join(projectRoot, ".tack", "config.yaml")}
+	if err := projectStore.Upsert(ctx, project); err != nil {
+		t.Fatalf("Upsert project: %v", err)
+	}
+	objectiveStore := db.NewObjectiveStore(database.Conn())
+	objective := &domain.Objective{ProjectID: project.ID, Description: "Update the /health endpoint response", Blueprint: "build-review"}
+	if err := objectiveStore.Create(ctx, objective); err != nil {
+		t.Fatalf("Create objective: %v", err)
+	}
+	dossierStore := db.NewDossierStore(database.Conn())
+	registry := blueprint.NewRegistry()
+	if err := registry.LoadDefaults(); err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+
+	svc := New(projectRoot, objectiveStore, dossierStore, rules.NewEngine(slog.Default()), registry, slog.Default())
+	dossier, err := svc.Generate(ctx, objective.ID)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	paths := make([]string, 0, len(dossier.RelevantFiles))
+	for _, ref := range dossier.RelevantFiles {
+		paths = append(paths, ref.Path)
+	}
+	if !strings.Contains(strings.Join(paths, "\n"), "src/index.ts") {
+		t.Fatalf("relevant files = %#v, want src/index.ts from /health content match", dossier.RelevantFiles)
+	}
+}
+
 func TestExpandDossierAddsRequestedContext(t *testing.T) {
 	projectRoot := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(projectRoot, "pkg", "gui", "controllers"), 0o755); err != nil {

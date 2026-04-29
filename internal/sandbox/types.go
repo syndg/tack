@@ -23,6 +23,7 @@ type CreateOpts struct {
 	AutoDelete      time.Duration     `json:"auto_delete"`
 	Ephemeral       bool              `json:"ephemeral"`
 	SkipIgnoredCopy bool              `json:"skip_ignored_copy,omitempty"`
+	ReuseBranch     bool              `json:"reuse_branch,omitempty"`
 }
 
 type ProjectSetup struct {
