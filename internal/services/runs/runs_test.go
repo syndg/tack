@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -1417,6 +1418,186 @@ func TestActKillWorkerTerminatesOneWorkerAndKeepsRunActive(t *testing.T) {
 	}
 	if snap.Workers[0].SessionID != session.ID {
 		t.Errorf("worker session = %q, want %q", snap.Workers[0].SessionID, session.ID)
+	}
+}
+
+type blockingAbortOrchestrator struct {
+	mockOrchestrator
+	abortStarted chan struct{}
+	releaseAbort chan struct{}
+	killSeen     chan string
+	abortOnce    sync.Once
+	killOnce     sync.Once
+}
+
+func newBlockingAbortOrchestrator() *blockingAbortOrchestrator {
+	return &blockingAbortOrchestrator{
+		abortStarted: make(chan struct{}),
+		releaseAbort: make(chan struct{}),
+		killSeen:     make(chan string, 1),
+	}
+}
+
+func (m *blockingAbortOrchestrator) Abort(ctx context.Context, objectiveID string) error {
+	m.abortCalled = true
+	m.abortObjectiveID = objectiveID
+	m.abortOnce.Do(func() { close(m.abortStarted) })
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-m.releaseAbort:
+		return m.abortErr
+	}
+}
+
+func (m *blockingAbortOrchestrator) Kill(ctx context.Context, sessionID string) error {
+	m.killCalled = true
+	m.killSessionID = sessionID
+	m.killOnce.Do(func() { m.killSeen <- sessionID })
+	return m.killErr
+}
+
+func TestActSerializesConflictingMutationsForSameRun(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+	logger := slog.Default()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+
+	orch := newBlockingAbortOrchestrator()
+	svc := newTestService(t, runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+
+	obj := &domain.Objective{Description: "same run serialization", Status: domain.ObjectiveStatusExecuting}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+	run := &domain.Run{ObjectiveID: obj.ID}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+	session := &domain.AgentSession{ObjectiveID: obj.ID, Role: domain.AgentRoleBuilder, Status: "running", SandboxID: "sb-worker"}
+	if err := agentStore.Create(ctx, session); err != nil {
+		t.Fatalf("creating agent session: %v", err)
+	}
+
+	abortErr := make(chan error, 1)
+	go func() {
+		_, err := svc.Act(ctx, run.ID, domain.Command{Kind: domain.CommandAbort, Reason: "serialize test"})
+		abortErr <- err
+	}()
+
+	select {
+	case <-orch.abortStarted:
+	case <-time.After(time.Second):
+		t.Fatal("abort did not start")
+	}
+
+	killErr := make(chan error, 1)
+	go func() {
+		_, err := svc.Act(ctx, run.ID, domain.Command{Kind: domain.CommandKillWorker, SessionID: session.ID})
+		killErr <- err
+	}()
+
+	select {
+	case sessionID := <-orch.killSeen:
+		t.Fatalf("kill for same run was not serialized; called with %s while abort was still active", sessionID)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(orch.releaseAbort)
+
+	if err := <-abortErr; err != nil {
+		t.Fatalf("Act(abort): %v", err)
+	}
+	if err := <-killErr; err != nil {
+		t.Fatalf("Act(kill_worker): %v", err)
+	}
+	select {
+	case sessionID := <-orch.killSeen:
+		if sessionID != session.ID {
+			t.Fatalf("Kill session = %q, want %q", sessionID, session.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("kill did not run after same-run abort completed")
+	}
+}
+
+func TestActAllowsConcurrentMutationsForDifferentRuns(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx := context.Background()
+	logger := slog.Default()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+
+	orch := newBlockingAbortOrchestrator()
+	svc := newTestService(t, runStore, objectiveStore, planStore, streamStore, executionStore, agentStore, orch, &mockMergeService{}, newTestEventBus(t, database), logger)
+
+	obj1 := &domain.Objective{Description: "blocking run", Status: domain.ObjectiveStatusExecuting}
+	obj2 := &domain.Objective{Description: "independent run", Status: domain.ObjectiveStatusExecuting}
+	if err := objectiveStore.Create(ctx, obj1); err != nil {
+		t.Fatalf("creating objective 1: %v", err)
+	}
+	if err := objectiveStore.Create(ctx, obj2); err != nil {
+		t.Fatalf("creating objective 2: %v", err)
+	}
+	run1 := &domain.Run{ObjectiveID: obj1.ID}
+	run2 := &domain.Run{ObjectiveID: obj2.ID}
+	if err := runStore.Create(ctx, run1); err != nil {
+		t.Fatalf("creating run 1: %v", err)
+	}
+	if err := runStore.Create(ctx, run2); err != nil {
+		t.Fatalf("creating run 2: %v", err)
+	}
+	session := &domain.AgentSession{ObjectiveID: obj2.ID, Role: domain.AgentRoleBuilder, Status: "running", SandboxID: "sb-worker"}
+	if err := agentStore.Create(ctx, session); err != nil {
+		t.Fatalf("creating agent session: %v", err)
+	}
+
+	abortErr := make(chan error, 1)
+	go func() {
+		_, err := svc.Act(ctx, run1.ID, domain.Command{Kind: domain.CommandAbort, Reason: "block run 1"})
+		abortErr <- err
+	}()
+
+	select {
+	case <-orch.abortStarted:
+	case <-time.After(time.Second):
+		t.Fatal("abort did not start")
+	}
+
+	killErr := make(chan error, 1)
+	go func() {
+		_, err := svc.Act(ctx, run2.ID, domain.Command{Kind: domain.CommandKillWorker, SessionID: session.ID})
+		killErr <- err
+	}()
+
+	select {
+	case sessionID := <-orch.killSeen:
+		if sessionID != session.ID {
+			t.Fatalf("Kill session = %q, want %q", sessionID, session.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("different-run kill was blocked by another run's abort")
+	}
+	if err := <-killErr; err != nil {
+		t.Fatalf("Act(kill_worker): %v", err)
+	}
+
+	close(orch.releaseAbort)
+	if err := <-abortErr; err != nil {
+		t.Fatalf("Act(abort): %v", err)
 	}
 }
 

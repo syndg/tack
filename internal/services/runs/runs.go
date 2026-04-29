@@ -70,6 +70,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/syndg/tack/internal/config"
@@ -255,6 +256,9 @@ type Service struct {
 	projectID      string
 	discovery      DossierEnsurer
 
+	runLocksMu sync.Mutex
+	runLocks   map[string]*sync.Mutex
+
 	logger *slog.Logger
 }
 
@@ -378,6 +382,7 @@ func New(cfg Config) (*Service, error) {
 		eventBus:       cfg.EventBus,
 		projectID:      cfg.ProjectID,
 		discovery:      cfg.Discovery,
+		runLocks:       make(map[string]*sync.Mutex),
 		logger:         logger,
 	}, nil
 }
@@ -454,6 +459,9 @@ func (s *Service) Act(ctx context.Context, runID string, action domain.Command) 
 // The coordinator remains the execution engine, but Command owns the
 // run-level state transitions and delegates internally.
 func (s *Service) Command(ctx context.Context, runID string, cmd domain.Command) (domain.Snapshot, error) {
+	unlock := s.lockRun(runID)
+	defer unlock()
+
 	run, err := s.ledger.GetRun(ctx, runID)
 	if err != nil {
 		return domain.Snapshot{}, fmt.Errorf("loading run: %w", err)
@@ -471,6 +479,19 @@ func (s *Service) Command(ctx context.Context, runID string, cmd domain.Command)
 	default:
 		return domain.Snapshot{}, fmt.Errorf("unknown command kind %q: %w", cmd.Kind, ErrInvalidState)
 	}
+}
+
+func (s *Service) lockRun(runID string) func() {
+	s.runLocksMu.Lock()
+	lock := s.runLocks[runID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.runLocks[runID] = lock
+	}
+	s.runLocksMu.Unlock()
+
+	lock.Lock()
+	return lock.Unlock
 }
 
 // commandApprove handles the approve intervention.
