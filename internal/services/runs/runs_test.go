@@ -3,6 +3,7 @@ package runs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -13,6 +14,109 @@ import (
 	"github.com/syndg/tack/internal/services/dispatch"
 	"github.com/syndg/tack/internal/services/events"
 )
+
+type memoryRunLedger struct {
+	runs       map[string]*domain.Run
+	objectives map[string]*domain.Objective
+}
+
+func newMemoryRunLedger() *memoryRunLedger {
+	return &memoryRunLedger{runs: map[string]*domain.Run{}, objectives: map[string]*domain.Objective{}}
+}
+
+func (l *memoryRunLedger) GetRun(ctx context.Context, runID string) (*domain.Run, error) {
+	if run, ok := l.runs[runID]; ok {
+		copy := *run
+		return &copy, nil
+	}
+	return nil, fmt.Errorf("run not found: %s", runID)
+}
+
+func (l *memoryRunLedger) GetRunByObjective(ctx context.Context, objectiveID string) (*domain.Run, error) {
+	for _, run := range l.runs {
+		if run.ObjectiveID == objectiveID {
+			copy := *run
+			return &copy, nil
+		}
+	}
+	return nil, fmt.Errorf("run not found for objective: %s", objectiveID)
+}
+
+func (l *memoryRunLedger) CreateRun(ctx context.Context, run *domain.Run) error {
+	if run.ID == "" {
+		run.ID = fmt.Sprintf("run-%d", len(l.runs)+1)
+	}
+	if run.Status == "" {
+		run.Status = domain.RunStatusActive
+	}
+	copy := *run
+	l.runs[run.ID] = &copy
+	return nil
+}
+
+func (l *memoryRunLedger) UpdateRunStatus(ctx context.Context, runID string, status domain.RunStatus) error {
+	run, ok := l.runs[runID]
+	if !ok {
+		return fmt.Errorf("run not found: %s", runID)
+	}
+	run.Status = status
+	return nil
+}
+
+func (l *memoryRunLedger) ListActiveRuns(ctx context.Context, projectID string) ([]domain.Run, error) {
+	var runs []domain.Run
+	for _, run := range l.runs {
+		if run.Status == domain.RunStatusActive || run.Status == domain.RunStatusBlocked {
+			runs = append(runs, *run)
+		}
+	}
+	return runs, nil
+}
+
+func (l *memoryRunLedger) GetObjective(ctx context.Context, objectiveID string) (*domain.Objective, error) {
+	obj, ok := l.objectives[objectiveID]
+	if !ok {
+		return nil, fmt.Errorf("objective not found: %s", objectiveID)
+	}
+	copy := *obj
+	return &copy, nil
+}
+
+func (l *memoryRunLedger) GetPlanByObjective(ctx context.Context, objectiveID string) (*domain.Plan, error) {
+	return nil, fmt.Errorf("plan not found for objective: %s", objectiveID)
+}
+
+func (l *memoryRunLedger) GetStream(ctx context.Context, streamID string) (*domain.Stream, error) {
+	return nil, fmt.Errorf("stream not found: %s", streamID)
+}
+
+func (l *memoryRunLedger) ListStreamsByPlan(ctx context.Context, planID string) ([]domain.Stream, error) {
+	return nil, fmt.Errorf("streams not found for plan: %s", planID)
+}
+
+func (l *memoryRunLedger) UpdateStreamFileScope(ctx context.Context, streamID string, fileScope []string) error {
+	return fmt.Errorf("stream not found: %s", streamID)
+}
+
+func (l *memoryRunLedger) GetExecution(ctx context.Context, executionID string) (*blueprint.Execution, error) {
+	return nil, fmt.Errorf("execution not found: %s", executionID)
+}
+
+func (l *memoryRunLedger) GetExecutionByObjective(ctx context.Context, objectiveID string) (*blueprint.Execution, error) {
+	return nil, fmt.Errorf("execution not found for objective: %s", objectiveID)
+}
+
+func (l *memoryRunLedger) GetAgentSession(ctx context.Context, sessionID string) (*domain.AgentSession, error) {
+	return nil, fmt.Errorf("agent session not found: %s", sessionID)
+}
+
+func (l *memoryRunLedger) ListAgentSessionsByObjective(ctx context.Context, objectiveID string) ([]domain.AgentSession, error) {
+	return nil, nil
+}
+
+func (l *memoryRunLedger) ListAttemptsByStream(ctx context.Context, streamID string) ([]domain.Attempt, error) {
+	return nil, nil
+}
 
 // mockOrchestrator is a minimal test double for dispatch.Orchestrator.
 type mockOrchestrator struct {
@@ -482,6 +586,37 @@ func TestEnsureStartsRunAndReturnsRunView(t *testing.T) {
 	}
 	if orch.executeID != obj.ID {
 		t.Fatalf("coordinator.Execute called with %q, want %q", orch.executeID, obj.ID)
+	}
+}
+
+func TestEnsureUsesSubstitutableRunLedger(t *testing.T) {
+	ctx := context.Background()
+	ledger := newMemoryRunLedger()
+	ledger.objectives["obj-ledger"] = &domain.Objective{ID: "obj-ledger", Status: domain.ObjectiveStatusApproved}
+
+	orch := &mockOrchestrator{}
+	svc, err := New(Config{
+		Orchestrator:   orch,
+		MergeProcessor: &mockMergeService{},
+		Ledger:         ledger,
+		Logger:         slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	view, err := svc.Ensure(ctx, "obj-ledger")
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if view.RunID != "run-1" {
+		t.Fatalf("RunID = %q, want run-1", view.RunID)
+	}
+	if view.Status != domain.RunStatusActive {
+		t.Fatalf("Status = %q, want %q", view.Status, domain.RunStatusActive)
+	}
+	if !orch.executeCalled || orch.executeID != "obj-ledger" {
+		t.Fatalf("Execute called=%v objective=%q, want obj-ledger", orch.executeCalled, orch.executeID)
 	}
 }
 

@@ -218,6 +218,7 @@ type Config struct {
 	// Must satisfy MergeOrchestrator. When Orchestrator is set (testing),
 	// only Start/Stop are used.
 	MergeProcessor MergeOrchestrator
+	Ledger         RunLedger
 
 	Runs       *db.RunStore
 	Attempts   *db.AttemptStore
@@ -234,6 +235,8 @@ type Config struct {
 
 // Service implements the Runs boundary.
 type Service struct {
+	ledger RunLedger
+
 	runs       *db.RunStore
 	attempts   *db.AttemptStore
 	insights   *db.ObjectiveInsightStore
@@ -347,7 +350,21 @@ func New(cfg Config) (*Service, error) {
 		}
 	}
 
+	ledger := cfg.Ledger
+	if ledger == nil {
+		ledger = &storeRunLedger{
+			runs:       cfg.Runs,
+			attempts:   cfg.Attempts,
+			objectives: cfg.Objectives,
+			plans:      cfg.Plans,
+			streams:    cfg.Streams,
+			executions: cfg.Executions,
+			agents:     cfg.Agents,
+		}
+	}
+
 	return &Service{
+		ledger:         ledger,
 		runs:           cfg.Runs,
 		attempts:       cfg.Attempts,
 		insights:       cfg.Insights,
@@ -368,7 +385,7 @@ func New(cfg Config) (*Service, error) {
 // Ensure creates or resumes a run for an objective and returns the current
 // operator-facing run view. Existing runs are not duplicated.
 func (s *Service) Ensure(ctx context.Context, objectiveID string) (RunView, error) {
-	if run, err := s.runs.GetByObjective(ctx, objectiveID); err == nil {
+	if run, err := s.ledger.GetRunByObjective(ctx, objectiveID); err == nil {
 		return s.View(ctx, run.ID)
 	}
 	return s.startNew(ctx, objectiveID)
@@ -383,7 +400,7 @@ func (s *Service) Start(ctx context.Context, objectiveID string) (domain.Snapsho
 }
 
 func (s *Service) startNew(ctx context.Context, objectiveID string) (RunView, error) {
-	obj, err := s.objectives.Get(ctx, objectiveID)
+	obj, err := s.ledger.GetObjective(ctx, objectiveID)
 	if err != nil {
 		return domain.Snapshot{}, fmt.Errorf("getting objective: %w", err)
 	}
@@ -402,7 +419,7 @@ func (s *Service) startNew(ctx context.Context, objectiveID string) (RunView, er
 	}
 
 	run := &domain.Run{ObjectiveID: objectiveID}
-	if err := s.runs.Create(ctx, run); err != nil {
+	if err := s.ledger.CreateRun(ctx, run); err != nil {
 		return domain.Snapshot{}, fmt.Errorf("creating run: %w", err)
 	}
 
@@ -410,7 +427,7 @@ func (s *Service) startNew(ctx context.Context, objectiveID string) (RunView, er
 
 	if err := s.coordinator.Execute(ctx, objectiveID); err != nil {
 		// Mark run as failed since execution couldn't start.
-		_ = s.runs.UpdateStatus(ctx, run.ID, domain.RunStatusFailed)
+		_ = s.ledger.UpdateRunStatus(ctx, run.ID, domain.RunStatusFailed)
 		return domain.Snapshot{}, fmt.Errorf("starting execution: %w", err)
 	}
 
@@ -437,7 +454,7 @@ func (s *Service) Act(ctx context.Context, runID string, action domain.Command) 
 // The coordinator remains the execution engine, but Command owns the
 // run-level state transitions and delegates internally.
 func (s *Service) Command(ctx context.Context, runID string, cmd domain.Command) (domain.Snapshot, error) {
-	run, err := s.runs.Get(ctx, runID)
+	run, err := s.ledger.GetRun(ctx, runID)
 	if err != nil {
 		return domain.Snapshot{}, fmt.Errorf("loading run: %w", err)
 	}
@@ -474,7 +491,7 @@ func (s *Service) commandApprove(ctx context.Context, run *domain.Run) (domain.S
 
 	// Transition run back to active now that it's unblocked.
 	if run.Status == domain.RunStatusBlocked {
-		if err := s.runs.UpdateStatus(ctx, run.ID, domain.RunStatusActive); err != nil {
+		if err := s.ledger.UpdateRunStatus(ctx, run.ID, domain.RunStatusActive); err != nil {
 			s.logger.Warn("failed to update run status after approve",
 				"run_id", run.ID, "error", err)
 		}
@@ -489,7 +506,7 @@ func (s *Service) waitForExecutionWaitingHuman(ctx context.Context, objectiveID 
 	lastStatus := "missing"
 
 	for {
-		exec, err := s.executions.GetByObjective(ctx, objectiveID)
+		exec, err := s.ledger.GetExecutionByObjective(ctx, objectiveID)
 		if err == nil {
 			lastStatus = exec.Status
 			switch exec.Status {
@@ -530,7 +547,7 @@ func (s *Service) commandRetry(ctx context.Context, run *domain.Run, cmd domain.
 	}
 
 	// Find the failed sub-execution for this stream.
-	stream, err := s.streams.Get(ctx, cmd.StreamID)
+	stream, err := s.ledger.GetStream(ctx, cmd.StreamID)
 	if err != nil {
 		return domain.Snapshot{}, fmt.Errorf("loading stream %s: %w", cmd.StreamID, err)
 	}
@@ -542,7 +559,7 @@ func (s *Service) commandRetry(ctx context.Context, run *domain.Run, cmd domain.
 	}
 	if len(cmd.ScopeAdditions) > 0 {
 		mergedScope := mergeFileScope(stream.FileScope, cmd.ScopeAdditions)
-		if err := s.streams.UpdateFileScope(ctx, stream.ID, mergedScope); err != nil {
+		if err := s.ledger.UpdateStreamFileScope(ctx, stream.ID, mergedScope); err != nil {
 			return domain.Snapshot{}, fmt.Errorf("updating stream retry scope: %w", err)
 		}
 		stream.FileScope = mergedScope
@@ -566,7 +583,7 @@ func (s *Service) commandRetry(ctx context.Context, run *domain.Run, cmd domain.
 	// Ensure run is marked active (it may be in partial/failed state from
 	// the original execution completing with failures).
 	if run.Status != domain.RunStatusActive {
-		if err := s.runs.UpdateStatus(ctx, run.ID, domain.RunStatusActive); err != nil {
+		if err := s.ledger.UpdateRunStatus(ctx, run.ID, domain.RunStatusActive); err != nil {
 			s.logger.Warn("failed to update run status after retry",
 				"run_id", run.ID, "error", err)
 		}
@@ -614,7 +631,7 @@ func (s *Service) commandAbort(ctx context.Context, run *domain.Run, cmd domain.
 		return domain.Snapshot{}, fmt.Errorf("aborting run workers: %w", err)
 	}
 
-	if err := s.runs.UpdateStatus(ctx, run.ID, domain.RunStatusFailed); err != nil {
+	if err := s.ledger.UpdateRunStatus(ctx, run.ID, domain.RunStatusFailed); err != nil {
 		return domain.Snapshot{}, fmt.Errorf("marking run failed: %w", err)
 	}
 
@@ -635,7 +652,7 @@ func (s *Service) commandKill(ctx context.Context, run *domain.Run, cmd domain.C
 	}
 
 	// Verify the agent session belongs to this run's objective.
-	session, err := s.agents.Get(ctx, cmd.SessionID)
+	session, err := s.ledger.GetAgentSession(ctx, cmd.SessionID)
 	if err != nil {
 		return domain.Snapshot{}, fmt.Errorf("loading agent session %s: %w", cmd.SessionID, err)
 	}
@@ -659,7 +676,7 @@ func (s *Service) commandKill(ctx context.Context, run *domain.Run, cmd domain.C
 // persisted state from the run record, objective, plan, streams, and
 // execution.
 func (s *Service) Snapshot(ctx context.Context, runID string) (domain.Snapshot, error) {
-	run, err := s.runs.Get(ctx, runID)
+	run, err := s.ledger.GetRun(ctx, runID)
 	if err != nil {
 		return domain.Snapshot{}, fmt.Errorf("loading run: %w", err)
 	}
@@ -692,7 +709,7 @@ func (s *Service) Snapshot(ctx context.Context, runID string) (domain.Snapshot, 
 }
 
 func (s *Service) resolveWorkers(ctx context.Context, objectiveID string) []domain.RunWorkerState {
-	sessions, err := s.agents.ListByObjective(ctx, objectiveID)
+	sessions, err := s.ledger.ListAgentSessionsByObjective(ctx, objectiveID)
 	if err != nil {
 		s.logger.Warn("failed to resolve run workers", "objective_id", objectiveID, "error", err)
 		return nil
@@ -720,7 +737,7 @@ func (s *Service) View(ctx context.Context, runID string) (RunView, error) {
 
 // SnapshotByObjective returns a snapshot for the most recent run of an objective.
 func (s *Service) SnapshotByObjective(ctx context.Context, objectiveID string) (domain.Snapshot, error) {
-	run, err := s.runs.GetByObjective(ctx, objectiveID)
+	run, err := s.ledger.GetRunByObjective(ctx, objectiveID)
 	if err != nil {
 		return domain.Snapshot{}, fmt.Errorf("loading run for objective: %w", err)
 	}
@@ -801,11 +818,7 @@ func (s *Service) recoverRuns(ctx context.Context) {
 		activeRuns []domain.Run
 		err        error
 	)
-	if s.projectID != "" {
-		activeRuns, err = s.runs.ListActiveByProject(ctx, s.projectID)
-	} else {
-		activeRuns, err = s.runs.ListActive(ctx)
-	}
+	activeRuns, err = s.ledger.ListActiveRuns(ctx, s.projectID)
 	if err != nil {
 		s.logger.Warn("failed to list active runs for recovery", "error", err)
 		return
@@ -818,12 +831,12 @@ func (s *Service) recoverRuns(ctx context.Context) {
 	s.logger.Info("recovering in-flight runs", "count", len(activeRuns))
 
 	for _, run := range activeRuns {
-		obj, err := s.objectives.Get(ctx, run.ObjectiveID)
+		obj, err := s.ledger.GetObjective(ctx, run.ObjectiveID)
 		if err != nil {
 			// Objective missing — mark run as failed so it doesn't stay orphaned.
 			s.logger.Warn("objective not found during run recovery, marking run failed",
 				"run_id", run.ID, "objective_id", run.ObjectiveID, "error", err)
-			_ = s.runs.UpdateStatus(ctx, run.ID, domain.RunStatusFailed)
+			_ = s.ledger.UpdateRunStatus(ctx, run.ID, domain.RunStatusFailed)
 			continue
 		}
 
@@ -846,7 +859,7 @@ func (s *Service) recoverRuns(ctx context.Context) {
 			}
 			// Coordinator's recoverExecutions handles resuming the execution.
 			// Check if there's a waiting_human execution that should block the run.
-			if exec, err := s.executions.GetByObjective(ctx, run.ObjectiveID); err == nil {
+			if exec, err := s.ledger.GetExecutionByObjective(ctx, run.ObjectiveID); err == nil {
 				if exec.Status == "waiting_human" {
 					newStatus = domain.RunStatusBlocked
 				}
@@ -864,7 +877,7 @@ func (s *Service) recoverRuns(ctx context.Context) {
 			continue
 		}
 
-		if err := s.runs.UpdateStatus(ctx, run.ID, newStatus); err != nil {
+		if err := s.ledger.UpdateRunStatus(ctx, run.ID, newStatus); err != nil {
 			s.logger.Warn("failed to update run during recovery",
 				"run_id", run.ID, "target_status", newStatus, "error", err)
 			continue
@@ -920,7 +933,7 @@ func (s *Service) syncRunStatus(ctx context.Context, event domain.Event) {
 		return
 	}
 
-	run, err := s.runs.GetByObjective(ctx, event.Objective)
+	run, err := s.ledger.GetRunByObjective(ctx, event.Objective)
 	if err != nil {
 		// No run for this objective — objective may predate run-centric API.
 		return
@@ -938,7 +951,7 @@ func (s *Service) syncRunStatus(ctx context.Context, event domain.Event) {
 		return // already in sync
 	}
 
-	if err := s.runs.UpdateStatus(ctx, run.ID, runStatus); err != nil {
+	if err := s.ledger.UpdateRunStatus(ctx, run.ID, runStatus); err != nil {
 		s.logger.Warn("failed to sync run status from objective event",
 			"run_id", run.ID,
 			"objective_id", event.Objective,
@@ -956,7 +969,7 @@ func (s *Service) syncRunStatus(ctx context.Context, event domain.Event) {
 }
 
 func (s *Service) syncRunRecoveryStatus(ctx context.Context, event domain.Event) {
-	run, err := s.runs.GetByObjective(ctx, event.Objective)
+	run, err := s.ledger.GetRunByObjective(ctx, event.Objective)
 	if err != nil {
 		return
 	}
@@ -968,7 +981,7 @@ func (s *Service) syncRunRecoveryStatus(ctx context.Context, event domain.Event)
 	if run.Status == target || run.Status == domain.RunStatusCompleted || run.Status == domain.RunStatusFailed || run.Status == domain.RunStatusPartial {
 		return
 	}
-	if err := s.runs.UpdateStatus(ctx, run.ID, target); err != nil {
+	if err := s.ledger.UpdateRunStatus(ctx, run.ID, target); err != nil {
 		s.logger.Warn("failed to sync run status from recovery event", "run_id", run.ID, "objective_id", event.Objective, "target_status", target, "error", err)
 		return
 	}
@@ -977,7 +990,7 @@ func (s *Service) syncRunRecoveryStatus(ctx context.Context, event domain.Event)
 
 // resolveBlocked checks execution state to determine why a run is blocked.
 func (s *Service) resolveBlocked(ctx context.Context, run *domain.Run) *domain.BlockedState {
-	exec, err := s.executions.GetByObjective(ctx, run.ObjectiveID)
+	exec, err := s.ledger.GetExecutionByObjective(ctx, run.ObjectiveID)
 	if err != nil {
 		if block, ok := s.activeRecoveryBlock(ctx, run.ObjectiveID); ok {
 			return block
@@ -997,12 +1010,12 @@ func (s *Service) resolveBlocked(ctx context.Context, run *domain.Run) *domain.B
 // For failed streams with an associated execution, it extracts the last error
 // from the execution's StepStates and marks the stream as retryable.
 func (s *Service) resolveStreams(ctx context.Context, objectiveID string) []domain.RunStreamState {
-	plan, err := s.plans.GetByObjective(ctx, objectiveID)
+	plan, err := s.ledger.GetPlanByObjective(ctx, objectiveID)
 	if err != nil {
 		return nil
 	}
 
-	streams, err := s.streams.ListByPlan(ctx, plan.ID)
+	streams, err := s.ledger.ListStreamsByPlan(ctx, plan.ID)
 	if err != nil {
 		return nil
 	}
@@ -1018,7 +1031,7 @@ func (s *Service) resolveStreams(ctx context.Context, objectiveID string) []doma
 		// For failed streams, extract error from the execution and mark retryable.
 		if st.Status == domain.StreamStatusFailed && st.ExecutionID != "" {
 			rss.Retryable = true
-			if exec, err := s.executions.Get(ctx, st.ExecutionID); err == nil {
+			if exec, err := s.ledger.GetExecution(ctx, st.ExecutionID); err == nil {
 				rss.Error = lastStepError(exec)
 			}
 		}

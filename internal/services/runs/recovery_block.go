@@ -12,15 +12,15 @@ func (s *Service) hasActiveRecoveryBlock(ctx context.Context, objectiveID string
 }
 
 func (s *Service) activeRecoveryBlock(ctx context.Context, objectiveID string) (*domain.BlockedState, bool) {
-	if s.attempts == nil {
+	if s.ledger == nil {
 		return nil, false
 	}
 
-	plan, err := s.plans.GetByObjective(ctx, objectiveID)
+	plan, err := s.ledger.GetPlanByObjective(ctx, objectiveID)
 	if err != nil {
 		return nil, false
 	}
-	streams, err := s.streams.ListByPlan(ctx, plan.ID)
+	streams, err := s.ledger.ListStreamsByPlan(ctx, plan.ID)
 	if err != nil {
 		return nil, false
 	}
@@ -57,10 +57,10 @@ func (s *Service) activeRecoveryBlock(ctx context.Context, objectiveID string) (
 }
 
 func (s *Service) latestRecoveryBlockAttempt(ctx context.Context, streamID string) (domain.Attempt, bool) {
-	if streamID == "" || s.attempts == nil {
+	if streamID == "" || s.ledger == nil {
 		return domain.Attempt{}, false
 	}
-	attempts, err := s.attempts.ListByStream(ctx, streamID)
+	attempts, err := s.ledger.ListAttemptsByStream(ctx, streamID)
 	if err != nil || len(attempts) == 0 {
 		return domain.Attempt{}, false
 	}
