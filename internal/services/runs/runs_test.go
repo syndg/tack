@@ -2455,6 +2455,76 @@ func TestRunCompletesPartialObjectiveAfterMergeEvent(t *testing.T) {
 	}
 }
 
+func TestRunDoesNotCompletePartialObjectiveUntilEveryStreamMerged(t *testing.T) {
+	database := openTestDB(t)
+	conn := database.Conn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runStore := db.NewRunStore(conn)
+	objectiveStore := db.NewObjectiveStore(conn)
+	planStore := db.NewPlanStore(conn)
+	streamStore := db.NewStreamStore(conn)
+	executionStore := db.NewExecutionStore(conn)
+	agentStore := db.NewAgentStore(conn)
+	eventBus := newTestEventBus(t, database)
+	lifecycleMgr := lifecycle.New(objectiveStore, planStore, streamStore, agentStore, eventBus, nil, slog.Default())
+	svc, err := New(Config{
+		Orchestrator:   &mockOrchestrator{},
+		MergeProcessor: &mockMergeService{},
+		Lifecycle:      lifecycleMgr,
+		Runs:           runStore,
+		Objectives:     objectiveStore,
+		Plans:          planStore,
+		Streams:        streamStore,
+		Executions:     executionStore,
+		Agents:         agentStore,
+		EventBus:       eventBus,
+		Logger:         slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	obj := &domain.Objective{Description: "partial merge waits", Status: domain.ObjectiveStatusPartial}
+	if err := objectiveStore.Create(ctx, obj); err != nil {
+		t.Fatalf("creating objective: %v", err)
+	}
+	plan := &domain.Plan{ObjectiveID: obj.ID}
+	if err := planStore.Create(ctx, plan); err != nil {
+		t.Fatalf("creating plan: %v", err)
+	}
+	mergedStream := &domain.Stream{PlanID: plan.ID, Title: "merged stream", Status: domain.StreamStatusMerged}
+	if err := streamStore.Create(ctx, mergedStream); err != nil {
+		t.Fatalf("creating merged stream: %v", err)
+	}
+	completedStream := &domain.Stream{PlanID: plan.ID, Title: "completed stream", Status: domain.StreamStatusCompleted}
+	if err := streamStore.Create(ctx, completedStream); err != nil {
+		t.Fatalf("creating completed stream: %v", err)
+	}
+	run := &domain.Run{ObjectiveID: obj.ID, Status: domain.RunStatusPartial}
+	if err := runStore.Create(ctx, run); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+
+	svc.completeMerge(ctx, obj.ID)
+
+	snap, err := svc.View(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("View: %v", err)
+	}
+	if snap.Status != domain.RunStatusPartial {
+		t.Fatalf("run status = %s, want %s", snap.Status, domain.RunStatusPartial)
+	}
+	updated, err := objectiveStore.Get(ctx, obj.ID)
+	if err != nil {
+		t.Fatalf("Get objective: %v", err)
+	}
+	if updated.Status != domain.ObjectiveStatusPartial {
+		t.Fatalf("objective status = %s, want %s", updated.Status, domain.ObjectiveStatusPartial)
+	}
+}
+
 func TestRunRecoversCompletedPostMergePartial(t *testing.T) {
 	database := openTestDB(t)
 	conn := database.Conn()

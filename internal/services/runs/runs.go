@@ -1022,7 +1022,7 @@ func (s *Service) allStreamsMerged(ctx context.Context, objectiveID string) bool
 		return false
 	}
 	for _, stream := range streams {
-		if stream.Status != domain.StreamStatusMerged && stream.Status != domain.StreamStatusCompleted {
+		if stream.Status != domain.StreamStatusMerged {
 			return false
 		}
 	}
