@@ -377,7 +377,14 @@ func (c *Coordinator) HandleAgentStep(ctx context.Context, exec *blueprint.Execu
 				}
 			}
 
-			metadata := mergeStepMetadata(generatedMessages.ToMetadata(), retryContext)
+			metadataBase := generatedMessages.ToMetadata()
+			if fixContext != "" {
+				if metadataBase == nil {
+					metadataBase = map[string]string{}
+				}
+				metadataBase["fix_context"] = fixContext
+			}
+			metadata := mergeStepMetadata(metadataBase, retryContext)
 			c.spawner.MarkCompleted(ctx, result.Session, cleanSummary)
 			return blueprint.StepResult{
 				Status:   blueprint.StepStatusCompleted,
