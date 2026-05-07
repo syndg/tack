@@ -1,10 +1,18 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/domain"
+	"gopkg.in/yaml.v3"
 )
 
 func TestBuildProjectConfigWritesRuntimeAuthAndModels(t *testing.T) {
@@ -78,4 +86,148 @@ func TestEnsureProjectGitignoreAddsTackRuntimeArtifacts(t *testing.T) {
 	if string(data2) != text {
 		t.Fatalf("ensureProjectGitignore should be idempotent\nfirst:\n%s\nsecond:\n%s", text, string(data2))
 	}
+}
+
+func TestInitRequiresCompletedGlobalSetup(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TACK_USER_CONFIG_PATH", filepath.Join(root, "user.yaml"))
+	t.Chdir(root)
+	resetInitTestState(t)
+
+	rootCmd.SetOut(&strings.Builder{})
+	rootCmd.SetErr(&strings.Builder{})
+	rootCmd.SetArgs([]string{"init", "--non-interactive"})
+	err := rootCmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "global setup is incomplete") {
+		t.Fatalf("init error = %v, want incomplete global setup", err)
+	}
+}
+
+func TestInitValidationFailureWritesNoProjectState(t *testing.T) {
+	root := t.TempDir()
+	userConfig := filepath.Join(root, "user.yaml")
+	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
+	t.Chdir(root)
+	resetInitTestState(t)
+	writeInitUserConfig(t, userConfig, setupConfigFile{
+		Setup:       config.SetupConfig{Complete: true},
+		Daemon:      config.DaemonConfig{Listen: "127.0.0.1:9900"},
+		Agents:      config.AgentsConfig{Runtime: "claude-code"},
+		RuntimeAuth: config.RuntimeAuthConfig{Runtime: "claude-code", Provider: "anthropic", Mode: "native"},
+		Models:      config.ModelsConfig{Planner: "planner", Agent: "agent", SmallTasks: "small"},
+		Sandbox:     config.SandboxConfig{Provider: "local"},
+		Blueprint:   "standard",
+	})
+
+	rootCmd.SetOut(&strings.Builder{})
+	rootCmd.SetErr(&strings.Builder{})
+	rootCmd.SetArgs([]string{"init", "--non-interactive"})
+	err := rootCmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "requires quality_gates") {
+		t.Fatalf("init error = %v, want quality gate validation", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".tack")); !os.IsNotExist(statErr) {
+		t.Fatalf(".tack exists after failed init: %v", statErr)
+	}
+}
+
+func TestInitRegistersProjectAndReportsSources(t *testing.T) {
+	root := t.TempDir()
+	userConfig := filepath.Join(root, "user.yaml")
+	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
+	t.Chdir(root)
+	resetInitTestState(t)
+	writeInitUserConfig(t, userConfig, setupConfigFile{
+		Setup:        config.SetupConfig{Complete: true},
+		Daemon:       config.DaemonConfig{Listen: "127.0.0.1:9900"},
+		Agents:       config.AgentsConfig{Runtime: "claude-code"},
+		RuntimeAuth:  config.RuntimeAuthConfig{Runtime: "claude-code", Provider: "anthropic", Mode: "native"},
+		Models:       config.ModelsConfig{Planner: "global-planner", Agent: "global-agent", SmallTasks: "global-small"},
+		Sandbox:      config.SandboxConfig{Provider: "local"},
+		Blueprint:    "custom-no-pr",
+		QualityGates: []string{"go test ./..."},
+	})
+
+	var registered clientProjectRegistration
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/projects/register" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&registered); err != nil {
+			t.Fatalf("Decode registration: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(domain.Project{ID: registered.ProjectID, RootPath: registered.RootPath, ConfigPath: registered.ConfigPath, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	}))
+	defer server.Close()
+	daemonURL = server.URL
+
+	var out strings.Builder
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&strings.Builder{})
+	rootCmd.SetArgs([]string{"init", "--non-interactive", "--agent-model", "project-agent", "--setup-command", "bun install"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if registered.ProjectID == "" || registered.RootPath != root || registered.ConfigPath != filepath.Join(root, ".tack", "config.yaml") {
+		t.Fatalf("registration = %#v", registered)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".tack", "project-id")); err != nil {
+		t.Fatalf("project-id not written: %v", err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "models.agent: project-agent (source: project_override)") {
+		t.Fatalf("summary missing project override source:\n%s", text)
+	}
+	if !strings.Contains(text, "models.planner: global-planner (source: global)") {
+		t.Fatalf("summary missing global fallback source:\n%s", text)
+	}
+}
+
+type clientProjectRegistration struct {
+	ProjectID  string `json:"project_id"`
+	RootPath   string `json:"root_path"`
+	ConfigPath string `json:"config_path"`
+}
+
+func writeInitUserConfig(t *testing.T, path string, state setupConfigFile) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	data, err := yaml.Marshal(state)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func resetInitTestState(t *testing.T) {
+	t.Helper()
+	rootCmd.SetArgs(nil)
+	cfgPath = ""
+	daemonURL = defaultDaemonURL
+	projectID = ""
+	initNonInteractive = false
+	initRuntime = ""
+	initProvider = ""
+	initAuthMode = ""
+	initAuthMethod = ""
+	initCredentialRef = ""
+	initAgentModel = ""
+	initPlannerModel = ""
+	initSmallTaskModel = ""
+	initSandboxProvider = ""
+	initBlueprint = ""
+	initQualityGates = nil
+	initSetupCommands = nil
+	initSetupVerify = nil
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		cfgPath = ""
+		daemonURL = defaultDaemonURL
+		projectID = ""
+	})
 }

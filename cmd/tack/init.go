@@ -8,16 +8,51 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+	"github.com/syndg/tack/internal/blueprintconfig"
 	"github.com/syndg/tack/internal/client"
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
+	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/preflight"
 	"github.com/syndg/tack/internal/providerauth"
 	"github.com/syndg/tack/internal/runtimeauth"
 	"gopkg.in/yaml.v3"
 )
 
+var (
+	initNonInteractive  bool
+	initRuntime         string
+	initProvider        string
+	initAuthMode        string
+	initAuthMethod      string
+	initCredentialRef   string
+	initAgentModel      string
+	initPlannerModel    string
+	initSmallTaskModel  string
+	initSandboxProvider string
+	initBlueprint       string
+	initQualityGates    []string
+	initSetupCommands   []string
+	initSetupVerify     []string
+)
+
 func init() {
+	initCmd.Flags().BoolVar(&initNonInteractive, "non-interactive", false, "require project init inputs from flags and fail if required inputs are missing")
+	initCmd.Flags().StringVar(&initRuntime, "runtime", "", "project runtime override")
+	initCmd.Flags().StringVar(&initProvider, "provider", "", "project provider override")
+	initCmd.Flags().StringVar(&initAuthMode, "auth-mode", "", "project runtime auth mode override: native or tack")
+	initCmd.Flags().StringVar(&initAuthMethod, "auth-method", "", "project credential method override: api_key or oauth")
+	initCmd.Flags().StringVar(&initCredentialRef, "credential-ref", "", "project credential reference override")
+	initCmd.Flags().StringVar(&initAgentModel, "agent-model", "", "project agent model override")
+	initCmd.Flags().StringVar(&initPlannerModel, "planner-model", "", "project planner model override")
+	initCmd.Flags().StringVar(&initSmallTaskModel, "small-task-model", "", "project small-task model override")
+	initCmd.Flags().StringVar(&initSandboxProvider, "sandbox-provider", "", "project sandbox provider override")
+	initCmd.Flags().StringVar(&initBlueprint, "blueprint", "", "project blueprint override")
+	initCmd.Flags().StringArrayVar(&initQualityGates, "quality-gate", nil, "project quality gate override; repeat for multiple gates")
+	initCmd.Flags().StringArrayVar(&initSetupCommands, "setup-command", nil, "project setup command; repeat for multiple commands")
+	initCmd.Flags().StringArrayVar(&initSetupVerify, "setup-verify", nil, "project setup verification command; repeat for multiple commands")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -34,6 +69,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	tackDir := filepath.Join(cwd, ".tack")
 	configPath := filepath.Join(tackDir, "config.yaml")
+
+	globalSetup, err := completedGlobalSetup()
+	if err != nil {
+		return err
+	}
 
 	if _, err := os.Stat(configPath); err == nil {
 		var overwrite bool
@@ -54,7 +94,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	wizard, err := runInitWizard(cmd.Context(), store)
+	wizard, err := collectInitConfig(cmd.Context(), store)
 	if err != nil {
 		return err
 	}
@@ -94,10 +134,27 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	projectCfg := buildProjectConfig(wizard)
+	if err := validateProjectInit(cmd.Context(), cwd, globalSetup, projectCfg, store); err != nil {
+		return err
+	}
+	projectUUID, err := projectIDForInit(cwd)
+	if err != nil {
+		return err
+	}
 
-	// --- Write .tack/config.yaml ---
+	createdTackDir := false
+	if _, err := os.Stat(tackDir); os.IsNotExist(err) {
+		createdTackDir = true
+	}
 	if err := os.MkdirAll(tackDir, 0o755); err != nil {
 		return fmt.Errorf("creating .tack directory: %w", err)
+	}
+	cleanupProjectState := func() {
+		_ = os.Remove(configPath)
+		_ = os.Remove(config.ProjectIDPath(cwd))
+		if createdTackDir {
+			_ = os.Remove(tackDir)
+		}
 	}
 
 	cfgYAML, err := yaml.Marshal(projectCfg)
@@ -105,32 +162,45 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
 	if err := os.WriteFile(configPath, cfgYAML, 0o644); err != nil {
+		cleanupProjectState()
 		return fmt.Errorf("writing config: %w", err)
 	}
-	if err := ensureProjectGitignore(cwd); err != nil {
-		return err
-	}
 
-	// --- Save credentials ---
 	if err := store.Save(); err != nil {
+		cleanupProjectState()
 		return fmt.Errorf("saving credentials: %w", err)
 	}
-	projectUUID, err := ensureStableProjectID(cwd)
+	daemonClient, err := newDaemonClient(cmd, false)
 	if err != nil {
+		cleanupProjectState()
 		return err
 	}
-	if daemonClient, err := newDaemonClient(cmd, false); err == nil {
-		if _, err := daemonClient.RegisterProject(cmd.Context(), client.ProjectRegistration{
-			ProjectID:  projectUUID,
-			RootPath:   cwd,
-			ConfigPath: configPath,
-		}); err != nil {
-			return fmt.Errorf("registering project with daemon: %w", err)
-		}
+	registered, err := daemonClient.RegisterProject(cmd.Context(), client.ProjectRegistration{
+		ProjectID:  projectUUID,
+		RootPath:   cwd,
+		ConfigPath: configPath,
+	})
+	if err != nil {
+		cleanupProjectState()
+		return fmt.Errorf("registering project with daemon: %w", err)
+	}
+	if err := writeStableProjectID(cwd, projectUUID); err != nil {
+		cleanupProjectState()
+		return err
+	}
+	if err := ensureProjectGitignore(cwd); err != nil {
+		cleanupProjectState()
+		return err
+	}
+	if err := validateProjectInit(cmd.Context(), cwd, globalSetup, projectCfg, store); err != nil {
+		cleanupProjectState()
+		return err
 	}
 
 	fmt.Printf("\nCreated %s\n", configPath)
-	fmt.Printf("Project ID: %s\n", projectUUID)
+	fmt.Printf("Project ID: %s\n", registered.ID)
+	renderInitSummary(cmd, globalSetup, projectCfg)
+	fmt.Printf("Registered project: %s at %s\n", registered.ID, registered.RootPath)
 	fmt.Printf("Credentials saved to %s\n", store.Path())
 	return nil
 }
@@ -187,6 +257,44 @@ type initWizardResult struct {
 	SmallTaskModel  string
 	SetupCommands   string
 	SetupVerify     string
+	Blueprint       string
+	QualityGates    []string
+}
+
+func completedGlobalSetup() (setupConfigFile, error) {
+	state, _, err := loadSetupConfigFile(userConfigPath())
+	if err != nil {
+		return state, err
+	}
+	if !state.Setup.Complete {
+		return state, fmt.Errorf("global setup is incomplete; run tack setup before tack init")
+	}
+	return state, nil
+}
+
+func collectInitConfig(ctx context.Context, store *credentials.Store) (initWizardResult, error) {
+	if initNonInteractive {
+		return initConfigFromFlags(), nil
+	}
+	return runInitWizard(ctx, store)
+}
+
+func initConfigFromFlags() initWizardResult {
+	return initWizardResult{
+		Runtime:         initRuntime,
+		SandboxProvider: initSandboxProvider,
+		Provider:        initProvider,
+		RuntimeAuthMode: initAuthMode,
+		AuthMethod:      initAuthMethod,
+		CredentialRef:   initCredentialRef,
+		AgentModel:      initAgentModel,
+		PlannerModel:    initPlannerModel,
+		SmallTaskModel:  initSmallTaskModel,
+		SetupCommands:   strings.Join(initSetupCommands, ";;"),
+		SetupVerify:     strings.Join(initSetupVerify, ";;"),
+		Blueprint:       initBlueprint,
+		QualityGates:    append([]string(nil), initQualityGates...),
+	}
 }
 
 func runInitWizard(ctx context.Context, store *credentials.Store) (initWizardResult, error) {
@@ -437,33 +545,53 @@ func promptModelSelections(result *initWizardResult, models []runtimeauth.ModelO
 }
 
 func buildProjectConfig(result initWizardResult) map[string]interface{} {
-	projectCfg := map[string]interface{}{
-		"sandbox": map[string]interface{}{
-			"provider": result.SandboxProvider,
-		},
-		"agents": map[string]interface{}{
-			"runtime": result.Runtime,
-		},
-		"runtime_auth": map[string]interface{}{
-			"mode":     result.RuntimeAuthMode,
-			"runtime":  result.Runtime,
-			"provider": result.Provider,
-			"method":   result.AuthMethod,
-		},
-		"models": map[string]interface{}{
-			"default":     result.AgentModel,
-			"agent":       result.AgentModel,
-			"planner":     result.PlannerModel,
-			"small_tasks": result.SmallTaskModel,
-		},
+	projectCfg := map[string]interface{}{}
+	if result.SandboxProvider != "" {
+		projectCfg["sandbox"] = map[string]interface{}{"provider": result.SandboxProvider}
+	}
+	if result.Runtime != "" {
+		projectCfg["agents"] = map[string]interface{}{"runtime": result.Runtime}
+	}
+	if result.RuntimeAuthMode != "" || result.Provider != "" || result.AuthMethod != "" || result.CredentialRef != "" || result.Runtime != "" {
+		authMap := map[string]interface{}{}
+		if result.RuntimeAuthMode != "" {
+			authMap["mode"] = result.RuntimeAuthMode
+		}
+		if result.Runtime != "" {
+			authMap["runtime"] = result.Runtime
+		}
+		if result.Provider != "" {
+			authMap["provider"] = result.Provider
+		}
+		if result.AuthMethod != "" {
+			authMap["method"] = result.AuthMethod
+		}
+		if result.CredentialRef != "" {
+			authMap["credential_ref"] = result.CredentialRef
+		}
+		projectCfg["runtime_auth"] = authMap
+	}
+	if result.AgentModel != "" || result.PlannerModel != "" || result.SmallTaskModel != "" {
+		modelsMap := map[string]interface{}{}
+		if result.AgentModel != "" {
+			modelsMap["default"] = result.AgentModel
+			modelsMap["agent"] = result.AgentModel
+		}
+		if result.PlannerModel != "" {
+			modelsMap["planner"] = result.PlannerModel
+		}
+		if result.SmallTaskModel != "" {
+			modelsMap["small_tasks"] = result.SmallTaskModel
+		}
+		projectCfg["models"] = modelsMap
 	}
 	if result.Runtime == "pi" {
-		agentsMap := projectCfg["agents"].(map[string]interface{})
+		agentsMap, _ := projectCfg["agents"].(map[string]interface{})
+		if agentsMap == nil {
+			agentsMap = map[string]interface{}{}
+			projectCfg["agents"] = agentsMap
+		}
 		agentsMap["pi"] = map[string]interface{}{"provider": result.Provider}
-	}
-	if result.RuntimeAuthMode == runtimeauth.ModeTack {
-		authMap := projectCfg["runtime_auth"].(map[string]interface{})
-		authMap["credential_ref"] = result.CredentialRef
 	}
 	commands := splitSetupCommands(result.SetupCommands)
 	verify := splitSetupCommands(result.SetupVerify)
@@ -476,6 +604,12 @@ func buildProjectConfig(result initWizardResult) map[string]interface{} {
 		if len(verify) > 0 {
 			setupMap["verify"] = verify
 		}
+	}
+	if result.Blueprint != "" {
+		projectCfg["blueprint"] = result.Blueprint
+	}
+	if result.QualityGates != nil {
+		projectCfg["quality_gates"] = append([]string(nil), result.QualityGates...)
 	}
 	return projectCfg
 }
@@ -493,6 +627,157 @@ func splitSetupCommands(raw string) []string {
 		}
 	}
 	return commands
+}
+
+func validateProjectInit(ctx context.Context, root string, global setupConfigFile, projectCfg map[string]interface{}, store *credentials.Store) error {
+	merged, err := mergedInitConfig(global, projectCfg)
+	if err != nil {
+		return err
+	}
+	var missing []string
+	if strings.TrimSpace(merged.Agents.Runtime) == "" {
+		missing = append(missing, "agents.runtime")
+	}
+	if strings.TrimSpace(merged.RuntimeAuth.Provider) == "" {
+		missing = append(missing, "runtime_auth.provider")
+	}
+	if strings.TrimSpace(merged.RuntimeAuth.Mode) == "" {
+		missing = append(missing, "runtime_auth.mode")
+	}
+	if strings.TrimSpace(merged.Models.Agent) == "" {
+		missing = append(missing, "models.agent")
+	}
+	if strings.TrimSpace(merged.Models.Planner) == "" {
+		missing = append(missing, "models.planner")
+	}
+	if strings.TrimSpace(merged.Models.SmallTasks) == "" {
+		missing = append(missing, "models.small_tasks")
+	}
+	if strings.TrimSpace(merged.Sandbox.Provider) == "" {
+		missing = append(missing, "sandbox.provider")
+	}
+	if strings.TrimSpace(merged.Blueprint) == "" {
+		missing = append(missing, "blueprint")
+	}
+	for i, gate := range merged.QualityGates {
+		if strings.TrimSpace(gate) == "" {
+			missing = append(missing, fmt.Sprintf("quality_gates[%d]", i))
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("project init validation failed: missing %s", strings.Join(missing, ", "))
+	}
+
+	reg := blueprint.NewRegistry()
+	if err := reg.LoadDefaults(); err != nil {
+		return fmt.Errorf("loading shipped blueprints: %w", err)
+	}
+	bp, ok := reg.Get(merged.Blueprint)
+	if ok {
+		requirements := blueprintconfig.ExtractRequirements(bp)
+		if requirements.QualityGates && len(merged.QualityGates) == 0 {
+			return fmt.Errorf("project init validation failed: blueprint %q requires quality_gates", merged.Blueprint)
+		}
+		checker := preflight.New(preflight.Options{
+			Blueprints:               registryBlueprintLookup{reg: reg},
+			ProjectRoot:              root,
+			Credentials:              store,
+			RuntimeAuthMode:          merged.RuntimeAuth.Mode,
+			RuntimeAuthProvider:      merged.RuntimeAuth.Provider,
+			RuntimeAuthMethod:        merged.RuntimeAuth.Method,
+			RuntimeAuthCredentialRef: merged.RuntimeAuth.CredentialRef,
+			SandboxProvider:          merged.Sandbox.Provider,
+			DaemonExternalURL:        merged.Daemon.ExternalURL,
+		})
+		if err := checker.Check(ctx, merged.Blueprint); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type registryBlueprintLookup struct {
+	reg *blueprint.Registry
+}
+
+func (r registryBlueprintLookup) GetBlueprint(id string) (*blueprint.Blueprint, bool) {
+	return r.reg.Get(id)
+}
+
+func mergedInitConfig(global setupConfigFile, projectCfg map[string]interface{}) (*config.Config, error) {
+	data, err := yaml.Marshal(projectCfg)
+	if err != nil {
+		return nil, err
+	}
+	merged := &config.Config{
+		Daemon:       global.Daemon,
+		Agents:       global.Agents,
+		RuntimeAuth:  global.RuntimeAuth,
+		Models:       global.Models,
+		Sandbox:      global.Sandbox,
+		Blueprint:    global.Blueprint,
+		QualityGates: append([]string(nil), global.QualityGates...),
+	}
+	if len(data) > 0 {
+		if err := yaml.Unmarshal(data, merged); err != nil {
+			return nil, fmt.Errorf("parsing project init config: %w", err)
+		}
+	}
+	return merged, nil
+}
+
+func projectIDForInit(rootPath string) (string, error) {
+	projectIDPath := config.ProjectIDPath(rootPath)
+	if data, err := os.ReadFile(projectIDPath); err == nil {
+		return string(bytesTrimSpace(data)), nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	return uuid.NewString(), nil
+}
+
+func writeStableProjectID(rootPath, projectUUID string) error {
+	projectIDPath := config.ProjectIDPath(rootPath)
+	if err := os.MkdirAll(filepath.Dir(projectIDPath), 0o755); err != nil {
+		return fmt.Errorf("creating project metadata dir: %w", err)
+	}
+	if err := os.WriteFile(projectIDPath, []byte(projectUUID+"\n"), 0o644); err != nil {
+		return fmt.Errorf("writing project id: %w", err)
+	}
+	return nil
+}
+
+func renderInitSummary(cmd *cobra.Command, global setupConfigFile, projectCfg map[string]interface{}) {
+	out := cmd.OutOrStdout()
+	merged, err := mergedInitConfig(global, projectCfg)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(out, "agents.runtime: %s (source: %s)\n", merged.Agents.Runtime, initValueSource(projectCfg, "agents", "runtime"))
+	fmt.Fprintf(out, "runtime_auth.provider: %s (source: %s)\n", merged.RuntimeAuth.Provider, initValueSource(projectCfg, "runtime_auth", "provider"))
+	fmt.Fprintf(out, "runtime_auth.mode: %s (source: %s)\n", merged.RuntimeAuth.Mode, initValueSource(projectCfg, "runtime_auth", "mode"))
+	fmt.Fprintf(out, "models.planner: %s (source: %s)\n", merged.Models.Planner, initValueSource(projectCfg, "models", "planner"))
+	fmt.Fprintf(out, "models.agent: %s (source: %s)\n", merged.Models.Agent, initValueSource(projectCfg, "models", "agent"))
+	fmt.Fprintf(out, "models.small_tasks: %s (source: %s)\n", merged.Models.SmallTasks, initValueSource(projectCfg, "models", "small_tasks"))
+	fmt.Fprintf(out, "sandbox.provider: %s (source: %s)\n", merged.Sandbox.Provider, initValueSource(projectCfg, "sandbox", "provider"))
+	fmt.Fprintf(out, "blueprint: %s (source: %s)\n", merged.Blueprint, initValueSource(projectCfg, "blueprint"))
+	fmt.Fprintf(out, "quality_gates: %s (source: %s)\n", strings.Join(merged.QualityGates, "; "), initValueSource(projectCfg, "quality_gates"))
+}
+
+func initValueSource(projectCfg map[string]interface{}, path ...string) config.ValueSource {
+	var cur interface{} = projectCfg
+	for _, key := range path {
+		m, ok := cur.(map[string]interface{})
+		if !ok {
+			return config.ValueSourceGlobal
+		}
+		var exists bool
+		cur, exists = m[key]
+		if !exists {
+			return config.ValueSourceGlobal
+		}
+	}
+	return config.ValueSourceProject
 }
 
 func promptAPIKeyCredential(store *credentials.Store, credentialRef, displayProvider string) error {
