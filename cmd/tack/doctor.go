@@ -21,6 +21,7 @@ var doctorJSON bool
 var doctorRuntimeRunner runtimecatalog.Runner = runtimecatalog.ExecRunner{}
 var doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
 var doctorGitRemote func(context.Context, string) (string, error)
+var doctorDaemonServiceProvider = newDaemonServiceProvider
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
@@ -46,6 +47,7 @@ func doctorChecks() []validation.Check {
 		{Name: "global_setup", Run: checkGlobalSetup},
 		{Name: "effective_config", Run: checkEffectiveConfig},
 		{Name: "daemon_config", Run: checkDaemonConfig},
+		{Name: "daemon_service", Run: checkDaemonService},
 		{Name: "runtime_auth", Run: checkRuntimeAuth},
 		{Name: "blueprint_preflight", Run: checkBlueprintPreflight},
 		{Name: "pi_runtime", Run: checkPIRuntime},
@@ -110,6 +112,57 @@ func checkBlueprintPreflight(ctx context.Context) ([]validation.Finding, error) 
 		return nil, err
 	}
 	return []validation.Finding{{Status: validation.StatusPass, Source: string(effective.Blueprint.Source), Evidence: fmt.Sprintf("blueprint=%s requirements satisfied", effective.Blueprint.Value)}}, nil
+}
+
+func checkDaemonService(ctx context.Context) ([]validation.Finding, error) {
+	provider, err := doctorDaemonServiceProvider()
+	if err != nil {
+		return []validation.Finding{{
+			Status:   validation.StatusWarn,
+			Source:   "daemon_service",
+			Evidence: err.Error(),
+			Fix:      "use foreground daemon mode or configure a supported macOS launchd or Linux systemd user service",
+		}}, nil
+	}
+	status, err := provider.Status(ctx)
+	if err != nil {
+		return []validation.Finding{{
+			Status:   validation.StatusFail,
+			Source:   "daemon_service",
+			Evidence: err.Error(),
+			Fix:      "run tack daemon status or repair the daemon user service",
+		}}, nil
+	}
+
+	parts := []string{
+		"provider=" + status.Provider,
+		fmt.Sprintf("installed=%t", status.Installed),
+		fmt.Sprintf("enabled=%t", status.Enabled),
+		fmt.Sprintf("running=%t", status.Running),
+		fmt.Sprintf("healthy=%t", status.Healthy),
+	}
+	if status.Listen != "" {
+		parts = append(parts, "listen="+status.Listen)
+	}
+	if status.ConfigPath != "" {
+		parts = append(parts, "config="+status.ConfigPath)
+	}
+	if status.LogPath != "" {
+		parts = append(parts, "logs="+status.LogPath)
+	}
+	if len(status.Details) > 0 {
+		parts = append(parts, "details="+strings.Join(status.Details, " | "))
+	}
+
+	if !status.Installed || !status.Enabled || !status.Running || !status.Healthy {
+		return []validation.Finding{{
+			Status:   validation.StatusWarn,
+			Source:   "daemon_service",
+			Evidence: strings.Join(parts, " "),
+			Fix:      "run tack daemon install/start/status or use foreground daemon mode for development",
+		}}, nil
+	}
+	return []validation.Finding{{Status: validation.StatusPass, Source: "daemon_service", Evidence: strings.Join(parts, " ")}}, nil
 }
 
 func valueOrEmpty(value config.EffectiveString) string {

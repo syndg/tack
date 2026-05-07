@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/syndg/tack/internal/daemonservice"
 	"github.com/syndg/tack/internal/runtimecatalog"
 	"github.com/syndg/tack/internal/validation"
 )
@@ -17,6 +18,28 @@ import (
 type fakeDoctorRuntimeRunner struct {
 	paths map[string]string
 	out   map[string][]byte
+}
+
+type fakeDoctorDaemonService struct {
+	status daemonservice.Status
+	err    error
+}
+
+func (f fakeDoctorDaemonService) Install(context.Context) error { return nil }
+func (f fakeDoctorDaemonService) Start(context.Context) error   { return nil }
+func (f fakeDoctorDaemonService) Stop(context.Context) error    { return nil }
+func (f fakeDoctorDaemonService) Restart(context.Context) error { return nil }
+func (f fakeDoctorDaemonService) Reload(context.Context) error  { return nil }
+func (f fakeDoctorDaemonService) Status(context.Context) (daemonservice.Status, error) {
+	return f.status, f.err
+}
+
+func setDoctorDaemonService(t *testing.T, status daemonservice.Status, err error) {
+	t.Helper()
+	doctorDaemonServiceProvider = func() (daemonservice.Provider, error) {
+		return fakeDoctorDaemonService{status: status, err: err}, nil
+	}
+	t.Cleanup(func() { doctorDaemonServiceProvider = newDaemonServiceProvider })
 }
 
 func (f fakeDoctorRuntimeRunner) LookPath(name string) (string, error) {
@@ -55,6 +78,7 @@ func TestDoctorHumanOutput(t *testing.T) {
 	rootCmd.SetArgs([]string{"--config", projectConfig, "doctor"})
 	doctorRuntimeRunner = fakeDoctorRuntimeRunner{paths: map[string]string{"pi": "/tmp/pi"}, out: map[string][]byte{"pi --list-models": []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\n")}}
 	doctorDaemonCanSeePi = func(context.Context, string) (bool, string) { return true, "daemon can see Pi" }
+	setDoctorDaemonService(t, daemonservice.Status{Provider: "launchd", Installed: true, Enabled: true, Running: true, Healthy: true, Listen: "127.0.0.1:9900", ConfigPath: userConfig, LogPath: "/tmp/tack.log"}, nil)
 	t.Cleanup(func() {
 		rootCmd.SetArgs(nil)
 		doctorJSON = false
@@ -62,12 +86,13 @@ func TestDoctorHumanOutput(t *testing.T) {
 		doctorRuntimeRunner = runtimecatalog.ExecRunner{}
 		doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
 		doctorGitRemote = nil
+		doctorDaemonServiceProvider = newDaemonServiceProvider
 	})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("doctor: %v\nstderr: %s", err, stderr.String())
 	}
 	text := stdout.String()
-	for _, want := range []string{"[pass] project_config", "[pass] user_config", "[pass] global_setup", "agents.runtime=pi", "source: global", "models.agent=project-agent", "source: project_override", "quality_gates=bun test", "daemon.listen=127.0.0.1:9900", "[pass] pi_runtime"} {
+	for _, want := range []string{"[pass] project_config", "[pass] user_config", "[pass] global_setup", "agents.runtime=pi", "source: global", "models.agent=project-agent", "source: project_override", "quality_gates=bun test", "daemon.listen=127.0.0.1:9900", "[pass] daemon_service", "installed=true", "logs=/tmp/tack.log", "[pass] pi_runtime"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("doctor output missing %q:\n%s", want, text)
 		}
@@ -87,6 +112,7 @@ func TestDoctorJSONOutput(t *testing.T) {
 	rootCmd.SetArgs([]string{"doctor", "--json"})
 	doctorRuntimeRunner = fakeDoctorRuntimeRunner{paths: map[string]string{"npm": "/usr/bin/npm"}}
 	doctorDaemonCanSeePi = func(context.Context, string) (bool, string) { return false, "daemon not running" }
+	setDoctorDaemonService(t, daemonservice.Status{Provider: "systemd", Installed: true, Enabled: false, Running: false, Healthy: false, ConfigPath: userConfig, LogPath: "/tmp/tack.log"}, nil)
 	t.Cleanup(func() {
 		rootCmd.SetArgs(nil)
 		doctorJSON = false
@@ -94,6 +120,7 @@ func TestDoctorJSONOutput(t *testing.T) {
 		doctorRuntimeRunner = runtimecatalog.ExecRunner{}
 		doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
 		doctorGitRemote = nil
+		doctorDaemonServiceProvider = newDaemonServiceProvider
 	})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("doctor --json: %v\nstderr: %s", err, stderr.String())
@@ -102,8 +129,8 @@ func TestDoctorJSONOutput(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("Unmarshal doctor JSON: %v\n%s", err, stdout.String())
 	}
-	if len(report.Findings) != 19 {
-		t.Fatalf("findings = %d, want 19", len(report.Findings))
+	if len(report.Findings) != 20 {
+		t.Fatalf("findings = %d, want 20", len(report.Findings))
 	}
 	if report.Findings[0].Check != "project_config" || report.Findings[0].Status == "" {
 		t.Fatalf("first finding = %#v", report.Findings[0])
@@ -111,14 +138,17 @@ func TestDoctorJSONOutput(t *testing.T) {
 	if report.Findings[3].Check != "effective_config" || report.Findings[3].Source != "global" {
 		t.Fatalf("effective_config finding = %#v", report.Findings[3])
 	}
-	if report.Findings[15].Check != "runtime_auth" || report.Findings[15].Status == "" {
-		t.Fatalf("runtime_auth finding = %#v", report.Findings[15])
+	if report.Findings[15].Check != "daemon_service" || report.Findings[15].Status != validation.StatusWarn {
+		t.Fatalf("daemon_service finding = %#v", report.Findings[15])
 	}
-	if report.Findings[16].Check != "blueprint_preflight" || report.Findings[16].Status == "" {
-		t.Fatalf("blueprint_preflight finding = %#v", report.Findings[16])
+	if report.Findings[16].Check != "runtime_auth" || report.Findings[16].Status == "" {
+		t.Fatalf("runtime_auth finding = %#v", report.Findings[16])
 	}
-	if report.Findings[17].Check != "pi_runtime" || report.Findings[17].Status != validation.StatusFail {
-		t.Fatalf("pi_runtime finding = %#v", report.Findings[17])
+	if report.Findings[17].Check != "blueprint_preflight" || report.Findings[17].Status == "" {
+		t.Fatalf("blueprint_preflight finding = %#v", report.Findings[17])
+	}
+	if report.Findings[18].Check != "pi_runtime" || report.Findings[18].Status != validation.StatusFail {
+		t.Fatalf("pi_runtime finding = %#v", report.Findings[18])
 	}
 }
 
@@ -145,6 +175,7 @@ func TestDoctorChecksBlueprintPreflightRequirements(t *testing.T) {
 	doctorRuntimeRunner = fakeDoctorRuntimeRunner{paths: map[string]string{"pi": "/tmp/pi"}, out: map[string][]byte{"pi --list-models": []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\n")}}
 	doctorDaemonCanSeePi = func(context.Context, string) (bool, string) { return true, "daemon can see Pi" }
 	doctorGitRemote = func(context.Context, string) (string, error) { return "git@github.com:owner/repo.git", nil }
+	setDoctorDaemonService(t, daemonservice.Status{Provider: "launchd", Installed: true, Enabled: true, Running: true, Healthy: true, ConfigPath: userConfig}, nil)
 	t.Cleanup(func() {
 		rootCmd.SetArgs(nil)
 		doctorJSON = false
@@ -152,6 +183,7 @@ func TestDoctorChecksBlueprintPreflightRequirements(t *testing.T) {
 		doctorRuntimeRunner = runtimecatalog.ExecRunner{}
 		doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
 		doctorGitRemote = nil
+		doctorDaemonServiceProvider = newDaemonServiceProvider
 	})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("doctor --json: %v\nstderr: %s", err, stderr.String())
@@ -188,6 +220,7 @@ func TestDoctorFailsMissingEffectiveConfig(t *testing.T) {
 	rootCmd.SetArgs([]string{"doctor", "--json"})
 	doctorRuntimeRunner = fakeDoctorRuntimeRunner{paths: map[string]string{"npm": "/usr/bin/npm"}}
 	doctorDaemonCanSeePi = func(context.Context, string) (bool, string) { return false, "daemon not running" }
+	setDoctorDaemonService(t, daemonservice.Status{Provider: "systemd", Installed: false}, nil)
 	t.Cleanup(func() {
 		rootCmd.SetArgs(nil)
 		doctorJSON = false
@@ -195,6 +228,7 @@ func TestDoctorFailsMissingEffectiveConfig(t *testing.T) {
 		doctorRuntimeRunner = runtimecatalog.ExecRunner{}
 		doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
 		doctorGitRemote = nil
+		doctorDaemonServiceProvider = newDaemonServiceProvider
 	})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("doctor --json: %v\nstderr: %s", err, stderr.String())
@@ -227,6 +261,7 @@ func TestDoctorFailsIncompleteGlobalSetup(t *testing.T) {
 	rootCmd.SetArgs([]string{"doctor", "--json"})
 	doctorRuntimeRunner = fakeDoctorRuntimeRunner{paths: map[string]string{"npm": "/usr/bin/npm"}}
 	doctorDaemonCanSeePi = func(context.Context, string) (bool, string) { return false, "daemon not running" }
+	setDoctorDaemonService(t, daemonservice.Status{Provider: "systemd", Installed: false}, nil)
 	t.Cleanup(func() {
 		rootCmd.SetArgs(nil)
 		doctorJSON = false
@@ -234,6 +269,7 @@ func TestDoctorFailsIncompleteGlobalSetup(t *testing.T) {
 		doctorRuntimeRunner = runtimecatalog.ExecRunner{}
 		doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
 		doctorGitRemote = nil
+		doctorDaemonServiceProvider = newDaemonServiceProvider
 	})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("doctor --json: %v\nstderr: %s", err, stderr.String())
