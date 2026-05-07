@@ -61,6 +61,7 @@ func TestDoctorHumanOutput(t *testing.T) {
 		cfgPath = ""
 		doctorRuntimeRunner = runtimecatalog.ExecRunner{}
 		doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
+		doctorGitRemote = nil
 	})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("doctor: %v\nstderr: %s", err, stderr.String())
@@ -92,6 +93,7 @@ func TestDoctorJSONOutput(t *testing.T) {
 		cfgPath = ""
 		doctorRuntimeRunner = runtimecatalog.ExecRunner{}
 		doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
+		doctorGitRemote = nil
 	})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("doctor --json: %v\nstderr: %s", err, stderr.String())
@@ -100,8 +102,8 @@ func TestDoctorJSONOutput(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("Unmarshal doctor JSON: %v\n%s", err, stdout.String())
 	}
-	if len(report.Findings) != 18 {
-		t.Fatalf("findings = %d, want 18", len(report.Findings))
+	if len(report.Findings) != 19 {
+		t.Fatalf("findings = %d, want 19", len(report.Findings))
 	}
 	if report.Findings[0].Check != "project_config" || report.Findings[0].Status == "" {
 		t.Fatalf("first finding = %#v", report.Findings[0])
@@ -112,8 +114,64 @@ func TestDoctorJSONOutput(t *testing.T) {
 	if report.Findings[15].Check != "runtime_auth" || report.Findings[15].Status == "" {
 		t.Fatalf("runtime_auth finding = %#v", report.Findings[15])
 	}
-	if report.Findings[16].Check != "pi_runtime" || report.Findings[16].Status != validation.StatusFail {
-		t.Fatalf("pi_runtime finding = %#v", report.Findings[16])
+	if report.Findings[16].Check != "blueprint_preflight" || report.Findings[16].Status == "" {
+		t.Fatalf("blueprint_preflight finding = %#v", report.Findings[16])
+	}
+	if report.Findings[17].Check != "pi_runtime" || report.Findings[17].Status != validation.StatusFail {
+		t.Fatalf("pi_runtime finding = %#v", report.Findings[17])
+	}
+}
+
+func TestDoctorChecksBlueprintPreflightRequirements(t *testing.T) {
+	root := t.TempDir()
+	projectConfig := filepath.Join(root, ".tack", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(projectConfig), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(projectConfig, []byte("blueprint: standard\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile project config: %v", err)
+	}
+	userConfig := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\ndaemon:\n  listen: 127.0.0.1:9901\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile user config: %v", err)
+	}
+	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
+	t.Setenv("HOME", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetArgs([]string{"--config", projectConfig, "doctor", "--json"})
+	doctorRuntimeRunner = fakeDoctorRuntimeRunner{paths: map[string]string{"pi": "/tmp/pi"}, out: map[string][]byte{"pi --list-models": []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\n")}}
+	doctorDaemonCanSeePi = func(context.Context, string) (bool, string) { return true, "daemon can see Pi" }
+	doctorGitRemote = func(context.Context, string) (string, error) { return "git@github.com:owner/repo.git", nil }
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		doctorJSON = false
+		cfgPath = ""
+		doctorRuntimeRunner = runtimecatalog.ExecRunner{}
+		doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
+		doctorGitRemote = nil
+	})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("doctor --json: %v\nstderr: %s", err, stderr.String())
+	}
+	var report validation.Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("Unmarshal doctor JSON: %v\n%s", err, stdout.String())
+	}
+	var found validation.Finding
+	for _, finding := range report.Findings {
+		if finding.Check == "preflight.git_auth" {
+			found = finding
+			break
+		}
+	}
+	if found.Status != validation.StatusFail || found.Source != "blueprint_requirement" || !strings.Contains(found.Summary, "create_pr requires stored git credentials") || found.Details["blueprint_id"] != "standard" {
+		t.Fatalf("blueprint preflight finding = %#v", found)
+	}
+	if !report.Failed {
+		t.Fatalf("report.Failed = false, want true")
 	}
 }
 
@@ -136,6 +194,7 @@ func TestDoctorFailsMissingEffectiveConfig(t *testing.T) {
 		cfgPath = ""
 		doctorRuntimeRunner = runtimecatalog.ExecRunner{}
 		doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
+		doctorGitRemote = nil
 	})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("doctor --json: %v\nstderr: %s", err, stderr.String())
@@ -174,6 +233,7 @@ func TestDoctorFailsIncompleteGlobalSetup(t *testing.T) {
 		cfgPath = ""
 		doctorRuntimeRunner = runtimecatalog.ExecRunner{}
 		doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
+		doctorGitRemote = nil
 	})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("doctor --json: %v\nstderr: %s", err, stderr.String())

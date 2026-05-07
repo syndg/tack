@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/preflight"
 	"github.com/syndg/tack/internal/runtimeauth"
 	"github.com/syndg/tack/internal/runtimecatalog"
 	"github.com/syndg/tack/internal/validation"
@@ -17,6 +20,7 @@ var doctorJSON bool
 
 var doctorRuntimeRunner runtimecatalog.Runner = runtimecatalog.ExecRunner{}
 var doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
+var doctorGitRemote func(context.Context, string) (string, error)
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
@@ -43,9 +47,76 @@ func doctorChecks() []validation.Check {
 		{Name: "effective_config", Run: checkEffectiveConfig},
 		{Name: "daemon_config", Run: checkDaemonConfig},
 		{Name: "runtime_auth", Run: checkRuntimeAuth},
+		{Name: "blueprint_preflight", Run: checkBlueprintPreflight},
 		{Name: "pi_runtime", Run: checkPIRuntime},
 		{Name: "pi_daemon_visibility", Run: checkPIDaemonVisibility},
 	}
+}
+
+func checkBlueprintPreflight(ctx context.Context) ([]validation.Finding, error) {
+	projectPath, err := config.ResolveProjectConfig(cfgPath)
+	if err != nil {
+		return nil, err
+	}
+	if projectPath == "" {
+		return []validation.Finding{{Status: validation.StatusSkip, Source: "project", Evidence: "no project config found"}}, nil
+	}
+
+	effective, err := config.ResolveEffective(projectPath, userConfigPath())
+	if err != nil {
+		return nil, err
+	}
+	if !effective.Blueprint.Set {
+		return []validation.Finding{{Status: validation.StatusSkip, Source: string(config.ValueSourceMissing), Evidence: "blueprint is not set"}}, nil
+	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	reg := blueprint.NewRegistry()
+	if err := reg.LoadDefaults(); err != nil {
+		return nil, fmt.Errorf("loading shipped blueprints: %w", err)
+	}
+	if _, ok := reg.Get(effective.Blueprint.Value); !ok {
+		return []validation.Finding{{
+			Status:   validation.StatusFail,
+			Source:   string(effective.Blueprint.Source),
+			Evidence: fmt.Sprintf("blueprint=%s", effective.Blueprint.Value),
+			Fix:      "select a shipped blueprint or repair the project blueprint override",
+		}}, nil
+	}
+	store, err := loadCredentialsStore()
+	if err != nil {
+		return nil, err
+	}
+	checker := preflight.New(preflight.Options{
+		Blueprints:               registryBlueprintLookup{reg: reg},
+		ProjectRoot:              effective.ProjectRoot,
+		Credentials:              store,
+		RuntimeAuthMode:          valueOrEmpty(effective.AuthMode),
+		RuntimeAuthProvider:      valueOrEmpty(effective.Provider),
+		RuntimeAuthMethod:        valueOrEmpty(effective.AuthMethod),
+		RuntimeAuthCredentialRef: valueOrEmpty(effective.CredentialRef),
+		SandboxProvider:          valueOrEmpty(effective.SandboxProvider),
+		DaemonExternalURL:        cfg.Daemon.ExternalURL,
+		GitRemote:                doctorGitRemote,
+	})
+	if err := checker.Check(ctx, effective.Blueprint.Value); err != nil {
+		var failure preflight.Failure
+		if errors.As(err, &failure) {
+			return failure.Findings(), nil
+		}
+		return nil, err
+	}
+	return []validation.Finding{{Status: validation.StatusPass, Source: string(effective.Blueprint.Source), Evidence: fmt.Sprintf("blueprint=%s requirements satisfied", effective.Blueprint.Value)}}, nil
+}
+
+func valueOrEmpty(value config.EffectiveString) string {
+	if !value.Set {
+		return ""
+	}
+	return value.Value
 }
 
 func checkEffectiveConfig(ctx context.Context) ([]validation.Finding, error) {
