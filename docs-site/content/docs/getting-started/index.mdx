@@ -3,7 +3,7 @@ title: Installation
 description: Install Tack and set up your first project.
 ---
 
-## Recommended Install
+## Install Options
 
 Tack is distributed as a binary-first CLI. You do not need Go unless you want to build from source.
 
@@ -41,20 +41,20 @@ tack_Linux_x86_64.tar.gz
 
 ## Prerequisites
 
-Before installing Tack, make sure you have:
+Before using Tack, make sure these tools are available:
 
 | Requirement | Minimum Version | Why |
 |-------------|----------------|-----|
 | **Git** | 2.5+ | Worktree support, branch management |
-| **LLM API key** | — | At least one provider key (Anthropic, OpenAI, etc.) |
+| **LLM credential** | — | At least one provider credential or native runtime auth path |
 
 Optional:
 
 | Requirement | Why |
 |-------------|-----|
-| **Node.js / npm** | Required if using the Pi runtime (Tack installs Pi via npm in sandboxes) |
+| **Node.js / npm or Bun** | Required if selecting Pi and asking Tack to install it |
 | **Daytona account** | Required only for remote sandboxes |
-| **GitHub PAT** | Required for automatic PR creation |
+| **GitHub PAT** | Required only when the selected blueprint creates PRs on GitHub |
 
 If you build from source or install with `go install`, you also need Go `1.25.4+`.
 
@@ -103,9 +103,12 @@ Remove `<repo>/.tack/` from any project where you no longer want Tack config or 
 
 ## What Gets Installed
 
-Tack is a single binary. It does not install system services, background agents, or daemons automatically. You start the daemon explicitly when you want to use it:
+Tack is a single binary. `tack setup` can configure the daemon as a user service when you select that option. You can also run the daemon in the foreground:
 
 ```bash
+tack daemon install
+tack daemon start
+# or
 tack daemon
 ```
 
@@ -117,6 +120,38 @@ Runtime state lives in two places:
 | `<repo>/.tack/` | Per-project config, blueprints, rules, SQLite database |
 
 The `.tack/` directory is created by `tack init`. Sensitive files like `tack.db` and `project-id` are gitignored. Config, blueprints, and rules are intentionally committable so your team shares them.
+
+## Global Setup And Project Init
+
+Run global setup once per machine/user:
+
+```bash
+tack setup
+```
+
+`tack setup` records explicit global selections for daemon service mode, runtime, provider/auth binding, planner model, agent model, small-task model, sandbox provider, blueprint, and quality gates. It is resumable. Non-interactive runs must provide required inputs with flags, for example `--runtime`, `--provider`, `--auth-mode`, `--planner-model`, `--agent-model`, `--small-task-model`, `--sandbox-provider`, `--blueprint`, and repeated `--quality-gate` values.
+
+Run project init inside each repository:
+
+```bash
+cd your-project
+tack init
+```
+
+`tack init` requires completed global setup. It writes project-specific overrides only when selected, creates `.tack/project-id`, registers the project with the daemon, updates `.gitignore` for local Tack artifacts, and validates the effective configuration before keeping files. Setup and init summaries print each effective value with its source, such as `(source: global)` or `(source: project)`.
+
+Check readiness any time:
+
+```bash
+tack doctor
+tack doctor --json
+```
+
+`tack doctor` validates global setup, project config, daemon config, runtime/auth state, and Pi visibility where applicable. Findings include source, evidence, severity, and fix text.
+
+## PR Workflow Requirements
+
+PR requirements come from the selected blueprint. If the blueprint includes PR creation, Tack validates GitHub support and push permission before execution. PR creation is GitHub-only in this release scope; non-GitHub PR creation is reported as unsupported rather than using `gh` as a fallback.
 
 ## Next Steps
 

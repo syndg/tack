@@ -332,7 +332,7 @@ var authListCmd = &cobra.Command{
 
 var authTestCmd = &cobra.Command{
 	Use:   "test <provider>",
-	Short: "Verify a credential works",
+	Short: "Resolve a stored credential",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		provider := args[0]

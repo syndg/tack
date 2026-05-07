@@ -170,7 +170,7 @@ func (c *Checker) checkPullRequestCreation(ctx context.Context) []Problem {
 			Requirement: "git_auth",
 			Summary:     "create_pr requires stored git credentials for github.com",
 			Evidence:    "origin=" + remote,
-			Fix:         "tack auth add git",
+			Fix:         "tack auth add github",
 		}}
 	}
 	token, err := c.credentials.GitToken(host)
@@ -179,7 +179,7 @@ func (c *Checker) checkPullRequestCreation(ctx context.Context) []Problem {
 			Requirement: "git_auth",
 			Summary:     "create_pr requires stored git credentials for github.com",
 			Evidence:    fmt.Sprintf("origin=%s; %v", remote, err),
-			Fix:         "tack auth add git",
+			Fix:         "tack auth add github",
 		}}
 	}
 	return c.checkGitHubPushPermission(ctx, remote, owner, repo, token)
@@ -246,17 +246,17 @@ func (c *Checker) githubAuthenticatedLogin(ctx context.Context, token string) (s
 	var user githubUserResponse
 	status, body, err := c.githubGet(ctx, "/user", token, &user)
 	if err != nil {
-		return "", &Problem{Requirement: "git_auth", Summary: "create_pr could not validate the stored GitHub token", Evidence: err.Error(), Fix: "tack auth add git"}
+		return "", &Problem{Requirement: "git_auth", Summary: "create_pr could not validate the stored GitHub token", Evidence: err.Error(), Fix: "tack auth add github"}
 	}
 	if status < 200 || status >= 300 {
 		msg := strings.TrimSpace(user.Message)
 		if msg == "" {
 			msg = strings.TrimSpace(body)
 		}
-		return "", &Problem{Requirement: "git_auth", Summary: "create_pr requires a valid GitHub token", Evidence: fmt.Sprintf("github /user status=%d message=%s", status, msg), Fix: "tack auth add git"}
+		return "", &Problem{Requirement: "git_auth", Summary: "create_pr requires a valid GitHub token", Evidence: fmt.Sprintf("github /user status=%d message=%s", status, msg), Fix: "tack auth add github"}
 	}
 	if strings.TrimSpace(user.Login) == "" {
-		return "", &Problem{Requirement: "git_auth", Summary: "create_pr could not determine the GitHub token identity", Evidence: "github /user returned empty login", Fix: "tack auth add git"}
+		return "", &Problem{Requirement: "git_auth", Summary: "create_pr could not determine the GitHub token identity", Evidence: "github /user returned empty login", Fix: "tack auth add github"}
 	}
 	return strings.TrimSpace(user.Login), nil
 }

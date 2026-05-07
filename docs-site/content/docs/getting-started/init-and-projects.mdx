@@ -3,16 +3,49 @@ title: Init & Projects
 description: "Bootstrap Tack: initialize a repo, register it with the daemon, and understand project targeting."
 ---
 
-## The Current Model
+## Two-Layer Setup Model
 
 Tack runs as a **machine-wide daemon** with **project-scoped execution**.
 
-- User-level defaults live in `~/.config/tack/`
-- Repo-local config lives in `<repo>/.tack/`
+- Explicit global setup lives in `~/.config/tack/config.yaml`
+- Repo-local overrides live in `<repo>/.tack/config.yaml`
 - Each registered repo gets a stable `.tack/project-id`
 - CLI commands resolve the current project from your working directory
 
-## Recommended Bootstrap Path
+`tack setup` is global and resumable. `tack init` is per-project and all-or-nothing.
+
+## Global Setup
+
+Run global setup before initializing a project:
+
+```bash
+tack setup
+```
+
+Global setup records explicit selections for daemon service mode, daemon listen address, runtime, provider/auth binding, planner model, agent model, small-task model, sandbox provider, blueprint, and quality gates. It does not silently pick a provider, model, runtime, or workflow.
+
+For scripted setup, use `--non-interactive` with required flags. Missing inputs are reported together:
+
+```bash
+tack setup --non-interactive \
+  --daemon-service service \
+  --daemon-listen 127.0.0.1:9800 \
+  --runtime pi \
+  --provider openai-codex \
+  --auth-mode tack \
+  --auth-method oauth \
+  --credential-ref openai-codex \
+  --planner-model <model> \
+  --agent-model <model> \
+  --small-task-model <model> \
+  --sandbox-provider local \
+  --blueprint standard \
+  --quality-gate "go test ./..."
+```
+
+When Pi is selected and not installed, Tack can install it only after explicit consent with `--install-pi` and only when Bun or npm is available. Installing Node.js/npm is outside Tack's setup scope.
+
+## Project Init
 
 Run `tack init` inside your repository:
 
@@ -23,29 +56,42 @@ tack init
 
 ### What `tack init` Does
 
-The init command is an interactive wizard that sets up everything Tack needs for your project:
+The init command creates project state from explicit project choices and global fallbacks:
 
 1. **Creates `.tack/config.yaml`** — project-specific configuration
-2. **Agent runtime selection** — defaults to Pi, with Claude Code available only as a minimal compatibility option
-3. **LLM provider selection** — asks which provider (Anthropic, OpenAI, etc.) and validates the choice against your selected runtime
-4. **Authentication setup** — asks for API keys or initiates OAuth flows, stores them in `~/.config/tack/credentials.yaml`
+2. **Agent runtime selection** — project override or inherited global runtime
+3. **LLM provider selection** — project override or inherited global provider
+4. **Authentication setup** — API key or OAuth binding, stored in `~/.config/tack/credentials.yaml` when Tack manages credentials
 5. **Sandbox provider selection** — local (git worktrees) or Daytona (remote VMs)
-6. **Model selection** — default model, planner model, agent model, small tasks model
+6. **Model selection** — planner model, agent model, small-task model
 7. **Writes `.tack/project-id`** — a stable UUID that the daemon uses to identify this project
 8. **Updates `.gitignore`** — appends local runtime artifacts (`.tack/project-id`, `.tack/*.db`) while keeping config, blueprints, and rules committable
-9. **Registers with the daemon** — if the daemon is reachable, registers the project immediately
+9. **Registers with the daemon** — registers the project before init succeeds
 
-Every choice the wizard makes is validated. If you pick an incompatible combination (e.g., native auth with Daytona sandboxes), the wizard will tell you before proceeding.
+Every choice is validated before project files are kept. If validation or daemon registration fails, init removes partial `.tack` state created during the run.
 
-## Start the Daemon
+Init summaries print effective values with source labels. Values inherited from global setup are shown as global fallbacks; project selections are shown as project overrides.
 
-`tack daemon` reads the user config layer, not a per-project config file:
+## Daemon Service
+
+The daemon reads the user config layer, not a per-project config file. Foreground mode remains available:
 
 ```bash
 tack daemon
 ```
 
-The daemon starts in the foreground. Open a new terminal for CLI commands.
+User service commands are available on supported macOS launchd and Linux systemd-user systems:
+
+```bash
+tack daemon install
+tack daemon start
+tack daemon stop
+tack daemon restart
+tack daemon status
+tack daemon reload
+```
+
+`tack daemon status` reports provider, installed, enabled, running, healthy, listen address, config path, log path, and provider details.
 
 ## Project Commands
 
@@ -80,12 +126,12 @@ When you run a CLI command, Tack resolves the project from your current working 
 
 ## Auth Commands
 
-You can also manage credentials directly (outside of `tack init`):
+You can also manage credentials directly:
 
 ```bash
 tack auth add anthropic       # Add Anthropic API key
 tack auth add openai-codex    # Add OpenAI Codex credential
-tack auth add git             # Add git host PAT for PR creation
+tack auth add github          # Add GitHub PAT for GitHub PR workflows
 tack auth add daytona         # Add Daytona API key
 tack auth list                # Show all configured providers
 tack auth test anthropic      # Check that a stored credential resolves

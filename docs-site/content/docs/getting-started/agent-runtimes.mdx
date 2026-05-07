@@ -7,10 +7,10 @@ Tack does not implement its own AI agent. It orchestrates existing agent runtime
 
 ## Supported Runtimes
 
-| Runtime | Status | RPC | File Scope | Best For |
-|---------|--------|-----|------------|----------|
-| **Pi** | First-class | Yes (bidirectional JSON over stdin/stdout) | Enforced via tool_call hooks | Recommended path, production use |
-| **Claude Code** | Minimal | No (fire-and-forget) | Prompt-level guidance only | Legacy/advanced compatibility only |
+| Runtime | Status | RPC | File Scope |
+|---------|--------|-----|------------|
+| **Pi** | First-class | Yes (bidirectional JSON over stdin/stdout) | Enforced via tool_call hooks |
+| **Claude Code** | Minimal compatibility | No (fire-and-forget) | Prompt-level guidance only |
 
 ## Choosing a Runtime
 
@@ -18,7 +18,7 @@ Tack does not implement its own AI agent. It orchestrates existing agent runtime
 
 Pi is an open-source coding agent/runtime from the [pi-mono project](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent). It supports bidirectional JSON-RPC communication, which lets Tack enforce file scope boundaries at the tool level and exchange structured messages in real time.
 
-**Use Pi when:**
+**Pi provides:**
 - You want deterministic file scope enforcement (agents physically cannot edit files outside their scope)
 - You want real-time RPC communication for status updates and message exchange
 - You need per-step model control via Pi's provider system
@@ -42,13 +42,13 @@ agents:
     thinking_level: medium
 ```
 
-Pi installs automatically inside sandboxes via npm when it is not already present. Tack uploads a custom extension that provides tool-call hooks for file scope enforcement and structured message output.
+When Pi is selected during setup and missing, Tack can install it after explicit consent if Bun or npm is available. Tack uploads a custom extension that provides tool-call hooks for file scope enforcement and structured message output.
 
 ### Claude Code
 
-Claude Code is still supported, but only as a minimal compatibility path. Tack invokes it with a prompt and waits for it to finish. There is no bidirectional communication, and this path is not the primary tested/recommended runtime.
+Claude Code is supported as a minimal compatibility path. Tack invokes it with a prompt and waits for it to finish. There is no bidirectional communication.
 
-**Use Claude Code only when:**
+**Claude Code characteristics:**
 - You already depend on Claude Code in your own workflow
 - You understand the limitations versus Pi
 - You do not need first-class file-scope enforcement or RPC integration
@@ -77,11 +77,11 @@ Every runtime needs to authenticate with an LLM provider. Tack supports two mode
 
 See [Credentials & Auth](/docs/guides/credentials) for the full authentication setup, credential formats, and multi-provider configuration.
 
-## Setting Up During Init
+## Setting Up
 
-`tack init` walks you through runtime selection. It asks:
+`tack setup` records the global runtime selection. `tack init` can inherit that value or write a project override. The setup/init prompts ask:
 
-1. Which runtime to use (Pi by default; Claude Code is a minimal compatibility option)
+1. Which runtime to use
 2. Which provider to use (depends on runtime)
 3. Which authentication method (API key, OAuth)
 4. Whether to validate the combination
@@ -97,10 +97,12 @@ agents:
   runtime: pi
 ```
 
-Then restart the daemon:
+Then reload or restart the daemon if the change cannot be live-reloaded:
 
 ```bash
-tack daemon
+tack daemon reload
+# or
+tack daemon restart
 ```
 
 Existing objectives continue running with the runtime they started with. Only new objectives use the updated config.

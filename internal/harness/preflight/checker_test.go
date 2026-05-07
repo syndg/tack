@@ -33,7 +33,7 @@ func TestCheckCreatePRRequiresGitAuth(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing git auth error")
 	}
-	if !strings.Contains(err.Error(), "tack auth add git") {
+	if !strings.Contains(err.Error(), "tack auth add github") {
 		t.Fatalf("error = %q, want git auth fix", err.Error())
 	}
 }
@@ -90,7 +90,7 @@ func TestCheckCreatePRFailsWithoutGitHubToken(t *testing.T) {
 	})
 
 	err = checker.Check(context.Background(), "release")
-	if err == nil || !strings.Contains(err.Error(), "tack auth add git") || !strings.Contains(err.Error(), "origin=https://github.com/syndg/tack.git") {
+	if err == nil || !strings.Contains(err.Error(), "tack auth add github") || !strings.Contains(err.Error(), "origin=https://github.com/syndg/tack.git") {
 		t.Fatalf("error = %v, want token fix and origin evidence", err)
 	}
 }

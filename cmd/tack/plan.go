@@ -29,6 +29,6 @@ var planCmd = &cobra.Command{
 }
 
 func init() {
-	planCmd.Flags().StringVar(&planBlueprint, "blueprint", "", "blueprint to use (default: project default or only loaded default blueprint)")
+	planCmd.Flags().StringVar(&planBlueprint, "blueprint", "", "blueprint id to use for this objective")
 	rootCmd.AddCommand(planCmd)
 }

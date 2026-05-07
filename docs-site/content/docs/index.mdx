@@ -22,10 +22,12 @@ Objective completed. PR created: github.com/you/project/pull/42
 ## Quick Start
 
 ```bash
-git clone https://github.com/syndg/tack.git && cd tack && go build -o tack ./cmd/tack/
+tack setup
+tack daemon install
+tack daemon start
 cd your-project
-tack daemon &  # background the daemon
 tack init
+tack doctor
 tack plan "Add a health check endpoint at GET /health"
 ```
 

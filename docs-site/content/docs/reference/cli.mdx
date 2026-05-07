@@ -13,7 +13,10 @@ description: Complete reference for all Tack CLI commands.
 
 | Command | Description |
 |---------|-------------|
+| `tack setup` | Configure global Tack setup |
 | `tack daemon` | Start the machine-wide daemon |
+| `tack daemon install/start/stop/restart/status/reload` | Manage the daemon user service |
+| `tack doctor` | Validate Tack readiness |
 | `tack init` | Initialize the current repo for Tack |
 | `tack auth ...` | Manage provider, git, and sandbox credentials |
 | `tack project ...` | Manage registered projects |
@@ -47,14 +50,50 @@ tack daemon
 
 The daemon loads the **user config layer** from `~/.config/tack/config.yaml` by default.
 
+Service commands manage the supported user service provider:
+
+```bash
+tack daemon install
+tack daemon start
+tack daemon stop
+tack daemon restart
+tack daemon status
+tack daemon reload
+```
+
+`tack daemon status` prints installed, enabled, running, healthy, log path, config path, and listen address details.
+
 If you use remote Daytona sandboxes, set `daemon.external_url` in the user config so agents can call back into the daemon. Local sandboxes do not require this.
 
 ## tack init
 
-Bootstrap a repo with `.tack/config.yaml`, credentials, `.tack/project-id`, and project registration.
+Bootstrap a repo with `.tack/config.yaml`, credentials when needed, `.tack/project-id`, and daemon project registration. Requires completed `tack setup`.
 
 ```bash
 tack init
+tack init --non-interactive --runtime pi --provider openai-codex --auth-mode tack --auth-method oauth --credential-ref openai-codex
+```
+
+Project flags are overrides. Omitted values fall back to global setup and are reported with source labels in the init summary.
+
+## tack setup
+
+Configure global Tack setup for the current machine/user.
+
+```bash
+tack setup
+tack setup --non-interactive --daemon-service service --daemon-listen 127.0.0.1:9800 --runtime pi --provider openai-codex --auth-mode tack --auth-method oauth --credential-ref openai-codex --planner-model <model> --agent-model <model> --small-task-model <model> --sandbox-provider local --blueprint standard --quality-gate "go test ./..."
+```
+
+Setup records explicit global selections and is resumable. If Pi is selected and missing, installation requires explicit consent with `--install-pi` and a local Bun or npm executable.
+
+## tack doctor
+
+Validate global setup, project config, daemon config, runtime/auth state, and runtime visibility.
+
+```bash
+tack doctor
+tack doctor --json
 ```
 
 ## tack auth
@@ -63,13 +102,13 @@ Manage credentials in `~/.config/tack/credentials.yaml`.
 
 ```bash
 tack auth add openai-codex
-tack auth add git
+tack auth add github
 tack auth add daytona
 tack auth list
 tack auth test openai-codex
 ```
 
-`tack auth add openai-codex` prompts for API key vs OAuth. `tack auth test` currently checks that a stored credential resolves; it is not yet a full remote validation call.
+`tack auth add openai-codex` prompts for API key vs OAuth. `tack auth add github` stores a GitHub PAT for blueprints that create PRs. `tack auth test` checks that a stored credential resolves; it is not a full remote validation call.
 
 ## tack project
 

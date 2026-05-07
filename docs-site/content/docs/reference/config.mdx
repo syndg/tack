@@ -20,7 +20,7 @@ tack config get models.default # Show a specific value
 
 ## Complete Example
 
-This example shows a Pi runtime with local sandboxes — the best-supported and recommended configuration.
+This example shows one possible Pi runtime with local sandboxes.
 
 ```yaml
 daemon:
@@ -137,12 +137,12 @@ quality_gates:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `runtime` | string | `"pi"` | Agent runtime. `pi` is the recommended first-class option; `claude-code` remains available with minimal support. See [Agent Runtimes](/docs/getting-started/agent-runtimes). |
+| `runtime` | string | `"pi"` | Agent runtime. Supported values include `pi` and `claude-code`. See [Agent Runtimes](/docs/getting-started/agent-runtimes). |
 | `max_concurrent` | int | `8` | Maximum number of agent sessions running at the same time |
 | `max_depth` | int | `2` | Maximum nesting depth for blueprint references |
 | `stagger_delay_ms` | int | `500` | Milliseconds to wait between spawning concurrent agents |
 | `idle_timeout_minutes` | int | `15` | Coarse idle timeout. Overridden by per-role `timeouts` if set. |
-| `pi.provider` | string | `"anthropic"` | LLM provider for the Pi runtime. The recommended setup may override this to `openai-codex`. |
+| `pi.provider` | string | `"anthropic"` | LLM provider for the Pi runtime. |
 | `pi.model` | string | `""` | Model override for Pi. If empty, uses `models.default`. |
 | `pi.thinking_level` | string | `"medium"` | Pi thinking level: controls how much reasoning the model does |
 | `pi.extension_path` | string | `""` | Path to custom Pi extension directory. If empty, uses the embedded extension. |
@@ -218,7 +218,7 @@ Controls agent tool access globally. Also configurable per-blueprint-step and pe
 
 ### `quality_gates`
 
-List of shell commands. Each command runs in the sandbox. Non-zero exit means failure. The built-in default is the Go-oriented set shown below; many projects override it in `.tack/config.yaml`. Common configurations:
+List of shell commands. Each command runs in the sandbox. Non-zero exit means failure. Examples:
 
 **JavaScript/TypeScript:**
 

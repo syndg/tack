@@ -3,9 +3,9 @@ title: Configuration Guide
 description: A walkthrough of Tack's config sections and how to customize them.
 ---
 
-Tack uses a layered config system. You do not need to write config by hand — `tack init` generates it interactively. This page walks you through what each section does so you can customize it.
+Tack uses a layered config system. `tack setup` writes global selections and `tack init` writes project selections. This page walks through what each section does so you can inspect or customize it.
 
-For a complete field-by-field reference with all defaults, see the [Configuration Reference](/docs/reference/config).
+For a complete field-by-field reference, see the [Configuration Reference](/docs/reference/config).
 
 ## Config Layers
 
@@ -13,11 +13,11 @@ Tack merges config from three sources:
 
 | Layer | Location | What It Contains |
 |-------|----------|-----------------|
-| Built-in defaults | Embedded in the binary | Sensible defaults for everything |
-| User config | `~/.config/tack/config.yaml` | Machine-wide preferences |
-| Project config | `<repo>/.tack/config.yaml` | Per-repo settings |
+| Built-in values | Embedded in the binary | Baseline values used by the loader |
+| User config | `~/.config/tack/config.yaml` | Explicit global selections from `tack setup` |
+| Project config | `<repo>/.tack/config.yaml` | Explicit project overrides from `tack init` or config edits |
 
-Later layers override earlier ones. Most users only need a project config.
+Later layers override earlier ones. Effective config is computed when commands run; Tack does not persist a resolved copy.
 
 The daemon reads the **user layer** on startup. Project-scoped CLI commands read the **merged result**.
 
@@ -36,10 +36,10 @@ Controls where agents execute. The two options are local git worktrees and remot
 
 ```yaml
 sandbox:
-  provider: local  # best-supported option; use daytona for remote isolation
+  provider: local  # local git worktrees; daytona uses remote VMs
 ```
 
-Use `local` for development speed (agents run on your machine in separate worktrees). Use `daytona` for isolation (agents run in remote VMs).
+`local` runs agents on your machine in separate git worktrees. `daytona` runs agents in remote VMs.
 
 If you use Daytona, you also need to configure git credentials and optionally a snapshot:
 
@@ -72,7 +72,7 @@ Controls how agents run: which runtime, how many at once, and timeout limits.
 
 ```yaml
 agents:
-  runtime: pi               # recommended runtime; first-class support is Pi
+  runtime: pi               # or claude-code
   max_concurrent: 8          # Max parallel agents
   stagger_delay_ms: 500      # Delay between agent spawns
   timeouts:
@@ -105,7 +105,7 @@ models:
   small_tasks: gpt-5.4-mini
 ```
 
-- `default` — fallback for any role not explicitly set
+- `default` — fallback for any role not explicitly set in config
 - `agent` — builder and reviewer agents
 - `planner` — the planner agent
 - `small_tasks` — lightweight operations where a smaller model suffices
@@ -167,7 +167,7 @@ tack config set sandbox.provider local
 tack config remove sandbox.daytona.snapshot
 ```
 
-By default, `config set` writes to the project layer. Use `--user` to write to the user layer:
+`config set` writes to the project layer when run inside a project. Use `--user` to write to the user layer:
 
 ```bash
 tack config set --user agents.max_concurrent 8
@@ -189,8 +189,8 @@ After `tack init`, your project has this structure:
   rules/               # Project-specific rules (committable)
 ```
 
-Defaults also exist at the user layer under `~/.config/tack/`.
+Global setup state exists at the user layer under `~/.config/tack/`.
 
 ## Full Reference
 
-See the [Configuration Reference](/docs/reference/config) for every available option with default values.
+See the [Configuration Reference](/docs/reference/config) for every available option.

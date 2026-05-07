@@ -14,11 +14,11 @@ Daytona provides VM-level sandbox isolation. Each agent gets its own remote deve
 
 ## Configuration
 
-The easiest path is:
+Credential commands:
 
 ```bash
 tack auth add daytona
-tack auth add git
+tack auth add github
 ```
 
 If you manage the credentials file manually, the current structure is:
@@ -42,7 +42,7 @@ Configure your project to use Daytona:
 sandbox:
   provider: daytona
   daytona:
-    snapshot: "snap_123"   # optional but recommended
+    snapshot: "snap_123"   # optional snapshot id
 
 project_setup:
   commands:
