@@ -53,10 +53,16 @@ Tack respects dependencies at both execution time (scheduling) and merge time (m
 
 ## Stream Lifecycle
 
-```
-pending → executing → completed → merge_ready → merging → merged
-                  ↘                                        ↗
-                  failed ──────────── (retry) ── pending ─┘
+```mermaid
+flowchart LR
+  pending[Pending] --> executing[Executing]
+  executing --> completed[Completed]
+  completed --> ready[Merge ready]
+  ready --> merging[Merging]
+  merging --> merged[Merged]
+  executing --> failed[Failed]
+  failed --> retry[Retry]
+  retry --> pending
 ```
 
 ## See Also

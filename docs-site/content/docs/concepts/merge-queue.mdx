@@ -21,6 +21,23 @@ For each merge entry:
 
 The merge processor runs as a background loop. It checks for new entries every 30 seconds and also triggers immediately when a stream signals `merge_ready`.
 
+```mermaid
+flowchart TB
+  entry[Merge entry ready] --> deps{Dependencies merged?}
+  deps -->|no| wait[Wait in queue]
+  wait --> deps
+  deps -->|yes| clean[Try clean merge]
+  clean --> cleanResult{Clean?}
+  cleanResult -->|yes| gates[Post-merge gates]
+  cleanResult -->|no| auto[Try auto-resolve]
+  auto --> autoResult{Resolved?}
+  autoResult -->|yes| gates
+  autoResult -->|no| human[Human escalation]
+  gates --> passed{Gates pass?}
+  passed -->|yes| merged[Record merged]
+  passed -->|no| revert[Revert and mark failed]
+```
+
 ## Tiered Conflict Resolution
 
 When a merge encounters conflicts, Tack tries increasingly aggressive resolution strategies:

@@ -23,6 +23,21 @@ Gates run at two points in the pipeline:
 1. **After each builder agent finishes** — the `run_quality_gates` deterministic step in the `build-review` blueprint. This checks the stream's work before it moves to review.
 2. **After each merge** — post-merge gates run against the integrated result. This catches issues that only appear when streams are combined.
 
+```mermaid
+flowchart TB
+  builder[Builder finishes stream] --> streamGates[Run stream quality gates]
+  streamGates --> scope{Failure in stream scope?}
+  scope -->|no| review[Reviewer]
+  scope -->|yes| fix[Builder fix loop]
+  fix --> streamGates
+  review --> ready[Merge ready]
+  ready --> merge[Merge queue]
+  merge --> post[Run post-merge gates]
+  post --> integrated{Integrated result valid?}
+  integrated -->|yes| next[Advance queue]
+  integrated -->|no| revert[Revert merge and mark failed]
+```
+
 ## File Attribution
 
 Quality gates run against the **full project**, but Tack only fails a stream for errors in **its own files**.

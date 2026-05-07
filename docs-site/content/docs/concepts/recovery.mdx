@@ -11,12 +11,20 @@ When a step fails, Tack records a **recovery attempt** in a durable ledger. Each
 
 The recovery flow:
 
-```
-Step fails
-  → Tack records the failure (kind, context, attempt number)
-  → Tack decides what to do based on the failure kind and retry policy
-  → If retries remain: automatic recovery (rerun builder, retry step, etc.)
-  → If retries exhausted: run blocks for human guidance
+```mermaid
+flowchart TB
+  fail[Step fails] --> ledger[Record failure in recovery ledger]
+  ledger --> classify[Classify failure kind]
+  classify --> policy[Apply retry policy]
+  policy --> budget{Retries remain?}
+  budget -->|yes| automatic[Automatic recovery]
+  automatic --> rerun[Rerun step or builder]
+  rerun --> check{Recovered?}
+  check -->|yes| continue[Continue workflow]
+  check -->|no| ledger
+  budget -->|no| blocked[Block for human guidance]
+  blocked --> guidance[Operator sends guidance]
+  guidance --> automatic
 ```
 
 ## Failure Kinds and Actions

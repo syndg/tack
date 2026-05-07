@@ -7,6 +7,22 @@ description: How Tack isolates agents using sandboxes and how to choose between 
 
 Each agent works in its own isolated sandbox. Agents never see each other's changes during execution. This is fundamental to how Tack works:
 
+```mermaid
+flowchart TB
+  base[Base branch] --> sandboxA[Stream A sandbox]
+  base --> sandboxB[Stream B sandbox]
+  base --> sandboxC[Stream C sandbox]
+
+  sandboxA --> branchA[Stream A branch]
+  sandboxB --> branchB[Stream B branch]
+  sandboxC --> branchC[Stream C branch]
+
+  branchA --> merge[Merge queue]
+  branchB --> merge
+  branchC --> merge
+  merge --> integrated[Integrated result]
+```
+
 - **No interference** — one agent cannot break another agent's work in progress
 - **Clean state** — each sandbox starts from the same base branch, so agents work from a known state
 - **Deterministic merge** — integration is an explicit step, not an accident of timing

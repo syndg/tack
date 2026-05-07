@@ -7,30 +7,34 @@ description: The Tack pipeline from objective to PR.
 
 Tack takes an objective (a description of what you want built), plans how to break it into parallel work, executes each piece in isolation, checks quality, reviews the result, merges everything, and creates a PR.
 
-```
-Objective
-    │
-    ▼
-  Discovery ──► Context [Dossier](/docs/concepts/discovery) (cited repo context, suggested seams)
-    │
-    ▼
-  Planner ──► Plan (streams, file scopes, dependencies)
-    │
-    ▼
-  Human Approval
-    │
-    ▼
-  Dispatch ──► Parallel Agents in Isolated Sandboxes
-    │
-    ├── Work item 1: Build ──► Quality Gates ──► Review ──► Merge Ready
-    ├── Work item 2: Build ──► Quality Gates ──► Review ──► Merge Ready
-    └── Work item 3: Build ──► Quality Gates ──► Review ──► Merge Ready
-    │
-    ▼
-  Merge Queue ──► Post-Merge Gates ──► PR Created
-    │
-    ▼
-  Objective Complete
+```mermaid
+flowchart TB
+  objective[Objective] --> discovery[Discovery]
+  discovery --> dossier[Context dossier]
+  dossier --> planner[Planner]
+  planner --> plan[Plan: streams, scopes, dependencies]
+  plan --> approval[Human approval]
+  approval --> dispatch[Dispatch]
+
+  dispatch --> streamA[Stream A]
+  dispatch --> streamB[Stream B]
+  dispatch --> streamC[Stream C]
+
+  streamA --> gatesA[Quality gates]
+  streamB --> gatesB[Quality gates]
+  streamC --> gatesC[Quality gates]
+
+  gatesA --> reviewA[Review]
+  gatesB --> reviewB[Review]
+  gatesC --> reviewC[Review]
+
+  reviewA --> merge[Merge queue]
+  reviewB --> merge
+  reviewC --> merge
+
+  merge --> postMerge[Post-merge gates]
+  postMerge --> pr[Pull request]
+  pr --> complete[Objective complete]
 ```
 
 ## What Is Deterministic vs Agentic
