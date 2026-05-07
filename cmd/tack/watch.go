@@ -176,6 +176,8 @@ func formatWatchEvent(event domain.Event) string {
 	case domain.EventMergeQueued:
 		return fmt.Sprintf("%s [%s] %s", ts, stream, stringPayload(payload, "summary"))
 	case domain.EventMergeCompleted:
+		return fmt.Sprintf("%s [%s] %s", ts, stream, stringPayload(payload, "summary"))
+	case domain.EventMergePublished:
 		return fmt.Sprintf("%s [%s] %s ✓", ts, stream, stringPayload(payload, "summary"))
 	case domain.EventMergeFailed:
 		return fmt.Sprintf("%s [%s] %s", ts, stream, stringPayload(payload, "summary"))

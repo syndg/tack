@@ -1092,7 +1092,7 @@ func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (b
 					// Stream failed — move to failed.
 					delete(activeSet, event.Stream)
 					failed = append(failed, event.Stream)
-				case domain.EventAgentCompleted, domain.EventMergeCompleted:
+				case domain.EventAgentCompleted, domain.EventMergePublished:
 					// Re-check status to determine whether the stream still needs a top-level
 					// merge enqueue or is already fully merged.
 					stream, err := h.streams.Get(ctx, event.Stream)
@@ -1175,7 +1175,7 @@ func (h *Handlers) mergeQueue(ctx context.Context, exec *blueprint.Execution) (b
 				continue
 			}
 			switch event.Type {
-			case domain.EventMergeCompleted:
+			case domain.EventMergePublished:
 				delete(pending, event.Stream)
 			case domain.EventMergeFailed:
 				delete(pending, event.Stream)

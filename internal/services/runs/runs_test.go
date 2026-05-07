@@ -2433,7 +2433,7 @@ func TestRunCompletesPartialObjectiveAfterMergeEvent(t *testing.T) {
 	if err := svc.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	eventBus.Emit(domain.EventMergeCompleted, obj.ID, stream.ID, "")
+	eventBus.Emit(domain.EventMergePublished, obj.ID, stream.ID, "")
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {

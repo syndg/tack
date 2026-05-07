@@ -194,7 +194,7 @@ func (p *Processor) EnqueueStream(ctx context.Context, streamID string) error {
 	// merged), do not enqueue a duplicate.
 	if existing, err := p.queue.GetByStream(ctx, streamID); err == nil {
 		switch existing.Status {
-		case domain.MergeStatusPending, domain.MergeStatusMerging, domain.MergeStatusMerged:
+		case domain.MergeStatusPending, domain.MergeStatusMerging, domain.MergeStatusLocalMerged, domain.MergeStatusPublished, domain.MergeStatusMerged:
 			p.logger.Info("stream already queued for merge",
 				"stream_id", streamID,
 				"entry_id", existing.ID,
@@ -386,9 +386,38 @@ func (p *Processor) handleMergeSuccess(ctx context.Context, sb sandbox.Sandbox, 
 		diffJSON = string(fallback)
 	}
 
-	// Mark entry as merged.
-	if err := p.queue.UpdateStatus(ctx, entry.ID, domain.MergeStatusMerged, result.Tier, "", diffJSON); err != nil {
-		p.logger.Error("updating entry to merged", "entry", entry.ID, "error", err)
+	// Mark entry as locally merged before attempting remote publication.
+	if err := p.queue.UpdateStatus(ctx, entry.ID, domain.MergeStatusLocalMerged, result.Tier, "", diffJSON); err != nil {
+		p.logger.Error("updating entry to local_merged", "entry", entry.ID, "error", err)
+	}
+	p.publishMergeCompleted(ctx, sb, entry, result)
+
+	publishResult := p.pushMergeBranch(ctx, sb, entry.ObjectiveID)
+	if !publishResult.Success {
+		errMsg := publishResult.Error
+		if errMsg == "" {
+			errMsg = "publishing merge branch failed"
+		}
+		if err := p.queue.UpdateStatus(ctx, entry.ID, domain.MergeStatusPublicationFailed, result.Tier, errMsg, diffJSON); err != nil {
+			p.logger.Error("updating entry to publication_failed", "entry", entry.ID, "error", err)
+		}
+		if err := p.streams.UpdateStatus(ctx, entry.StreamID, domain.StreamStatusFailed); err != nil {
+			p.logger.Error("updating stream to failed after publication failure", "stream", entry.StreamID, "error", err)
+		}
+		p.publishMergeFailed(ctx, sb, entry, errMsg)
+		p.logger.Warn("merge branch publication failed",
+			"entry", entry.ID,
+			"stream", entry.StreamID,
+			"branch", entry.Branch,
+			"merge_branch", publishResult.Branch,
+			"head", publishResult.Head,
+			"error", errMsg,
+		)
+		return
+	}
+
+	if err := p.queue.UpdateStatus(ctx, entry.ID, domain.MergeStatusPublished, result.Tier, "", diffJSON); err != nil {
+		p.logger.Error("updating entry to published", "entry", entry.ID, "error", err)
 	}
 
 	// Mark stream as merged.
@@ -396,10 +425,9 @@ func (p *Processor) handleMergeSuccess(ctx context.Context, sb sandbox.Sandbox, 
 		p.logger.Error("updating stream to merged", "stream", entry.StreamID, "error", err)
 	}
 
-	p.pushMergeBranch(ctx, sb, entry.ObjectiveID)
 	p.deleteRemoteBranch(ctx, sb, entry.Branch)
 	p.publishNewlyReadyStreams(ctx, entry.PlanID)
-	p.publishMergeCompleted(entry, result)
+	p.publishMergePublished(entry, result, publishResult)
 
 	p.logger.Info("merge completed",
 		"entry", entry.ID,
@@ -568,7 +596,7 @@ func (p *Processor) handleMergeConflict(ctx context.Context, entry *domain.Merge
 	if err := p.streams.UpdateStatus(ctx, entry.StreamID, domain.StreamStatusFailed); err != nil {
 		p.logger.Error("updating stream to failed after conflict", "stream", entry.StreamID, "error", err)
 	}
-	p.publishMergeFailed(entry, result.Error)
+	p.publishMergeFailed(ctx, nil, entry, result.Error)
 	if attempt != nil && attempt.Status == domain.AttemptStatusBlocked {
 		p.publishRecoveryBlocked(entry, attempt)
 	}
@@ -603,7 +631,7 @@ func (p *Processor) failEntry(ctx context.Context, entry *domain.MergeEntry, tie
 	if err := p.streams.UpdateStatus(ctx, entry.StreamID, domain.StreamStatusFailed); err != nil {
 		p.logger.Error("updating stream to failed after merge failure", "stream", entry.StreamID, "error", err)
 	}
-	p.publishMergeFailed(entry, errMsg)
+	p.publishMergeFailed(ctx, nil, entry, errMsg)
 }
 
 func (p *Processor) recordRecoveryAttempt(ctx context.Context, entry *domain.MergeEntry, kind domain.FailureKind, errMsg string) (recovery.Decision, *domain.Attempt, error) {
@@ -817,7 +845,7 @@ func (p *Processor) checkDependencies(ctx context.Context, entry *domain.MergeEn
 			// No merge entry for the dependency yet — not satisfied.
 			return false, nil
 		}
-		if depEntry.Status != domain.MergeStatusMerged {
+		if depEntry.Status != domain.MergeStatusPublished && depEntry.Status != domain.MergeStatusMerged {
 			return false, nil
 		}
 	}
@@ -848,19 +876,45 @@ func (p *Processor) runPostMergeGates(ctx context.Context, sb sandbox.Sandbox, p
 	return p.gateRunner.Run(ctx, sb, gateList, false)
 }
 
-// publishMergeCompleted publishes an EventMergeCompleted event.
-func (p *Processor) publishMergeCompleted(entry *domain.MergeEntry, result *MergeResult) {
+// publishMergeCompleted publishes local merge completion, before remote publication.
+func (p *Processor) publishMergeCompleted(ctx context.Context, sb sandbox.Sandbox, entry *domain.MergeEntry, result *MergeResult) {
 	if p.obs != nil {
 		p.obs.RecordMilestone(observability.Milestone{
 			EventType:   domain.EventMergeCompleted,
 			ProjectID:   entry.ProjectID,
 			ObjectiveID: entry.ObjectiveID,
 			StreamID:    entry.StreamID,
-			Status:      "merged",
+			Status:      "local_merged",
 			Details: map[string]any{
 				"entry_id":      entry.ID,
 				"stream_id":     entry.StreamID,
 				"branch":        entry.Branch,
+				"merge_branch":  naming.MergeBranch(entry.ObjectiveID),
+				"head":          p.currentHead(ctx, sb),
+				"publication":   "pending",
+				"tier":          result.Tier,
+				"files_changed": result.FilesChanged,
+				"insertions":    result.Insertions,
+				"deletions":     result.Deletions,
+			},
+		})
+	}
+}
+
+func (p *Processor) publishMergePublished(entry *domain.MergeEntry, result *MergeResult, publishResult publicationResult) {
+	if p.obs != nil {
+		p.obs.RecordMilestone(observability.Milestone{
+			EventType:   domain.EventMergePublished,
+			ProjectID:   entry.ProjectID,
+			ObjectiveID: entry.ObjectiveID,
+			StreamID:    entry.StreamID,
+			Status:      "published",
+			Details: map[string]any{
+				"entry_id":      entry.ID,
+				"stream_id":     entry.StreamID,
+				"branch":        entry.Branch,
+				"merge_branch":  publishResult.Branch,
+				"head":          publishResult.Head,
 				"tier":          result.Tier,
 				"files_changed": result.FilesChanged,
 				"insertions":    result.Insertions,
@@ -871,7 +925,7 @@ func (p *Processor) publishMergeCompleted(entry *domain.MergeEntry, result *Merg
 }
 
 // publishMergeFailed publishes an EventMergeFailed event.
-func (p *Processor) publishMergeFailed(entry *domain.MergeEntry, errMsg string) {
+func (p *Processor) publishMergeFailed(ctx context.Context, sb sandbox.Sandbox, entry *domain.MergeEntry, errMsg string) {
 	if p.obs != nil {
 		p.obs.RecordMilestone(observability.Milestone{
 			EventType:   domain.EventMergeFailed,
@@ -880,10 +934,12 @@ func (p *Processor) publishMergeFailed(entry *domain.MergeEntry, errMsg string) 
 			StreamID:    entry.StreamID,
 			Status:      "failed",
 			Details: map[string]any{
-				"entry_id":  entry.ID,
-				"stream_id": entry.StreamID,
-				"branch":    entry.Branch,
-				"error":     errMsg,
+				"entry_id":     entry.ID,
+				"stream_id":    entry.StreamID,
+				"branch":       entry.Branch,
+				"merge_branch": naming.MergeBranch(entry.ObjectiveID),
+				"head":         p.currentHead(ctx, sb),
+				"error":        errMsg,
 			},
 		})
 	}
@@ -963,23 +1019,66 @@ func dependenciesMerged(stream domain.Stream, statusByID map[string]domain.Strea
 	return true
 }
 
-func (p *Processor) pushMergeBranch(ctx context.Context, sb sandbox.Sandbox, objectiveID string) {
+type publicationResult struct {
+	Success bool
+	Branch  string
+	Head    string
+	Error   string
+}
+
+func (p *Processor) pushMergeBranch(ctx context.Context, sb sandbox.Sandbox, objectiveID string) publicationResult {
 	branch := naming.MergeBranch(objectiveID)
+	result := publicationResult{Branch: branch, Head: p.currentHead(ctx, sb)}
+	remoteCheck, err := sb.Exec(ctx, "git remote get-url origin", sandbox.ExecOpts{})
+	if err != nil || remoteCheck.ExitCode != 0 {
+		result.Success = true
+		return result
+	}
 	pushCmd := fmt.Sprintf("git push -u origin %s", naming.ShellQuote("HEAD:refs/heads/"+branch))
 	verifyCmd := fmt.Sprintf("git ls-remote --exit-code --heads origin %s", naming.ShellQuote(branch))
 	for attempt := 1; attempt <= 2; attempt++ {
 		res, err := sb.Exec(ctx, pushCmd, sandbox.ExecOpts{})
 		if err != nil || res.ExitCode != 0 {
+			result.Error = actionablePublicationError("push", err, res)
 			p.logger.Warn("pushing merge branch", "branch", branch, "attempt", attempt, "error", err, "stderr", res.Stderr)
-			return
+			return result
 		}
 		verify, verifyErr := sb.Exec(ctx, verifyCmd, sandbox.ExecOpts{})
 		if verifyErr == nil && verify.ExitCode == 0 {
 			p.logger.Info("merge branch pushed", "branch", branch, "objective_id", objectiveID, "attempt", attempt)
-			return
+			result.Success = true
+			return result
 		}
+		result.Error = actionablePublicationError("verify", verifyErr, verify)
 		p.logger.Warn("merge branch push verification failed", "branch", branch, "attempt", attempt, "error", verifyErr, "stderr", verify.Stderr, "stdout", verify.Stdout)
 	}
+	return result
+}
+
+func (p *Processor) currentHead(ctx context.Context, sb sandbox.Sandbox) string {
+	if sb == nil {
+		return ""
+	}
+	res, err := sb.Exec(ctx, "git rev-parse HEAD", sandbox.ExecOpts{})
+	if err != nil || res.ExitCode != 0 {
+		return ""
+	}
+	return strings.TrimSpace(res.Stdout)
+}
+
+func actionablePublicationError(stage string, err error, res sandbox.ExecResult) string {
+	parts := []string{fmt.Sprintf("publishing merge branch failed during %s", stage)}
+	if err != nil {
+		parts = append(parts, err.Error())
+	}
+	stderr := strings.TrimSpace(res.Stderr)
+	stdout := strings.TrimSpace(res.Stdout)
+	if stderr != "" {
+		parts = append(parts, stderr)
+	} else if stdout != "" {
+		parts = append(parts, stdout)
+	}
+	return strings.Join(parts, ": ")
 }
 
 func (p *Processor) deleteRemoteBranch(ctx context.Context, sb sandbox.Sandbox, branch string) {

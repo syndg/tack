@@ -14,6 +14,7 @@ import (
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/harness/gates"
+	"github.com/syndg/tack/internal/naming"
 	"github.com/syndg/tack/internal/observability"
 	"github.com/syndg/tack/internal/sandbox"
 	events "github.com/syndg/tack/internal/services/events"
@@ -212,8 +213,8 @@ func TestProcessNext_RunsFinalBenchmarkValidationOnLastMerge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get merge entry: %v", err)
 	}
-	if got.Status != domain.MergeStatusMerged {
-		t.Fatalf("entry status = %q, want %q", got.Status, domain.MergeStatusMerged)
+	if got.Status != domain.MergeStatusPublished {
+		t.Fatalf("entry status = %q, want %q", got.Status, domain.MergeStatusPublished)
 	}
 	insights, err := f.insights.ListByObjective(ctx, obj.ID, 10)
 	if err != nil {
@@ -311,6 +312,27 @@ func listMergeAttempts(t *testing.T, f *processorFixture, streamID, mergeEntryID
 		return filtered[i].AttemptNumber < filtered[j].AttemptNumber
 	})
 	return filtered
+}
+
+func drainEvents(sub <-chan domain.Event) []domain.Event {
+	var events []domain.Event
+	for {
+		select {
+		case ev := <-sub:
+			events = append(events, ev)
+		default:
+			return events
+		}
+	}
+}
+
+func hasEventType(events []domain.Event, typ domain.EventType) bool {
+	for _, ev := range events {
+		if ev.Type == typ {
+			return true
+		}
+	}
+	return false
 }
 
 // createTestData inserts an objective, plan, and stream and returns their IDs.
@@ -457,6 +479,8 @@ func TestProcessNext_SuccessfulMerge(t *testing.T) {
 	f := setupProcessor(t)
 	ctx := context.Background()
 	objID, planID, streamID := createTestData(t, f)
+	sub, unsub := f.bus.Subscribe(10)
+	defer unsub()
 
 	// Configure sandbox to simulate successful merge.
 	f.sb.execFn = func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
@@ -493,13 +517,13 @@ func TestProcessNext_SuccessfulMerge(t *testing.T) {
 		t.Error("expected true — entry should be processed")
 	}
 
-	// Verify entry status is merged.
+	// Verify entry status is published after local merge and remote publication.
 	got, err := f.queue.Get(ctx, entry.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Status != domain.MergeStatusMerged {
-		t.Errorf("entry status = %q, want %q", got.Status, domain.MergeStatusMerged)
+	if got.Status != domain.MergeStatusPublished {
+		t.Errorf("entry status = %q, want %q", got.Status, domain.MergeStatusPublished)
 	}
 	if got.Tier != 1 {
 		t.Errorf("tier = %d, want 1", got.Tier)
@@ -512,6 +536,89 @@ func TestProcessNext_SuccessfulMerge(t *testing.T) {
 	}
 	if stream.Status != domain.StreamStatusMerged {
 		t.Errorf("stream status = %q, want %q", stream.Status, domain.StreamStatusMerged)
+	}
+
+	events := drainEvents(sub)
+	if !hasEventType(events, domain.EventMergeCompleted) {
+		t.Fatalf("events = %#v, want local merge completion event", events)
+	}
+	if !hasEventType(events, domain.EventMergePublished) {
+		t.Fatalf("events = %#v, want merge publication event", events)
+	}
+}
+
+func TestProcessNext_PublicationFailureKeepsLocalMergeRecoveryMetadata(t *testing.T) {
+	f := setupProcessor(t)
+	ctx := context.Background()
+	objID, planID, streamID := createTestData(t, f)
+	sub, unsub := f.bus.Subscribe(10)
+	defer unsub()
+
+	mergeBranch := naming.MergeBranch(objID)
+	head := "abc1234deadbeef"
+	f.sb.execFn = func(_ context.Context, cmd string, _ sandbox.ExecOpts) (sandbox.ExecResult, error) {
+		switch {
+		case cmd == "git fetch origin":
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		case cmd == "git merge --no-edit '"+streamID+"'":
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		case cmd == "git rev-parse HEAD":
+			return sandbox.ExecResult{ExitCode: 0, Stdout: head + "\n"}, nil
+		case strings.HasPrefix(cmd, "git push -u origin ") && strings.Contains(cmd, mergeBranch):
+			return sandbox.ExecResult{ExitCode: 128, Stderr: "ERROR: permission denied"}, nil
+		default:
+			return sandbox.ExecResult{ExitCode: 0}, nil
+		}
+	}
+
+	entry := &domain.MergeEntry{StreamID: streamID, PlanID: planID, ObjectiveID: objID, Branch: streamID}
+	f.queue.Enqueue(ctx, entry)
+
+	processed, err := f.processor.ProcessNext(ctx)
+	if err != nil {
+		t.Fatalf("ProcessNext: %v", err)
+	}
+	if !processed {
+		t.Fatal("expected entry to be processed")
+	}
+
+	got, err := f.queue.Get(ctx, entry.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != domain.MergeStatusPublicationFailed {
+		t.Fatalf("entry status = %q, want %q", got.Status, domain.MergeStatusPublicationFailed)
+	}
+	if !strings.Contains(got.Error, "permission denied") || !strings.Contains(got.Error, "publishing merge branch failed") {
+		t.Fatalf("entry error = %q, want actionable permission evidence", got.Error)
+	}
+	stream, err := f.streams.Get(ctx, streamID)
+	if err != nil {
+		t.Fatalf("Get stream: %v", err)
+	}
+	if stream.Status != domain.StreamStatusFailed {
+		t.Fatalf("stream status = %q, want failed", stream.Status)
+	}
+
+	events := drainEvents(sub)
+	if !hasEventType(events, domain.EventMergeCompleted) {
+		t.Fatalf("events = %#v, want local merge completion event", events)
+	}
+	if hasEventType(events, domain.EventMergePublished) {
+		t.Fatalf("events = %#v, did not want publication event after push failure", events)
+	}
+	var failed domain.Event
+	for _, ev := range events {
+		if ev.Type == domain.EventMergeFailed {
+			failed = ev
+			break
+		}
+	}
+	if failed.Type == "" {
+		t.Fatalf("events = %#v, want merge failed event", events)
+	}
+	if !strings.Contains(failed.Payload, mergeBranch) || !strings.Contains(failed.Payload, head) || !strings.Contains(failed.Payload, "permission denied") {
+		t.Fatalf("failed payload = %s, want branch, commit, permission evidence", failed.Payload)
 	}
 }
 

@@ -841,7 +841,7 @@ func (s *Service) Run(ctx context.Context) error {
 					s.syncRunStatus(ctx, event)
 					continue
 				}
-				if event.Type == domain.EventMergeCompleted && event.Objective != "" {
+				if event.Type == domain.EventMergePublished && event.Objective != "" {
 					s.completeMerge(ctx, event.Objective)
 					continue
 				}

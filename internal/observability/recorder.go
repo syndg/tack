@@ -298,7 +298,9 @@ func milestoneStatus(eventType domain.EventType, details map[string]any) string 
 	case domain.EventMergeQueued:
 		return "queued"
 	case domain.EventMergeCompleted:
-		return "merged"
+		return "local_merged"
+	case domain.EventMergePublished:
+		return "published"
 	case domain.EventMergeFailed:
 		return "failed"
 	case domain.EventEscalation:
@@ -349,7 +351,12 @@ func milestoneSummary(eventType domain.EventType, details map[string]any) string
 	case domain.EventMergeQueued:
 		return "merge queued"
 	case domain.EventMergeCompleted:
-		return "merged"
+		return "local merge completed"
+	case domain.EventMergePublished:
+		if branch := stringValue(details["merge_branch"]); branch != "" {
+			return fmt.Sprintf("merge branch published: %s", branch)
+		}
+		return "merge branch published"
 	case domain.EventMergeFailed:
 		return "merge failed"
 	case domain.EventEscalation:

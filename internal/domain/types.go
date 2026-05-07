@@ -377,11 +377,14 @@ func IsValidStreamTransition(from, to StreamStatus) bool {
 type MergeStatus string
 
 const (
-	MergeStatusPending  MergeStatus = "pending"
-	MergeStatusMerging  MergeStatus = "merging"
-	MergeStatusMerged   MergeStatus = "merged"
-	MergeStatusFailed   MergeStatus = "failed"
-	MergeStatusConflict MergeStatus = "conflict"
+	MergeStatusPending           MergeStatus = "pending"
+	MergeStatusMerging           MergeStatus = "merging"
+	MergeStatusLocalMerged       MergeStatus = "local_merged"
+	MergeStatusPublished         MergeStatus = "published"
+	MergeStatusPublicationFailed MergeStatus = "publication_failed"
+	MergeStatusMerged            MergeStatus = "merged"
+	MergeStatusFailed            MergeStatus = "failed"
+	MergeStatusConflict          MergeStatus = "conflict"
 )
 
 // MergeEntry represents a stream branch queued for merge.
@@ -675,6 +678,7 @@ const (
 	EventMailSent         EventType = "mail.sent"
 	EventMergeQueued      EventType = "merge.queued"
 	EventMergeCompleted   EventType = "merge.completed"
+	EventMergePublished   EventType = "merge.published"
 	EventMergeFailed      EventType = "merge.failed"
 	EventEscalation       EventType = "escalation"
 	EventStreamReady      EventType = "stream.ready"
