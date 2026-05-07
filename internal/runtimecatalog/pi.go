@@ -150,6 +150,63 @@ func ParsePiCatalog(output string) []ProviderCatalog {
 	return providers
 }
 
+func CatalogHasProvider(catalog []ProviderCatalog, provider string) bool {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return false
+	}
+	for _, entry := range catalog {
+		if entry.Provider == provider {
+			return true
+		}
+	}
+	return false
+}
+
+func CatalogHasModel(catalog []ProviderCatalog, provider, model string) bool {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" || model == "" {
+		return false
+	}
+	for _, entry := range catalog {
+		if entry.Provider != provider {
+			continue
+		}
+		for _, candidate := range entry.Models {
+			if candidate.ID == model {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func CatalogProviderNames(catalog []ProviderCatalog) []string {
+	names := make([]string, 0, len(catalog))
+	for _, entry := range catalog {
+		names = append(names, entry.Provider)
+	}
+	slices.Sort(names)
+	return names
+}
+
+func CatalogModelIDs(catalog []ProviderCatalog, provider string) []string {
+	for _, entry := range catalog {
+		if entry.Provider != provider {
+			continue
+		}
+		ids := make([]string, 0, len(entry.Models))
+		for _, model := range entry.Models {
+			ids = append(ids, model.ID)
+		}
+		slices.Sort(ids)
+		return ids
+	}
+	return nil
+}
+
 func DaemonCanSeePi(ctx context.Context, listen string) (bool, string) {
 	listen = normalizeListen(listen)
 	if listen == "" {

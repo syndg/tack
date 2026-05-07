@@ -144,6 +144,50 @@ func TestSetupGitHubTokenOnlyRequiredForPRBlueprint(t *testing.T) {
 	}
 }
 
+func TestValidateSetupStateFailsPiModelOutsideCatalog(t *testing.T) {
+	resetSetupTestState(t)
+	setupRuntimeRunner = fakeDoctorRuntimeRunner{
+		paths: map[string]string{"pi": "/tmp/pi"},
+		out:   map[string][]byte{"pi --list-models": []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\n")},
+	}
+	state := setupConfigFile{
+		Daemon:      config.DaemonConfig{Listen: "127.0.0.1:9900"},
+		Agents:      config.AgentsConfig{Runtime: "pi"},
+		RuntimeAuth: config.RuntimeAuthConfig{Provider: "anthropic", Mode: "native"},
+		Models:      config.ModelsConfig{Planner: "claude-opus-4-1", Agent: "missing-agent", SmallTasks: "claude-opus-4-1"},
+		Sandbox:     config.SandboxConfig{Provider: "local"},
+		Blueprint:   "custom-no-pr",
+		QualityGates: []string{
+			"go test ./...",
+		},
+	}
+	err := validateSetupState(context.Background(), state)
+	if err == nil || !strings.Contains(err.Error(), "agent model \"missing-agent\" is not in Pi catalog") {
+		t.Fatalf("validateSetupState error = %v", err)
+	}
+}
+
+func TestValidateSetupStateFailsPiProviderOutsideCatalog(t *testing.T) {
+	resetSetupTestState(t)
+	setupRuntimeRunner = fakeDoctorRuntimeRunner{
+		paths: map[string]string{"pi": "/tmp/pi"},
+		out:   map[string][]byte{"pi --list-models": []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\n")},
+	}
+	state := setupConfigFile{
+		Daemon:       config.DaemonConfig{Listen: "127.0.0.1:9900"},
+		Agents:       config.AgentsConfig{Runtime: "pi"},
+		RuntimeAuth:  config.RuntimeAuthConfig{Provider: "openai", Mode: "native"},
+		Models:       config.ModelsConfig{Planner: "gpt-5", Agent: "gpt-5", SmallTasks: "gpt-5"},
+		Sandbox:      config.SandboxConfig{Provider: "local"},
+		Blueprint:    "custom-no-pr",
+		QualityGates: []string{"go test ./..."},
+	}
+	err := validateSetupState(context.Background(), state)
+	if err == nil || !strings.Contains(err.Error(), "provider \"openai\" is not in Pi catalog") {
+		t.Fatalf("validateSetupState error = %v", err)
+	}
+}
+
 func resetSetupTestState(t *testing.T) {
 	t.Helper()
 	rootCmd.SetArgs(nil)

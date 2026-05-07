@@ -106,6 +106,25 @@ func TestProbePiReportsCatalogFailure(t *testing.T) {
 	}
 }
 
+func TestCatalogLookupHelpers(t *testing.T) {
+	catalog := []ProviderCatalog{
+		{Provider: "openai", Models: []Model{{ID: "gpt-5"}}},
+		{Provider: "anthropic", Models: []Model{{ID: "claude-opus-4-1"}, {ID: "claude-haiku"}}},
+	}
+	if !CatalogHasProvider(catalog, "anthropic") || CatalogHasProvider(catalog, "missing") {
+		t.Fatalf("provider lookup failed")
+	}
+	if !CatalogHasModel(catalog, "anthropic", "claude-haiku") || CatalogHasModel(catalog, "anthropic", "gpt-5") {
+		t.Fatalf("model lookup failed")
+	}
+	if got := CatalogProviderNames(catalog); !reflect.DeepEqual(got, []string{"anthropic", "openai"}) {
+		t.Fatalf("CatalogProviderNames = %v", got)
+	}
+	if got := CatalogModelIDs(catalog, "anthropic"); !reflect.DeepEqual(got, []string{"claude-haiku", "claude-opus-4-1"}) {
+		t.Fatalf("CatalogModelIDs = %v", got)
+	}
+}
+
 func TestDaemonCanSeePiReportsHealth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/health" {

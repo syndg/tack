@@ -317,8 +317,36 @@ func validateSetupState(ctx context.Context, state setupConfigFile) error {
 		if probe.CatalogError != "" {
 			return fmt.Errorf("setup validation failed: %s", probe.CatalogError)
 		}
+		if err := validatePiModelSelections(state.RuntimeAuth.Provider, state.Models, probe.Catalog); err != nil {
+			return fmt.Errorf("setup validation failed: %w", err)
+		}
 		if ok, evidence := setupDaemonCanSeePiFunc(ctx, state.Daemon.Listen); !ok {
 			return fmt.Errorf("setup validation failed: daemon cannot validate Pi visibility: %s", evidence)
+		}
+	}
+	return nil
+}
+
+func validatePiModelSelections(provider string, models config.ModelsConfig, catalog []runtimecatalog.ProviderCatalog) error {
+	provider = strings.TrimSpace(provider)
+	if !runtimecatalog.CatalogHasProvider(catalog, provider) {
+		available := strings.Join(runtimecatalog.CatalogProviderNames(catalog), ", ")
+		if available == "" {
+			available = "none"
+		}
+		return fmt.Errorf("provider %q is not in Pi catalog (available providers: %s)", provider, available)
+	}
+	for role, model := range map[string]string{
+		"planner":     models.Planner,
+		"agent":       models.Agent,
+		"small_tasks": models.SmallTasks,
+	} {
+		if !runtimecatalog.CatalogHasModel(catalog, provider, model) {
+			available := strings.Join(runtimecatalog.CatalogModelIDs(catalog, provider), ", ")
+			if available == "" {
+				available = "none"
+			}
+			return fmt.Errorf("%s model %q is not in Pi catalog for provider %q (available models: %s)", role, model, provider, available)
 		}
 	}
 	return nil

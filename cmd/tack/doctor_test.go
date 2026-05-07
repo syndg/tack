@@ -76,7 +76,7 @@ func TestDoctorHumanOutput(t *testing.T) {
 	rootCmd.SetOut(&stdout)
 	rootCmd.SetErr(&stderr)
 	rootCmd.SetArgs([]string{"--config", projectConfig, "doctor"})
-	doctorRuntimeRunner = fakeDoctorRuntimeRunner{paths: map[string]string{"pi": "/tmp/pi"}, out: map[string][]byte{"pi --list-models": []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\n")}}
+	doctorRuntimeRunner = fakeDoctorRuntimeRunner{paths: map[string]string{"pi": "/tmp/pi"}, out: map[string][]byte{"pi --list-models": []byte("provider model context max-out thinking images\nanthropic project-agent 200K 32K yes yes\nanthropic global-planner 200K 32K yes yes\nanthropic global-small 200K 32K yes yes\n")}}
 	doctorDaemonCanSeePi = func(context.Context, string) (bool, string) { return true, "daemon can see Pi" }
 	setDoctorDaemonService(t, daemonservice.Status{Provider: "launchd", Installed: true, Enabled: true, Running: true, Healthy: true, Listen: "127.0.0.1:9900", ConfigPath: userConfig, LogPath: "/tmp/tack.log"}, nil)
 	t.Cleanup(func() {
@@ -92,7 +92,7 @@ func TestDoctorHumanOutput(t *testing.T) {
 		t.Fatalf("doctor: %v\nstderr: %s", err, stderr.String())
 	}
 	text := stdout.String()
-	for _, want := range []string{"[pass] project_config", "[pass] user_config", "[pass] global_setup", "agents.runtime=pi", "source: global", "models.agent=project-agent", "source: project_override", "quality_gates=bun test", "daemon.listen=127.0.0.1:9900", "[pass] daemon_service", "installed=true", "logs=/tmp/tack.log", "[pass] pi_runtime"} {
+	for _, want := range []string{"[pass] project_config", "[pass] user_config", "[pass] global_setup", "agents.runtime=pi", "source: global", "models.agent=project-agent", "source: project_override", "quality_gates=bun test", "daemon.listen=127.0.0.1:9900", "[pass] daemon_service", "installed=true", "logs=/tmp/tack.log", "[pass] pi_runtime", "[pass] pi_model_catalog"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("doctor output missing %q:\n%s", want, text)
 		}
@@ -129,8 +129,8 @@ func TestDoctorJSONOutput(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("Unmarshal doctor JSON: %v\n%s", err, stdout.String())
 	}
-	if len(report.Findings) != 20 {
-		t.Fatalf("findings = %d, want 20", len(report.Findings))
+	if len(report.Findings) != 21 {
+		t.Fatalf("findings = %d, want 21", len(report.Findings))
 	}
 	if report.Findings[0].Check != "project_config" || report.Findings[0].Status == "" {
 		t.Fatalf("first finding = %#v", report.Findings[0])
@@ -149,6 +149,51 @@ func TestDoctorJSONOutput(t *testing.T) {
 	}
 	if report.Findings[18].Check != "pi_runtime" || report.Findings[18].Status != validation.StatusFail {
 		t.Fatalf("pi_runtime finding = %#v", report.Findings[18])
+	}
+	if report.Findings[19].Check != "pi_model_catalog" || report.Findings[19].Status != validation.StatusSkip {
+		t.Fatalf("pi_model_catalog finding = %#v", report.Findings[19])
+	}
+}
+
+func TestDoctorFailsPiModelOutsideCatalog(t *testing.T) {
+	userConfig := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\ndaemon:\n  listen: 127.0.0.1:9901\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: missing-agent\n  planner: claude-opus-4-1\n  small_tasks: claude-haiku\nsandbox:\n  provider: local\nblueprint: custom-no-pr\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile user config: %v", err)
+	}
+	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
+
+	var stdout, stderr bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetArgs([]string{"doctor", "--json"})
+	doctorRuntimeRunner = fakeDoctorRuntimeRunner{paths: map[string]string{"pi": "/tmp/pi"}, out: map[string][]byte{"pi --list-models": []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\nanthropic claude-haiku 200K 32K yes yes\n")}}
+	doctorDaemonCanSeePi = func(context.Context, string) (bool, string) { return true, "daemon can see Pi" }
+	setDoctorDaemonService(t, daemonservice.Status{Provider: "launchd", Installed: true, Enabled: true, Running: true, Healthy: true, ConfigPath: userConfig}, nil)
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		doctorJSON = false
+		cfgPath = ""
+		doctorRuntimeRunner = runtimecatalog.ExecRunner{}
+		doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
+		doctorGitRemote = nil
+		doctorDaemonServiceProvider = newDaemonServiceProvider
+	})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("doctor --json: %v\nstderr: %s", err, stderr.String())
+	}
+	var report validation.Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("Unmarshal doctor JSON: %v\n%s", err, stdout.String())
+	}
+	var found validation.Finding
+	for _, finding := range report.Findings {
+		if finding.Check == "pi_model_catalog" {
+			found = finding
+			break
+		}
+	}
+	if found.Status != validation.StatusFail || !strings.Contains(found.Evidence, "models.agent=missing-agent") || !strings.Contains(found.Fix, "Pi model catalog") {
+		t.Fatalf("pi_model_catalog finding = %#v", found)
 	}
 }
 

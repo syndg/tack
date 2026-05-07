@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -51,6 +52,7 @@ func doctorChecks() []validation.Check {
 		{Name: "runtime_auth", Run: checkRuntimeAuth},
 		{Name: "blueprint_preflight", Run: checkBlueprintPreflight},
 		{Name: "pi_runtime", Run: checkPIRuntime},
+		{Name: "pi_model_catalog", Run: checkPIModelCatalog},
 		{Name: "pi_daemon_visibility", Run: checkPIDaemonVisibility},
 	}
 }
@@ -364,6 +366,112 @@ func checkPIDaemonVisibility(ctx context.Context) ([]validation.Finding, error) 
 		}}, nil
 	}
 	return []validation.Finding{{Status: validation.StatusPass, Source: "daemon_service", Evidence: evidence}}, nil
+}
+
+func checkPIModelCatalog(ctx context.Context) ([]validation.Finding, error) {
+	projectPath, err := config.ResolveProjectConfig(cfgPath)
+	if err != nil {
+		return nil, err
+	}
+	effective, err := config.ResolveEffective(projectPath, userConfigPath())
+	if err != nil {
+		return nil, err
+	}
+	if !effective.Runtime.Set || effective.Runtime.Value != "pi" {
+		evidence := "agents.runtime is not set"
+		if effective.Runtime.Set {
+			evidence = "agents.runtime=" + effective.Runtime.Value
+		}
+		return []validation.Finding{{Status: validation.StatusSkip, Source: string(effective.Runtime.Source), Evidence: evidence}}, nil
+	}
+	missing := missingPiModelCatalogInputs(effective)
+	if len(missing) > 0 {
+		return []validation.Finding{{
+			Status:   validation.StatusSkip,
+			Source:   string(config.ValueSourceMissing),
+			Evidence: "missing " + strings.Join(missing, ", "),
+			Fix:      "run tack setup or set explicit project provider and model overrides with tack init",
+		}}, nil
+	}
+
+	probe := runtimecatalog.ProbePi(ctx, doctorRuntimeRunner)
+	if !probe.Installed {
+		return []validation.Finding{{
+			Status:   validation.StatusSkip,
+			Source:   "environment",
+			Evidence: "pi executable was not found in PATH",
+			Fix:      "install Pi before validating Pi model selections",
+		}}, nil
+	}
+	if probe.CatalogError != "" {
+		return []validation.Finding{{
+			Status:   validation.StatusFail,
+			Source:   "pi",
+			Evidence: probe.CatalogError,
+			Fix:      "repair Pi installation or choose models after pi --list-models succeeds",
+		}}, nil
+	}
+	if !runtimecatalog.CatalogHasProvider(probe.Catalog, effective.Provider.Value) {
+		available := strings.Join(runtimecatalog.CatalogProviderNames(probe.Catalog), ", ")
+		if available == "" {
+			available = "none"
+		}
+		return []validation.Finding{{
+			Status:   validation.StatusFail,
+			Source:   string(effective.Provider.Source),
+			Evidence: fmt.Sprintf("provider=%s available_providers=%s", effective.Provider.Value, available),
+			Fix:      "select a provider from the Pi model catalog",
+		}}, nil
+	}
+	modelFields := []struct {
+		name  string
+		value config.EffectiveString
+	}{
+		{name: "models.planner", value: effective.PlannerModel},
+		{name: "models.agent", value: effective.AgentModel},
+		{name: "models.small_tasks", value: effective.SmallTaskModel},
+	}
+	for _, field := range modelFields {
+		if !runtimecatalog.CatalogHasModel(probe.Catalog, effective.Provider.Value, field.value.Value) {
+			available := strings.Join(runtimecatalog.CatalogModelIDs(probe.Catalog, effective.Provider.Value), ", ")
+			if available == "" {
+				available = "none"
+			}
+			return []validation.Finding{{
+				Status:   validation.StatusFail,
+				Source:   string(field.value.Source),
+				Evidence: fmt.Sprintf("%s=%s provider=%s available_models=%s", field.name, field.value.Value, effective.Provider.Value, available),
+				Fix:      "select models from the Pi model catalog for the configured provider",
+			}}, nil
+		}
+	}
+	return []validation.Finding{{
+		Status: validation.StatusPass,
+		Source: "pi",
+		Evidence: fmt.Sprintf(
+			"provider=%s planner=%s agent=%s small_tasks=%s",
+			effective.Provider.Value,
+			effective.PlannerModel.Value,
+			effective.AgentModel.Value,
+			effective.SmallTaskModel.Value,
+		),
+	}}, nil
+}
+
+func missingPiModelCatalogInputs(effective *config.EffectiveConfig) []string {
+	var missing []string
+	for field, value := range map[string]config.EffectiveString{
+		"runtime_auth.provider": effective.Provider,
+		"models.planner":        effective.PlannerModel,
+		"models.agent":          effective.AgentModel,
+		"models.small_tasks":    effective.SmallTaskModel,
+	} {
+		if !value.Set {
+			missing = append(missing, field)
+		}
+	}
+	slices.Sort(missing)
+	return missing
 }
 
 func checkUserConfig(ctx context.Context) ([]validation.Finding, error) {
