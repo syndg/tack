@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/google/uuid"
@@ -36,6 +38,7 @@ var (
 	initQualityGates    []string
 	initSetupCommands   []string
 	initSetupVerify     []string
+	initGateRunner      = runInitQualityGate
 )
 
 func init() {
@@ -667,6 +670,9 @@ func validateProjectInit(ctx context.Context, root string, global setupConfigFil
 	if len(missing) > 0 {
 		return fmt.Errorf("project init validation failed: missing %s", strings.Join(missing, ", "))
 	}
+	if err := validateInitQualityGates(ctx, root, merged.QualityGates); err != nil {
+		return err
+	}
 
 	reg := blueprint.NewRegistry()
 	if err := reg.LoadDefaults(); err != nil {
@@ -692,6 +698,38 @@ func validateProjectInit(ctx context.Context, root string, global setupConfigFil
 		if err := checker.Check(ctx, merged.Blueprint); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateInitQualityGates(ctx context.Context, root string, gates []string) error {
+	for i, gate := range gates {
+		gate = strings.TrimSpace(gate)
+		if gate == "" {
+			continue
+		}
+		if err := initGateRunner(ctx, root, gate); err != nil {
+			return fmt.Errorf("project init validation failed: quality_gates[%d] %q failed: %w", i, gate, err)
+		}
+	}
+	return nil
+}
+
+func runInitQualityGate(ctx context.Context, root, command string) error {
+	gateCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(gateCtx, "sh", "-c", command)
+	cmd.Dir = root
+	output, err := cmd.CombinedOutput()
+	if gateCtx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("timed out after 2m")
+	}
+	if err != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail == "" {
+			detail = err.Error()
+		}
+		return fmt.Errorf("%s", detail)
 	}
 	return nil
 }

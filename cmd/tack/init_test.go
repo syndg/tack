@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -109,6 +111,7 @@ func TestInitValidationFailureWritesNoProjectState(t *testing.T) {
 	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
 	t.Chdir(root)
 	resetInitTestState(t)
+	initGateRunner = func(context.Context, string, string) error { return nil }
 	writeInitUserConfig(t, userConfig, setupConfigFile{
 		Setup:       config.SetupConfig{Complete: true},
 		Daemon:      config.DaemonConfig{Listen: "127.0.0.1:9900"},
@@ -131,12 +134,48 @@ func TestInitValidationFailureWritesNoProjectState(t *testing.T) {
 	}
 }
 
+func TestInitQualityGateFailureWritesNoProjectState(t *testing.T) {
+	root := t.TempDir()
+	userConfig := filepath.Join(root, "user.yaml")
+	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
+	t.Chdir(root)
+	resetInitTestState(t)
+	initGateRunner = func(_ context.Context, _ string, command string) error {
+		if command == "bad gate" {
+			return fmt.Errorf("command not found")
+		}
+		return nil
+	}
+	writeInitUserConfig(t, userConfig, setupConfigFile{
+		Setup:        config.SetupConfig{Complete: true},
+		Daemon:       config.DaemonConfig{Listen: "127.0.0.1:9900"},
+		Agents:       config.AgentsConfig{Runtime: "claude-code"},
+		RuntimeAuth:  config.RuntimeAuthConfig{Runtime: "claude-code", Provider: "anthropic", Mode: "native"},
+		Models:       config.ModelsConfig{Planner: "planner", Agent: "agent", SmallTasks: "small"},
+		Sandbox:      config.SandboxConfig{Provider: "local"},
+		Blueprint:    "custom-no-pr",
+		QualityGates: []string{"bad gate"},
+	})
+
+	rootCmd.SetOut(&strings.Builder{})
+	rootCmd.SetErr(&strings.Builder{})
+	rootCmd.SetArgs([]string{"init", "--non-interactive"})
+	err := rootCmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "quality_gates[0] \"bad gate\" failed") {
+		t.Fatalf("init error = %v, want quality gate failure", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".tack")); !os.IsNotExist(statErr) {
+		t.Fatalf(".tack exists after failed init: %v", statErr)
+	}
+}
+
 func TestInitRegistersProjectAndReportsSources(t *testing.T) {
 	root := t.TempDir()
 	userConfig := filepath.Join(root, "user.yaml")
 	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
 	t.Chdir(root)
 	resetInitTestState(t)
+	initGateRunner = func(context.Context, string, string) error { return nil }
 	writeInitUserConfig(t, userConfig, setupConfigFile{
 		Setup:        config.SetupConfig{Complete: true},
 		Daemon:       config.DaemonConfig{Listen: "127.0.0.1:9900"},
@@ -224,10 +263,12 @@ func resetInitTestState(t *testing.T) {
 	initQualityGates = nil
 	initSetupCommands = nil
 	initSetupVerify = nil
+	initGateRunner = runInitQualityGate
 	t.Cleanup(func() {
 		rootCmd.SetArgs(nil)
 		cfgPath = ""
 		daemonURL = defaultDaemonURL
 		projectID = ""
+		initGateRunner = runInitQualityGate
 	})
 }
