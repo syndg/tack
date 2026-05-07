@@ -12,7 +12,7 @@ export async function Mermaid({ chart }: { chart: string }) {
 
     return (
       <div
-        className="not-prose my-6 overflow-x-auto rounded-xl border bg-fd-card p-4"
+        className="not-prose my-6 overflow-x-auto rounded-xl border bg-fd-card p-4 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-none md:[&_svg]:max-w-full"
         dangerouslySetInnerHTML={{ __html: svg }}
       />
     );

@@ -34,13 +34,14 @@ See the [getting started guide](/docs/getting-started) for the full walkthrough.
 ## How It Works
 
 ```mermaid
-flowchart TB
+flowchart LR
   objective[Objective] --> discovery[Discovery dossier]
   discovery --> planner[Planner creates stream plan]
   planner --> approval[Human approval]
-  approval --> dispatch[Dispatch parallel streams]
+  approval --> dispatch[Dispatch streams]
 
   subgraph streams[Isolated stream execution]
+    direction TB
     builder[Builder agents]
     gates[Quality gates]
     reviewer[Reviewer agents]
