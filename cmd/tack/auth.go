@@ -293,6 +293,8 @@ func noteAuthReload(ctx context.Context) {
 	}
 	if err := notifyDaemonAuthChanged(ctx); err == nil {
 		fmt.Println("Triggered daemon reload")
+	} else {
+		fmt.Printf("Daemon reload failed; restart required: %v\n", err)
 	}
 }
 

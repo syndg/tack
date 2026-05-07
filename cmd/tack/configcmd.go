@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -12,6 +13,14 @@ import (
 
 var configUser bool
 var configProject bool
+
+var notifyDaemonConfigChanged = func(ctx context.Context) error {
+	provider, err := newDaemonServiceProvider()
+	if err != nil {
+		return err
+	}
+	return provider.Reload(ctx)
+}
 
 func init() {
 	configCmd.PersistentFlags().BoolVar(&configUser, "user", false, "target user config (~/.config/tack/config.yaml)")
@@ -50,7 +59,11 @@ var configSetCmd = &cobra.Command{
 
 		setNestedValue(data, args[0], args[1])
 
-		return writeYAMLMap(path, data)
+		if err := writeYAMLMap(path, data); err != nil {
+			return err
+		}
+		noteConfigReload(cmd.Context())
+		return nil
 	},
 }
 
@@ -148,8 +161,23 @@ var configRemoveCmd = &cobra.Command{
 
 		removeNestedValue(data, args[0])
 
-		return writeYAMLMap(path, data)
+		if err := writeYAMLMap(path, data); err != nil {
+			return err
+		}
+		noteConfigReload(cmd.Context())
+		return nil
 	},
+}
+
+func noteConfigReload(ctx context.Context) {
+	if notifyDaemonConfigChanged == nil {
+		return
+	}
+	if err := notifyDaemonConfigChanged(ctx); err == nil {
+		fmt.Println("Triggered daemon reload")
+	} else {
+		fmt.Printf("Daemon reload failed; restart required: %v\n", err)
+	}
 }
 
 // targetConfigPath returns the path for write operations (set/remove).
