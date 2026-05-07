@@ -26,6 +26,7 @@ const ProjectIDFileName = "project-id"
 const DefaultBaseBranch = "main"
 
 type Config struct {
+	Setup        SetupConfig        `yaml:"setup"`
 	Daemon       DaemonConfig       `yaml:"daemon"`
 	Sandbox      SandboxConfig      `yaml:"sandbox"`
 	Blueprint    string             `yaml:"blueprint,omitempty"`
@@ -40,6 +41,15 @@ type Config struct {
 	Git          GitConfig          `yaml:"git"`
 	QualityGates []string           `yaml:"quality_gates"`
 	ProjectRoot  string             `yaml:"-" json:"-"`
+}
+
+type SetupConfig struct {
+	Complete bool                  `yaml:"complete"`
+	Phases   map[string]SetupPhase `yaml:"phases,omitempty"`
+}
+
+type SetupPhase struct {
+	Complete bool `yaml:"complete"`
 }
 
 type DaemonConfig struct {
