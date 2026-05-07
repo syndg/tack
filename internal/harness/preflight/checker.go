@@ -2,8 +2,11 @@ package preflight
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os/exec"
 	"strings"
 
@@ -28,7 +31,10 @@ type Options struct {
 	SandboxProvider          string
 	DaemonExternalURL        string
 	GitRemote                func(context.Context, string) (string, error)
-	LookPath                 func(string) (string, error)
+	GitHubAPIBase            string
+	HTTPClient               interface {
+		Do(*http.Request) (*http.Response, error)
+	}
 }
 
 type Checker struct {
@@ -42,7 +48,10 @@ type Checker struct {
 	sandboxProvider          string
 	daemonExternalURL        string
 	gitRemote                func(context.Context, string) (string, error)
-	lookPath                 func(string) (string, error)
+	githubAPIBase            string
+	httpClient               interface {
+		Do(*http.Request) (*http.Response, error)
+	}
 }
 
 func New(opts Options) *Checker {
@@ -57,13 +66,17 @@ func New(opts Options) *Checker {
 		sandboxProvider:          opts.SandboxProvider,
 		daemonExternalURL:        opts.DaemonExternalURL,
 		gitRemote:                opts.GitRemote,
-		lookPath:                 opts.LookPath,
+		githubAPIBase:            strings.TrimRight(opts.GitHubAPIBase, "/"),
+		httpClient:               opts.HTTPClient,
+	}
+	if c.githubAPIBase == "" {
+		c.githubAPIBase = "https://api.github.com"
+	}
+	if c.httpClient == nil {
+		c.httpClient = http.DefaultClient
 	}
 	if c.gitRemote == nil {
 		c.gitRemote = gitOriginRemote
-	}
-	if c.lookPath == nil {
-		c.lookPath = exec.LookPath
 	}
 	return c
 }
@@ -135,31 +148,153 @@ func (c *Checker) checkPullRequestCreation(ctx context.Context) []Problem {
 			Fix:         "git remote add origin <url>",
 		}}
 	}
-	_, _, host, parseErr := parseGitRemote(remote)
+	owner, repo, host, parseErr := parseGitRemote(remote)
 	if parseErr != nil {
 		return []Problem{{
 			Requirement: "git_remote_origin",
 			Summary:     fmt.Sprintf("create_pr could not parse origin remote %q", remote),
+			Evidence:    parseErr.Error(),
 			Fix:         "set origin to a supported GitHub SSH or HTTPS remote",
 		}}
 	}
-	if host == "github.com" {
-		if c.credentials == nil {
-			return []Problem{{Requirement: "git_auth", Summary: "create_pr requires git credentials for github.com", Fix: "tack auth add git"}}
-		}
-		if _, err := c.credentials.GitToken(host); err != nil {
-			return []Problem{{Requirement: "git_auth", Summary: "create_pr requires git credentials for github.com", Fix: "tack auth add git"}}
-		}
-		return nil
-	}
-	if _, err := c.lookPath("gh"); err != nil {
+	if host != "github.com" {
 		return []Problem{{
 			Requirement: "pr_provider",
-			Summary:     fmt.Sprintf("create_pr for host %q requires the GitHub CLI fallback", host),
-			Fix:         "install and authenticate gh, or use a github.com origin with tack auth add git",
+			Summary:     fmt.Sprintf("create_pr supports GitHub remotes only; origin host %q is unsupported", host),
+			Evidence:    "origin=" + remote,
+			Fix:         "set origin to a GitHub repository or remove create_pr from the selected blueprint",
+		}}
+	}
+	if c.credentials == nil {
+		return []Problem{{
+			Requirement: "git_auth",
+			Summary:     "create_pr requires stored git credentials for github.com",
+			Evidence:    "origin=" + remote,
+			Fix:         "tack auth add git",
+		}}
+	}
+	token, err := c.credentials.GitToken(host)
+	if err != nil {
+		return []Problem{{
+			Requirement: "git_auth",
+			Summary:     "create_pr requires stored git credentials for github.com",
+			Evidence:    fmt.Sprintf("origin=%s; %v", remote, err),
+			Fix:         "tack auth add git",
+		}}
+	}
+	return c.checkGitHubPushPermission(ctx, remote, owner, repo, token)
+}
+
+type githubUserResponse struct {
+	Login   string `json:"login"`
+	Message string `json:"message"`
+}
+
+type githubRepoResponse struct {
+	FullName    string `json:"full_name"`
+	Message     string `json:"message"`
+	Permissions struct {
+		Push bool `json:"push"`
+	} `json:"permissions"`
+}
+
+func (c *Checker) checkGitHubPushPermission(ctx context.Context, remote, owner, repo, token string) []Problem {
+	login, problem := c.githubAuthenticatedLogin(ctx, token)
+	if problem != nil {
+		problem.Evidence = joinEvidence("origin="+remote, problem.Evidence)
+		return []Problem{*problem}
+	}
+
+	repoInfo, status, body, err := c.githubRepo(ctx, owner, repo, token)
+	identity := "authenticated_identity=" + login
+	if err != nil {
+		return []Problem{{
+			Requirement: "git_push_permission",
+			Summary:     fmt.Sprintf("create_pr could not validate GitHub repository access for %s/%s", owner, repo),
+			Evidence:    joinEvidence("origin="+remote, identity, err.Error()),
+			Fix:         "verify the GitHub token can access the repository with push permission",
+		}}
+	}
+	if status < 200 || status >= 300 {
+		msg := strings.TrimSpace(repoInfo.Message)
+		if msg == "" {
+			msg = strings.TrimSpace(body)
+		}
+		return []Problem{{
+			Requirement: "git_push_permission",
+			Summary:     fmt.Sprintf("create_pr requires GitHub repository access for %s/%s", owner, repo),
+			Evidence:    joinEvidence("origin="+remote, identity, fmt.Sprintf("github /repos status=%d message=%s", status, msg)),
+			Fix:         "grant the stored GitHub token repository access with push permission, or remove create_pr from the selected blueprint",
+		}}
+	}
+	if !repoInfo.Permissions.Push {
+		fullName := strings.TrimSpace(repoInfo.FullName)
+		if fullName == "" {
+			fullName = owner + "/" + repo
+		}
+		return []Problem{{
+			Requirement: "git_push_permission",
+			Summary:     fmt.Sprintf("create_pr requires push permission to %s", fullName),
+			Evidence:    joinEvidence("origin="+remote, identity, "permissions.push=false"),
+			Fix:         "use a GitHub token with push permission for this repository, or remove create_pr from the selected blueprint",
 		}}
 	}
 	return nil
+}
+
+func (c *Checker) githubAuthenticatedLogin(ctx context.Context, token string) (string, *Problem) {
+	var user githubUserResponse
+	status, body, err := c.githubGet(ctx, "/user", token, &user)
+	if err != nil {
+		return "", &Problem{Requirement: "git_auth", Summary: "create_pr could not validate the stored GitHub token", Evidence: err.Error(), Fix: "tack auth add git"}
+	}
+	if status < 200 || status >= 300 {
+		msg := strings.TrimSpace(user.Message)
+		if msg == "" {
+			msg = strings.TrimSpace(body)
+		}
+		return "", &Problem{Requirement: "git_auth", Summary: "create_pr requires a valid GitHub token", Evidence: fmt.Sprintf("github /user status=%d message=%s", status, msg), Fix: "tack auth add git"}
+	}
+	if strings.TrimSpace(user.Login) == "" {
+		return "", &Problem{Requirement: "git_auth", Summary: "create_pr could not determine the GitHub token identity", Evidence: "github /user returned empty login", Fix: "tack auth add git"}
+	}
+	return strings.TrimSpace(user.Login), nil
+}
+
+func (c *Checker) githubRepo(ctx context.Context, owner, repo, token string) (githubRepoResponse, int, string, error) {
+	var repoInfo githubRepoResponse
+	status, body, err := c.githubGet(ctx, "/repos/"+owner+"/"+repo, token, &repoInfo)
+	return repoInfo, status, body, err
+}
+
+func (c *Checker) githubGet(ctx context.Context, path, token string, target any) (int, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.githubAPIBase+path, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	body := string(bodyBytes)
+	if len(bodyBytes) > 0 {
+		_ = json.Unmarshal(bodyBytes, target)
+	}
+	return resp.StatusCode, body, nil
+}
+
+func joinEvidence(parts ...string) string {
+	var kept []string
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			kept = append(kept, strings.TrimSpace(part))
+		}
+	}
+	return strings.Join(kept, "; ")
 }
 
 func (c *Checker) checkRuntimeAuth() []Problem {

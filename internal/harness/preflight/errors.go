@@ -8,6 +8,7 @@ import (
 type Problem struct {
 	Requirement string
 	Summary     string
+	Evidence    string
 	Fix         string
 }
 
@@ -30,6 +31,10 @@ func (f Failure) Error() string {
 			b.WriteString(": ")
 		}
 		b.WriteString(p.Summary)
+		if p.Evidence != "" {
+			b.WriteString("\n  evidence: ")
+			b.WriteString(p.Evidence)
+		}
 		if p.Fix != "" {
 			b.WriteString("\n  fix: ")
 			b.WriteString(p.Fix)
