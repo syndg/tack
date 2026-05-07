@@ -58,7 +58,7 @@ for ((i = 1; i <= ITERATIONS; i++)); do
   if [[ -n "$ISSUE_NUMBER" ]]; then
     issues="$(gh issue view "$ISSUE_NUMBER" --json number,title,body,comments,labels,state,url)"
   else
-    issues="$(gh issue list --state open --json number,title,body,comments,labels,url --limit 100)"
+    issues="$(gh issue list --state open --json number,title,body,comments,labels,url --limit 100 --jq 'map(select((any(.labels[]; .name == "afk")) and (all(.labels[]; .name != "hitl"))))')"
   fi
   ralph_commits="$(git log --grep='RALPH' -n 10 --format='%H%n%ad%n%B---' --date=short 2>/dev/null || printf 'No RALPH commits found')"
   log_file="$LOG_DIR/ralph-opencode-$(date +%Y%m%d-%H%M%S)-$i.log"

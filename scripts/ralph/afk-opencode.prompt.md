@@ -10,16 +10,16 @@ Pick exactly one task.
 
 Only pick issues that are:
 
-1. Marked AFK in the issue body or clearly implementable without human input
+1. Explicitly labeled `afk`
 2. Not blocked by any open issue listed in a "Blocked by" section
 3. Not already addressed by a recent `RALPH:` commit
+4. Not a parent PRD, tracking issue, or umbrella issue unless it is the selected single issue and explicitly labeled `afk`
 
 Priority order:
 
-1. Unblocked PRD child slices marked AFK
+1. Unblocked PRD child slices labeled `afk`
 2. Critical bugfixes
-3. Tests for completed slices
-4. Polish and quick wins
+3. Tests for completed slices only when represented by a separate issue labeled `afk`
 
 If all actionable tasks are complete, output exactly `<promise>COMPLETE</promise>` and stop.
 
@@ -52,7 +52,8 @@ Follow existing patterns:
 - Follow existing store, daemon route, client, and CLI test patterns
 - Prefer small, deep modules with stable interfaces over shallow helpers
 - Do not add broad abstractions or future behavior outside the issue scope
-- Do not implement HITL issues unless the issue is explicitly selected and has enough detail to proceed without questions
+- Do not implement HITL issues unless the issue is explicitly selected, labeled `afk`, and has enough detail to proceed without questions
+- Do not mine parent PRDs for extra work after child issues are complete. If no eligible labeled issue remains, output `<promise>COMPLETE</promise>`.
 
 # VERIFICATION
 

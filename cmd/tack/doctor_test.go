@@ -101,7 +101,7 @@ func TestDoctorHumanOutput(t *testing.T) {
 
 func TestDoctorJSONOutput(t *testing.T) {
 	userConfig := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\n  service: service\ndaemon:\n  listen: 127.0.0.1:9901\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nblueprint: standard\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
+	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\n  service: service\ndaemon:\n  listen: 127.0.0.1:9901\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nblueprint: build-review\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile user config: %v", err)
 	}
 	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)

@@ -79,6 +79,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	if _, err := os.Stat(configPath); err == nil {
+		if initNonInteractive {
+			return fmt.Errorf("project config already exists at %s; remove it or run interactive init to confirm overwrite", configPath)
+		}
 		var overwrite bool
 		err := huh.NewConfirm().
 			Title(".tack/config.yaml already exists. Overwrite?").
@@ -102,7 +105,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if !store.HasGit() {
+	if !initNonInteractive && !store.HasGit() {
 		var addGit bool
 		err = huh.NewConfirm().
 			Title("Add a GitHub/GitLab token? (needed for PRs, clone, push)").
@@ -120,7 +123,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Using existing git credential from credentials store.\n")
 	}
 
-	if wizard.SandboxProvider == "daytona" && !store.HasSandbox("daytona") {
+	if !initNonInteractive && wizard.SandboxProvider == "daytona" && !store.HasSandbox("daytona") {
 		var daytonaKey string
 		err = huh.NewInput().
 			Title("Daytona API key").
