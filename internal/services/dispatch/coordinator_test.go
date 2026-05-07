@@ -156,7 +156,11 @@ func setupTestCoordinator(t *testing.T) *testEnv {
 
 	// Register step handlers — agent handler completes immediately for tests.
 	engine.RegisterHandler(blueprint.StepTypeAgent, func(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error) {
-		return blueprint.StepResult{Status: blueprint.StepStatusCompleted, Output: "test done"}, nil
+		var metadata map[string]string
+		if state := exec.StepStates[step.ID]; state != nil {
+			metadata = state.Metadata
+		}
+		return blueprint.StepResult{Status: blueprint.StepStatusCompleted, Output: "test done", Metadata: metadata}, nil
 	})
 	engine.RegisterHandler(blueprint.StepTypeBlueprintRef, c.HandleBlueprintRefStep)
 	engine.RegisterHandler(blueprint.StepTypeDeterministic, func(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error) {
