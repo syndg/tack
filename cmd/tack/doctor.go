@@ -8,10 +8,14 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/syndg/tack/internal/config"
+	"github.com/syndg/tack/internal/runtimecatalog"
 	"github.com/syndg/tack/internal/validation"
 )
 
 var doctorJSON bool
+
+var doctorRuntimeRunner runtimecatalog.Runner = runtimecatalog.ExecRunner{}
+var doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
@@ -35,6 +39,8 @@ func doctorChecks() []validation.Check {
 		{Name: "project_config", Run: checkProjectConfig},
 		{Name: "user_config", Run: checkUserConfig},
 		{Name: "daemon_config", Run: checkDaemonConfig},
+		{Name: "pi_runtime", Run: checkPIRuntime},
+		{Name: "pi_daemon_visibility", Run: checkPIDaemonVisibility},
 	}
 }
 
@@ -61,6 +67,69 @@ func checkProjectConfig(ctx context.Context) ([]validation.Finding, error) {
 		}}, nil
 	}
 	return []validation.Finding{{Status: validation.StatusPass, Source: "project", Evidence: projectPath}}, nil
+}
+
+func checkPIRuntime(ctx context.Context) ([]validation.Finding, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Agents.Runtime != "pi" {
+		return []validation.Finding{{Status: validation.StatusSkip, Source: "effective_config", Evidence: "agents.runtime=" + cfg.Agents.Runtime}}, nil
+	}
+	probe := runtimecatalog.ProbePi(ctx, doctorRuntimeRunner)
+	if !probe.Installed {
+		fix := "install Pi or select a different runtime"
+		if len(probe.PackageManagers) == 0 {
+			fix = "install Node.js/npm or Bun before installing Pi, or select a different runtime"
+		}
+		return []validation.Finding{{
+			Status:   validation.StatusFail,
+			Source:   "environment",
+			Evidence: "pi executable was not found in PATH",
+			Fix:      fix,
+			Details: map[string]string{
+				"package_managers": strings.Join(probe.PackageManagers, ","),
+			},
+		}}, nil
+	}
+	if probe.CatalogError != "" {
+		return []validation.Finding{{
+			Status:   validation.StatusFail,
+			Source:   "pi",
+			Evidence: probe.CatalogError,
+			Fix:      "repair Pi installation or choose models after pi --list-models succeeds",
+		}}, nil
+	}
+	models := 0
+	for _, provider := range probe.Catalog {
+		models += len(provider.Models)
+	}
+	return []validation.Finding{{
+		Status:   validation.StatusPass,
+		Source:   "environment",
+		Evidence: fmt.Sprintf("pi=%s providers=%d models=%d", probe.Path, len(probe.Catalog), models),
+	}}, nil
+}
+
+func checkPIDaemonVisibility(ctx context.Context) ([]validation.Finding, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Agents.Runtime != "pi" {
+		return []validation.Finding{{Status: validation.StatusSkip, Source: "effective_config", Evidence: "agents.runtime=" + cfg.Agents.Runtime}}, nil
+	}
+	ok, evidence := doctorDaemonCanSeePi(ctx, cfg.Daemon.Listen)
+	if !ok {
+		return []validation.Finding{{
+			Status:   validation.StatusWarn,
+			Source:   "daemon_service",
+			Evidence: evidence,
+			Fix:      "start or reload the daemon service after Pi is available in the service environment",
+		}}, nil
+	}
+	return []validation.Finding{{Status: validation.StatusPass, Source: "daemon_service", Evidence: evidence}}, nil
 }
 
 func checkUserConfig(ctx context.Context) ([]validation.Finding, error) {
