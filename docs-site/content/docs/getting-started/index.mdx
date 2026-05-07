@@ -11,7 +11,7 @@ Tack is distributed as a binary-first CLI. You do not need Go unless you want to
 
 ```bash
 brew tap syndg/tack
-brew install tack
+brew install --cask tack
 ```
 
 ### Install Script
@@ -86,7 +86,13 @@ tack version
 
 ## Uninstall
 
-Remove the binary and user-level runtime state:
+If you installed with Homebrew:
+
+```bash
+brew uninstall --cask tack
+```
+
+For manual installs, remove the binary yourself. To remove user-level runtime state:
 
 ```bash
 rm -f /usr/local/bin/tack
