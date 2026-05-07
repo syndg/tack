@@ -40,10 +40,70 @@ func doctorChecks() []validation.Check {
 		{Name: "project_config", Run: checkProjectConfig},
 		{Name: "user_config", Run: checkUserConfig},
 		{Name: "global_setup", Run: checkGlobalSetup},
+		{Name: "effective_config", Run: checkEffectiveConfig},
 		{Name: "daemon_config", Run: checkDaemonConfig},
 		{Name: "runtime_auth", Run: checkRuntimeAuth},
 		{Name: "pi_runtime", Run: checkPIRuntime},
 		{Name: "pi_daemon_visibility", Run: checkPIDaemonVisibility},
+	}
+}
+
+func checkEffectiveConfig(ctx context.Context) ([]validation.Finding, error) {
+	_ = ctx
+	projectPath, err := config.ResolveProjectConfig(cfgPath)
+	if err != nil {
+		return nil, err
+	}
+	effective, err := config.ResolveEffective(projectPath, userConfigPath())
+	if err != nil {
+		return nil, err
+	}
+
+	findings := []validation.Finding{
+		effectiveStringFinding("agents.runtime", effective.Runtime),
+		effectiveStringFinding("runtime_auth.provider", effective.Provider),
+		effectiveStringFinding("runtime_auth.mode", effective.AuthMode),
+		effectiveStringFinding("runtime_auth.method", effective.AuthMethod),
+		effectiveStringFinding("runtime_auth.credential_ref", effective.CredentialRef),
+		effectiveStringFinding("models.planner", effective.PlannerModel),
+		effectiveStringFinding("models.agent", effective.AgentModel),
+		effectiveStringFinding("models.small_tasks", effective.SmallTaskModel),
+		effectiveStringFinding("sandbox.provider", effective.SandboxProvider),
+		effectiveStringFinding("blueprint", effective.Blueprint),
+		effectiveStringSliceFinding("quality_gates", effective.QualityGates),
+	}
+	return findings, nil
+}
+
+func effectiveStringFinding(field string, value config.EffectiveString) validation.Finding {
+	if !value.Set {
+		return validation.Finding{
+			Status:   validation.StatusFail,
+			Source:   string(config.ValueSourceMissing),
+			Evidence: field + " is not set by global setup or project config",
+			Fix:      "run tack setup or set an explicit project override with tack init",
+		}
+	}
+	return validation.Finding{
+		Status:   validation.StatusPass,
+		Source:   string(value.Source),
+		Evidence: fmt.Sprintf("%s=%s", field, value.Value),
+	}
+}
+
+func effectiveStringSliceFinding(field string, value config.EffectiveStringSlice) validation.Finding {
+	if !value.Set || len(value.Value) == 0 {
+		return validation.Finding{
+			Status:   validation.StatusFail,
+			Source:   string(config.ValueSourceMissing),
+			Evidence: field + " is not set by global setup or project config",
+			Fix:      "run tack setup or set an explicit project override with tack init",
+		}
+	}
+	return validation.Finding{
+		Status:   validation.StatusPass,
+		Source:   string(value.Source),
+		Evidence: fmt.Sprintf("%s=%s", field, strings.Join(value.Value, "; ")),
 	}
 }
 

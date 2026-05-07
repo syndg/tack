@@ -378,7 +378,7 @@ func TestLoadFile(t *testing.T) {
 func TestResolveEffective_GlobalFallback(t *testing.T) {
 	dir := t.TempDir()
 	userPath := filepath.Join(dir, "user.yaml")
-	if err := os.WriteFile(userPath, []byte("agents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\nmodels:\n  agent: claude-agent\n  planner: claude-planner\n  small_tasks: claude-small\nsandbox:\n  provider: local\nblueprint: standard\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
+	if err := os.WriteFile(userPath, []byte("agents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: tack\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: claude-agent\n  planner: claude-planner\n  small_tasks: claude-small\nsandbox:\n  provider: local\nblueprint: standard\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile user: %v", err)
 	}
 
@@ -389,6 +389,9 @@ func TestResolveEffective_GlobalFallback(t *testing.T) {
 
 	assertStringSource(t, effective.Runtime, "pi", ValueSourceGlobal)
 	assertStringSource(t, effective.Provider, "anthropic", ValueSourceGlobal)
+	assertStringSource(t, effective.AuthMode, "tack", ValueSourceGlobal)
+	assertStringSource(t, effective.AuthMethod, "api_key", ValueSourceGlobal)
+	assertStringSource(t, effective.CredentialRef, "anthropic-main", ValueSourceGlobal)
 	assertStringSource(t, effective.SandboxProvider, "local", ValueSourceGlobal)
 	assertStringSource(t, effective.Blueprint, "standard", ValueSourceGlobal)
 	assertStringSource(t, effective.AgentModel, "claude-agent", ValueSourceGlobal)
@@ -400,14 +403,14 @@ func TestResolveEffective_GlobalFallback(t *testing.T) {
 func TestResolveEffective_ProjectOverride(t *testing.T) {
 	dir := t.TempDir()
 	userPath := filepath.Join(dir, "user.yaml")
-	if err := os.WriteFile(userPath, []byte("agents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nblueprint: standard\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
+	if err := os.WriteFile(userPath, []byte("agents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: oauth\n  credential_ref: global-ref\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nblueprint: standard\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile user: %v", err)
 	}
 	projectPath := filepath.Join(dir, ".tack", "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(projectPath, []byte("agents:\n  runtime: claude-code\nruntime_auth:\n  provider: openai\nmodels:\n  agent: project-agent\n  planner: project-planner\n  small_tasks: project-small\nsandbox:\n  provider: daytona\nblueprint: build-review\nquality_gates:\n  - bun test\n"), 0o644); err != nil {
+	if err := os.WriteFile(projectPath, []byte("agents:\n  runtime: claude-code\nruntime_auth:\n  provider: openai\n  mode: tack\n  method: api_key\n  credential_ref: project-ref\nmodels:\n  agent: project-agent\n  planner: project-planner\n  small_tasks: project-small\nsandbox:\n  provider: daytona\nblueprint: build-review\nquality_gates:\n  - bun test\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile project: %v", err)
 	}
 
@@ -418,6 +421,9 @@ func TestResolveEffective_ProjectOverride(t *testing.T) {
 
 	assertStringSource(t, effective.Runtime, "claude-code", ValueSourceProject)
 	assertStringSource(t, effective.Provider, "openai", ValueSourceProject)
+	assertStringSource(t, effective.AuthMode, "tack", ValueSourceProject)
+	assertStringSource(t, effective.AuthMethod, "api_key", ValueSourceProject)
+	assertStringSource(t, effective.CredentialRef, "project-ref", ValueSourceProject)
 	assertStringSource(t, effective.SandboxProvider, "daytona", ValueSourceProject)
 	assertStringSource(t, effective.Blueprint, "build-review", ValueSourceProject)
 	assertStringSource(t, effective.AgentModel, "project-agent", ValueSourceProject)

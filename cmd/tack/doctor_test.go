@@ -40,11 +40,11 @@ func TestDoctorHumanOutput(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(projectConfig), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(projectConfig, []byte("daemon:\n  listen: 127.0.0.1:9900\n"), 0o644); err != nil {
+	if err := os.WriteFile(projectConfig, []byte("daemon:\n  listen: 127.0.0.1:9900\nmodels:\n  agent: project-agent\nquality_gates:\n  - bun test\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile project config: %v", err)
 	}
 	userConfig := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\ndaemon:\n  data_dir: /tmp/tack-data\n"), 0o644); err != nil {
+	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\ndaemon:\n  data_dir: /tmp/tack-data\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nblueprint: standard\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile user config: %v", err)
 	}
 	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
@@ -66,7 +66,7 @@ func TestDoctorHumanOutput(t *testing.T) {
 		t.Fatalf("doctor: %v\nstderr: %s", err, stderr.String())
 	}
 	text := stdout.String()
-	for _, want := range []string{"[pass] project_config", "[pass] user_config", "[pass] global_setup", "daemon.listen=127.0.0.1:9900", "[pass] pi_runtime"} {
+	for _, want := range []string{"[pass] project_config", "[pass] user_config", "[pass] global_setup", "agents.runtime=pi", "source: global", "models.agent=project-agent", "source: project_override", "quality_gates=bun test", "daemon.listen=127.0.0.1:9900", "[pass] pi_runtime"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("doctor output missing %q:\n%s", want, text)
 		}
@@ -74,6 +74,50 @@ func TestDoctorHumanOutput(t *testing.T) {
 }
 
 func TestDoctorJSONOutput(t *testing.T) {
+	userConfig := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\ndaemon:\n  listen: 127.0.0.1:9901\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nblueprint: standard\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile user config: %v", err)
+	}
+	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
+
+	var stdout, stderr bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetArgs([]string{"doctor", "--json"})
+	doctorRuntimeRunner = fakeDoctorRuntimeRunner{paths: map[string]string{"npm": "/usr/bin/npm"}}
+	doctorDaemonCanSeePi = func(context.Context, string) (bool, string) { return false, "daemon not running" }
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		doctorJSON = false
+		cfgPath = ""
+		doctorRuntimeRunner = runtimecatalog.ExecRunner{}
+		doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
+	})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("doctor --json: %v\nstderr: %s", err, stderr.String())
+	}
+	var report validation.Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("Unmarshal doctor JSON: %v\n%s", err, stdout.String())
+	}
+	if len(report.Findings) != 18 {
+		t.Fatalf("findings = %d, want 18", len(report.Findings))
+	}
+	if report.Findings[0].Check != "project_config" || report.Findings[0].Status == "" {
+		t.Fatalf("first finding = %#v", report.Findings[0])
+	}
+	if report.Findings[3].Check != "effective_config" || report.Findings[3].Source != "global" {
+		t.Fatalf("effective_config finding = %#v", report.Findings[3])
+	}
+	if report.Findings[15].Check != "runtime_auth" || report.Findings[15].Status == "" {
+		t.Fatalf("runtime_auth finding = %#v", report.Findings[15])
+	}
+	if report.Findings[16].Check != "pi_runtime" || report.Findings[16].Status != validation.StatusFail {
+		t.Fatalf("pi_runtime finding = %#v", report.Findings[16])
+	}
+}
+
+func TestDoctorFailsMissingEffectiveConfig(t *testing.T) {
 	userConfig := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\ndaemon:\n  listen: 127.0.0.1:9901\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile user config: %v", err)
@@ -100,17 +144,14 @@ func TestDoctorJSONOutput(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("Unmarshal doctor JSON: %v\n%s", err, stdout.String())
 	}
-	if len(report.Findings) != 7 {
-		t.Fatalf("findings = %d, want 7", len(report.Findings))
+	failures := 0
+	for _, finding := range report.Findings {
+		if finding.Check == "effective_config" && finding.Status == validation.StatusFail {
+			failures++
+		}
 	}
-	if report.Findings[0].Check != "project_config" || report.Findings[0].Status == "" {
-		t.Fatalf("first finding = %#v", report.Findings[0])
-	}
-	if report.Findings[4].Check != "runtime_auth" || report.Findings[4].Status == "" {
-		t.Fatalf("runtime_auth finding = %#v", report.Findings[4])
-	}
-	if report.Findings[5].Check != "pi_runtime" || report.Findings[5].Status != validation.StatusFail {
-		t.Fatalf("pi_runtime finding = %#v", report.Findings[5])
+	if failures == 0 || !report.Failed {
+		t.Fatalf("effective_config failures = %d report.Failed=%v", failures, report.Failed)
 	}
 }
 

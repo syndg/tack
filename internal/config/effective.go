@@ -31,6 +31,9 @@ type EffectiveStringSlice struct {
 type EffectiveConfig struct {
 	Runtime         EffectiveString
 	Provider        EffectiveString
+	AuthMode        EffectiveString
+	AuthMethod      EffectiveString
+	CredentialRef   EffectiveString
 	SandboxProvider EffectiveString
 	Blueprint       EffectiveString
 	AgentModel      EffectiveString
@@ -59,6 +62,9 @@ func ResolveEffective(projectPath, userPath string) (*EffectiveConfig, error) {
 	effective := &EffectiveConfig{
 		Runtime:         pickString(project.Agents.Runtime, global.Agents.Runtime),
 		Provider:        pickString(project.RuntimeAuth.Provider, global.RuntimeAuth.Provider),
+		AuthMode:        pickString(project.RuntimeAuth.Mode, global.RuntimeAuth.Mode),
+		AuthMethod:      pickString(project.RuntimeAuth.Method, global.RuntimeAuth.Method),
+		CredentialRef:   pickString(project.RuntimeAuth.CredentialRef, global.RuntimeAuth.CredentialRef),
 		SandboxProvider: pickString(project.Sandbox.Provider, global.Sandbox.Provider),
 		Blueprint:       pickString(project.Blueprint, global.Blueprint),
 		AgentModel:      pickString(project.Models.Agent, global.Models.Agent),
