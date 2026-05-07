@@ -28,6 +28,7 @@ const DefaultBaseBranch = "main"
 type Config struct {
 	Daemon       DaemonConfig       `yaml:"daemon"`
 	Sandbox      SandboxConfig      `yaml:"sandbox"`
+	Blueprint    string             `yaml:"blueprint,omitempty"`
 	ProjectSetup ProjectSetupConfig `yaml:"project_setup"`
 	Benchmark    BenchmarkConfig    `yaml:"benchmark"`
 	Agents       AgentsConfig       `yaml:"agents"`

@@ -374,3 +374,116 @@ func TestLoadFile(t *testing.T) {
 		t.Errorf("listen = %q, want 0.0.0.0:1234", cfg.Daemon.Listen)
 	}
 }
+
+func TestResolveEffective_GlobalFallback(t *testing.T) {
+	dir := t.TempDir()
+	userPath := filepath.Join(dir, "user.yaml")
+	if err := os.WriteFile(userPath, []byte("agents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\nmodels:\n  agent: claude-agent\n  planner: claude-planner\n  small_tasks: claude-small\nsandbox:\n  provider: local\nblueprint: standard\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile user: %v", err)
+	}
+
+	effective, err := ResolveEffective("", userPath)
+	if err != nil {
+		t.Fatalf("ResolveEffective: %v", err)
+	}
+
+	assertStringSource(t, effective.Runtime, "pi", ValueSourceGlobal)
+	assertStringSource(t, effective.Provider, "anthropic", ValueSourceGlobal)
+	assertStringSource(t, effective.SandboxProvider, "local", ValueSourceGlobal)
+	assertStringSource(t, effective.Blueprint, "standard", ValueSourceGlobal)
+	assertStringSource(t, effective.AgentModel, "claude-agent", ValueSourceGlobal)
+	assertStringSource(t, effective.PlannerModel, "claude-planner", ValueSourceGlobal)
+	assertStringSource(t, effective.SmallTaskModel, "claude-small", ValueSourceGlobal)
+	assertSliceSource(t, effective.QualityGates, []string{"go test ./..."}, ValueSourceGlobal)
+}
+
+func TestResolveEffective_ProjectOverride(t *testing.T) {
+	dir := t.TempDir()
+	userPath := filepath.Join(dir, "user.yaml")
+	if err := os.WriteFile(userPath, []byte("agents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nblueprint: standard\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile user: %v", err)
+	}
+	projectPath := filepath.Join(dir, ".tack", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(projectPath, []byte("agents:\n  runtime: claude-code\nruntime_auth:\n  provider: openai\nmodels:\n  agent: project-agent\n  planner: project-planner\n  small_tasks: project-small\nsandbox:\n  provider: daytona\nblueprint: build-review\nquality_gates:\n  - bun test\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile project: %v", err)
+	}
+
+	effective, err := ResolveEffective(projectPath, userPath)
+	if err != nil {
+		t.Fatalf("ResolveEffective: %v", err)
+	}
+
+	assertStringSource(t, effective.Runtime, "claude-code", ValueSourceProject)
+	assertStringSource(t, effective.Provider, "openai", ValueSourceProject)
+	assertStringSource(t, effective.SandboxProvider, "daytona", ValueSourceProject)
+	assertStringSource(t, effective.Blueprint, "build-review", ValueSourceProject)
+	assertStringSource(t, effective.AgentModel, "project-agent", ValueSourceProject)
+	assertStringSource(t, effective.PlannerModel, "project-planner", ValueSourceProject)
+	assertStringSource(t, effective.SmallTaskModel, "project-small", ValueSourceProject)
+	assertSliceSource(t, effective.QualityGates, []string{"bun test"}, ValueSourceProject)
+	if effective.ProjectRoot != filepath.Dir(filepath.Dir(projectPath)) {
+		t.Fatalf("ProjectRoot = %q", effective.ProjectRoot)
+	}
+}
+
+func TestResolveEffective_MissingValue(t *testing.T) {
+	effective, err := ResolveEffective("", "")
+	if err != nil {
+		t.Fatalf("ResolveEffective: %v", err)
+	}
+	if effective.Runtime.Set || effective.Runtime.Source != ValueSourceMissing {
+		t.Fatalf("Runtime = %#v, want missing", effective.Runtime)
+	}
+	if effective.QualityGates.Set || effective.QualityGates.Source != ValueSourceMissing {
+		t.Fatalf("QualityGates = %#v, want missing", effective.QualityGates)
+	}
+}
+
+func TestResolveEffective_DoesNotPersistResolvedConfig(t *testing.T) {
+	dir := t.TempDir()
+	userPath := filepath.Join(dir, "user.yaml")
+	projectPath := filepath.Join(dir, ".tack", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	projectContent := []byte("sandbox:\n  provider: daytona\n")
+	if err := os.WriteFile(userPath, []byte("agents:\n  runtime: pi\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile user: %v", err)
+	}
+	if err := os.WriteFile(projectPath, projectContent, 0o644); err != nil {
+		t.Fatalf("WriteFile project: %v", err)
+	}
+
+	if _, err := ResolveEffective(projectPath, userPath); err != nil {
+		t.Fatalf("ResolveEffective: %v", err)
+	}
+	after, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("ReadFile project: %v", err)
+	}
+	if string(after) != string(projectContent) {
+		t.Fatalf("project config changed to %q, want %q", string(after), string(projectContent))
+	}
+}
+
+func assertStringSource(t *testing.T, got EffectiveString, want string, source ValueSource) {
+	t.Helper()
+	if !got.Set || got.Value != want || got.Source != source {
+		t.Fatalf("value = %#v, want value %q from %s", got, want, source)
+	}
+}
+
+func assertSliceSource(t *testing.T, got EffectiveStringSlice, want []string, source ValueSource) {
+	t.Helper()
+	if !got.Set || got.Source != source || len(got.Value) != len(want) {
+		t.Fatalf("value = %#v, want %v from %s", got, want, source)
+	}
+	for i := range want {
+		if got.Value[i] != want[i] {
+			t.Fatalf("value[%d] = %q, want %q", i, got.Value[i], want[i])
+		}
+	}
+}
