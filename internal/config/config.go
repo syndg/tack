@@ -45,6 +45,7 @@ type Config struct {
 
 type SetupConfig struct {
 	Complete bool                  `yaml:"complete"`
+	Service  string                `yaml:"service,omitempty"`
 	Phases   map[string]SetupPhase `yaml:"phases,omitempty"`
 }
 

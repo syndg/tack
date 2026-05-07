@@ -52,6 +52,9 @@ func TestSetupNonInteractiveWritesCompleteGlobalConfig(t *testing.T) {
 	if !saved.Setup.Complete {
 		t.Fatalf("setup.complete = false in %#v", saved.Setup)
 	}
+	if saved.Setup.Service != "foreground" {
+		t.Fatalf("setup.service = %q, want foreground", saved.Setup.Service)
+	}
 	for _, phase := range setupPhaseOrder {
 		if !saved.Setup.Phases[phase].Complete {
 			t.Fatalf("phase %s not complete: %#v", phase, saved.Setup.Phases)
@@ -60,8 +63,16 @@ func TestSetupNonInteractiveWritesCompleteGlobalConfig(t *testing.T) {
 	if saved.Daemon.Listen != "127.0.0.1:9900" || saved.Models.Planner != "planner-model" || saved.Sandbox.Provider != "local" {
 		t.Fatalf("saved config = %#v", saved)
 	}
-	if !strings.Contains(stdout.String(), "models.planner: planner-model (source: global)") {
-		t.Fatalf("summary missing source reporting:\n%s", stdout.String())
+	for _, want := range []string{
+		"setup.service: foreground (source: global)",
+		"models.planner: planner-model (source: global)",
+		"runtime_auth.method:  (source: global)",
+		"runtime_auth.credential_ref:  (source: global)",
+		"quality_gates: go test ./... (source: global)",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("summary missing %q:\n%s", want, stdout.String())
+		}
 	}
 }
 
@@ -151,6 +162,7 @@ func TestValidateSetupStateFailsPiModelOutsideCatalog(t *testing.T) {
 		out:   map[string][]byte{"pi --list-models": []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\n")},
 	}
 	state := setupConfigFile{
+		Setup:       config.SetupConfig{Service: "foreground"},
 		Daemon:      config.DaemonConfig{Listen: "127.0.0.1:9900"},
 		Agents:      config.AgentsConfig{Runtime: "pi"},
 		RuntimeAuth: config.RuntimeAuthConfig{Provider: "anthropic", Mode: "native"},
@@ -174,6 +186,7 @@ func TestValidateSetupStateFailsPiProviderOutsideCatalog(t *testing.T) {
 		out:   map[string][]byte{"pi --list-models": []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\n")},
 	}
 	state := setupConfigFile{
+		Setup:        config.SetupConfig{Service: "foreground"},
 		Daemon:       config.DaemonConfig{Listen: "127.0.0.1:9900"},
 		Agents:       config.AgentsConfig{Runtime: "pi"},
 		RuntimeAuth:  config.RuntimeAuthConfig{Provider: "openai", Mode: "native"},

@@ -499,7 +499,15 @@ func checkGlobalSetup(ctx context.Context) ([]validation.Finding, error) {
 		return nil, err
 	}
 	if state.Setup.Complete {
-		return []validation.Finding{{Status: validation.StatusPass, Source: "global", Evidence: "setup.complete=true"}}, nil
+		if strings.TrimSpace(state.Setup.Service) == "" {
+			return []validation.Finding{{
+				Status:   validation.StatusFail,
+				Source:   "global",
+				Evidence: "setup.complete=true setup.service is not set",
+				Fix:      "run tack setup to record the daemon service selection",
+			}}, nil
+		}
+		return []validation.Finding{{Status: validation.StatusPass, Source: "global", Evidence: "setup.complete=true setup.service=" + state.Setup.Service}}, nil
 	}
 	evidence := "setup.complete=false"
 	if phase := firstIncompleteSetupPhase(state); phase != "" {

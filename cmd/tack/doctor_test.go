@@ -67,7 +67,7 @@ func TestDoctorHumanOutput(t *testing.T) {
 		t.Fatalf("WriteFile project config: %v", err)
 	}
 	userConfig := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\ndaemon:\n  data_dir: /tmp/tack-data\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nblueprint: standard\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
+	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\n  service: service\ndaemon:\n  data_dir: /tmp/tack-data\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nblueprint: standard\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile user config: %v", err)
 	}
 	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
@@ -92,7 +92,7 @@ func TestDoctorHumanOutput(t *testing.T) {
 		t.Fatalf("doctor: %v\nstderr: %s", err, stderr.String())
 	}
 	text := stdout.String()
-	for _, want := range []string{"[pass] project_config", "[pass] user_config", "[pass] global_setup", "agents.runtime=pi", "source: global", "models.agent=project-agent", "source: project_override", "quality_gates=bun test", "daemon.listen=127.0.0.1:9900", "[pass] daemon_service", "installed=true", "logs=/tmp/tack.log", "[pass] pi_runtime", "[pass] pi_model_catalog"} {
+	for _, want := range []string{"[pass] project_config", "[pass] user_config", "[pass] global_setup", "setup.service=service", "agents.runtime=pi", "source: global", "models.agent=project-agent", "source: project_override", "quality_gates=bun test", "daemon.listen=127.0.0.1:9900", "[pass] daemon_service", "installed=true", "logs=/tmp/tack.log", "[pass] pi_runtime", "[pass] pi_model_catalog"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("doctor output missing %q:\n%s", want, text)
 		}
@@ -101,7 +101,7 @@ func TestDoctorHumanOutput(t *testing.T) {
 
 func TestDoctorJSONOutput(t *testing.T) {
 	userConfig := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\ndaemon:\n  listen: 127.0.0.1:9901\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nblueprint: standard\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
+	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\n  service: service\ndaemon:\n  listen: 127.0.0.1:9901\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nblueprint: standard\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile user config: %v", err)
 	}
 	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
@@ -157,7 +157,7 @@ func TestDoctorJSONOutput(t *testing.T) {
 
 func TestDoctorFailsPiModelOutsideCatalog(t *testing.T) {
 	userConfig := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\ndaemon:\n  listen: 127.0.0.1:9901\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: missing-agent\n  planner: claude-opus-4-1\n  small_tasks: claude-haiku\nsandbox:\n  provider: local\nblueprint: custom-no-pr\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
+	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\n  service: service\ndaemon:\n  listen: 127.0.0.1:9901\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: missing-agent\n  planner: claude-opus-4-1\n  small_tasks: claude-haiku\nsandbox:\n  provider: local\nblueprint: custom-no-pr\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile user config: %v", err)
 	}
 	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
@@ -207,7 +207,7 @@ func TestDoctorChecksBlueprintPreflightRequirements(t *testing.T) {
 		t.Fatalf("WriteFile project config: %v", err)
 	}
 	userConfig := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\ndaemon:\n  listen: 127.0.0.1:9901\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
+	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\n  service: service\ndaemon:\n  listen: 127.0.0.1:9901\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile user config: %v", err)
 	}
 	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
@@ -254,7 +254,7 @@ func TestDoctorChecksBlueprintPreflightRequirements(t *testing.T) {
 
 func TestDoctorFailsMissingEffectiveConfig(t *testing.T) {
 	userConfig := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\ndaemon:\n  listen: 127.0.0.1:9901\n"), 0o644); err != nil {
+	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\n  service: service\ndaemon:\n  listen: 127.0.0.1:9901\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile user config: %v", err)
 	}
 	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
@@ -335,5 +335,21 @@ func TestDoctorFailsIncompleteGlobalSetup(t *testing.T) {
 	}
 	if !report.Failed {
 		t.Fatalf("report.Failed = false, want true")
+	}
+}
+
+func TestDoctorFailsCompleteGlobalSetupMissingService(t *testing.T) {
+	userConfig := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile user config: %v", err)
+	}
+	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
+
+	findings, err := checkGlobalSetup(context.Background())
+	if err != nil {
+		t.Fatalf("checkGlobalSetup: %v", err)
+	}
+	if len(findings) != 1 || findings[0].Status != validation.StatusFail || !strings.Contains(findings[0].Evidence, "setup.service is not set") {
+		t.Fatalf("global_setup findings = %#v", findings)
 	}
 }

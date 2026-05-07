@@ -134,6 +134,7 @@ func applyNonInteractiveSetup(ctx context.Context, state *setupConfigFile) error
 		return fmt.Errorf("non-interactive setup requires %s", strings.Join(missing, ", "))
 	}
 	state.Daemon.Listen = setupDaemonListen
+	state.Setup.Service = setupDaemonService
 	state.Agents.Runtime = setupRuntime
 	state.RuntimeAuth.Runtime = setupRuntime
 	state.RuntimeAuth.Provider = setupProvider
@@ -169,6 +170,7 @@ func applyInteractiveSetup(state *setupConfigFile, firstPhase string) error {
 		if err := huh.NewInput().Title("Daemon listen address").Value(&setupDaemonListen).Run(); err != nil {
 			return err
 		}
+		state.Setup.Service = setupDaemonService
 		state.Daemon.Listen = setupDaemonListen
 	}
 	if startSetupIndex(firstPhase) <= startSetupIndex("runtime") {
@@ -276,6 +278,9 @@ func selectedBlueprintNeedsGitHub(id string) bool {
 
 func validateSetupState(ctx context.Context, state setupConfigFile) error {
 	var missing []string
+	if state.Setup.Service == "" {
+		missing = append(missing, "setup.service")
+	}
 	if state.Daemon.Listen == "" {
 		missing = append(missing, "daemon.listen")
 	}
@@ -445,15 +450,19 @@ func writeSetupConfigFileAtomic(path string, state setupConfigFile, previous os.
 func renderSetupSummary(cmd *cobra.Command, state setupConfigFile) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintln(out, "Global setup saved")
+	fmt.Fprintf(out, "setup.service: %s (source: global)\n", state.Setup.Service)
 	fmt.Fprintf(out, "daemon.listen: %s (source: global)\n", state.Daemon.Listen)
 	fmt.Fprintf(out, "agents.runtime: %s (source: global)\n", state.Agents.Runtime)
 	fmt.Fprintf(out, "runtime_auth.provider: %s (source: global)\n", state.RuntimeAuth.Provider)
 	fmt.Fprintf(out, "runtime_auth.mode: %s (source: global)\n", state.RuntimeAuth.Mode)
+	fmt.Fprintf(out, "runtime_auth.method: %s (source: global)\n", state.RuntimeAuth.Method)
+	fmt.Fprintf(out, "runtime_auth.credential_ref: %s (source: global)\n", state.RuntimeAuth.CredentialRef)
 	fmt.Fprintf(out, "models.planner: %s (source: global)\n", state.Models.Planner)
 	fmt.Fprintf(out, "models.agent: %s (source: global)\n", state.Models.Agent)
 	fmt.Fprintf(out, "models.small_tasks: %s (source: global)\n", state.Models.SmallTasks)
 	fmt.Fprintf(out, "sandbox.provider: %s (source: global)\n", state.Sandbox.Provider)
 	fmt.Fprintf(out, "blueprint: %s (source: global)\n", state.Blueprint)
+	fmt.Fprintf(out, "quality_gates: %s (source: global)\n", strings.Join(state.QualityGates, "; "))
 }
 
 func expandSetupPath(path string) string {
