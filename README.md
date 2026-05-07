@@ -55,7 +55,7 @@ Read the full [security model](docs-site/content/docs/security.mdx) before using
 
 ```bash
 brew tap syndg/tack
-brew install tack
+brew install --cask tack
 ```
 
 ### Install Script
@@ -403,7 +403,7 @@ See the [full security audit](docs/security-audit-2026-04-10.md) for details.
 - Local mode is not OS sandboxing; agents run as your user.
 - Pi is the first-class runtime; Claude Code is a minimal compatibility path.
 - Docker, E2B, and semantic AI merge are planned, not launch promises.
-- Official Homebrew core is not available yet; use the `syndg/tack` tap.
+- Official Homebrew core is not available yet; use the `syndg/tack` cask tap.
 - First-run reliability depends on provider credentials, git credentials, and project setup commands being correct.
 
 ---

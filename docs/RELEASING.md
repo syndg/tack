@@ -25,11 +25,11 @@ Published archives:
 
 ### Homebrew Tap
 
-GoReleaser updates `syndg/homebrew-tack` with a formula for:
+GoReleaser updates `syndg/homebrew-tack` with a cask for:
 
 ```bash
 brew tap syndg/tack
-brew install tack
+brew install --cask tack
 ```
 
 This is intentionally a tap first. Official Homebrew core can come later after Tack has stable tagged releases and broader usage.
@@ -78,5 +78,5 @@ git push origin v0.1.0-alpha.1
 ```
 
 4. Confirm the GitHub release contains all archives and `checksums.txt`.
-5. Confirm the Homebrew tap formula was updated.
+5. Confirm the Homebrew tap cask was updated.
 6. Test install from GitHub release, Homebrew, and `go install`.
