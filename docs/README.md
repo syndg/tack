@@ -19,10 +19,6 @@ Everything else in `docs/` should be read with more context.
   Index for the plans directory. Use this to find the active docs faster and distinguish active references from historical notes.
 - `docs/DEFERRED.md`
   Future work and intentionally postponed items. Use this as the backlog for ideas that matter but are not being built right now.
-- `docs/phase1/` through `docs/phase5/`
-  Historical implementation artifacts from the earlier phased buildout. Useful for archaeology, but not the current product source of truth.
-- `PRD.md` and `FINDINGS.md` at repo root
-  Historical phase artifacts for the last phased implementation loop. Keep for history, but do not treat them as the current product description.
 
 ## Recommended Exploration Order
 
@@ -37,12 +33,10 @@ When trying to understand the current state of Tack, use this order:
 7. Check `internal/recovery/`, `internal/sandbox/`, `internal/runtime/`, and `internal/config/` for cross-cutting execution behavior.
 8. Read `docs/plans/` for active design direction.
 9. Read `docs/DEFERRED.md` for future work that is intentionally parked.
-10. Read `docs/phase*/`, `PRD.md`, and `FINDINGS.md` only when you need historical implementation context.
 
 ## Doc Hygiene Rules
 
 - If the public product story changes, update `docs-site/content/docs/`.
 - If a feature is being actively designed, add or update a doc in `docs/plans/`.
 - If an idea matters but is intentionally postponed, add it to `docs/DEFERRED.md` and link to a design doc if one exists.
-- Do not use the root `PRD.md` or `FINDINGS.md` for new current-state product docs.
 - When internal docs and docs-site disagree, trust the code first, then update the docs-site and this guide so the disagreement does not persist.
