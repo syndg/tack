@@ -39,6 +39,7 @@ func doctorChecks() []validation.Check {
 	return []validation.Check{
 		{Name: "project_config", Run: checkProjectConfig},
 		{Name: "user_config", Run: checkUserConfig},
+		{Name: "global_setup", Run: checkGlobalSetup},
 		{Name: "daemon_config", Run: checkDaemonConfig},
 		{Name: "runtime_auth", Run: checkRuntimeAuth},
 		{Name: "pi_runtime", Run: checkPIRuntime},
@@ -196,6 +197,28 @@ func checkUserConfig(ctx context.Context) ([]validation.Finding, error) {
 		return nil, err
 	}
 	return []validation.Finding{{Status: validation.StatusPass, Source: "global", Evidence: path}}, nil
+}
+
+func checkGlobalSetup(ctx context.Context) ([]validation.Finding, error) {
+	_ = ctx
+	path := userConfigPath()
+	state, _, err := loadSetupConfigFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if state.Setup.Complete {
+		return []validation.Finding{{Status: validation.StatusPass, Source: "global", Evidence: "setup.complete=true"}}, nil
+	}
+	evidence := "setup.complete=false"
+	if phase := firstIncompleteSetupPhase(state); phase != "" {
+		evidence += " next_phase=" + phase
+	}
+	return []validation.Finding{{
+		Status:   validation.StatusFail,
+		Source:   "global",
+		Evidence: evidence,
+		Fix:      "run tack setup to completion",
+	}}, nil
 }
 
 func checkDaemonConfig(ctx context.Context) ([]validation.Finding, error) {
