@@ -93,6 +93,7 @@ func (d *Daemon) handleRunCommand(w http.ResponseWriter, r *http.Request) {
 	snap, err := projectCtx.RunsService.Act(r.Context(), runID, cmd)
 	if err != nil {
 		switch {
+		case writePreflightError(w, err):
 		case errors.Is(err, runs.ErrInvalidState):
 			writeError(w, http.StatusConflict, err.Error())
 		default:

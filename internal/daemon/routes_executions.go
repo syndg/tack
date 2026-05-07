@@ -94,6 +94,7 @@ func (d *Daemon) handleApproveExecution(w http.ResponseWriter, r *http.Request) 
 	snap, err := projectCtx.RunsService.Act(r.Context(), run.ID, domain.Command{Kind: domain.CommandApprove})
 	if err != nil {
 		switch {
+		case writePreflightError(w, err):
 		case errors.Is(err, runs.ErrInvalidState):
 			writeError(w, http.StatusConflict, err.Error())
 		default:
@@ -150,6 +151,7 @@ func (d *Daemon) handleRetryExecution(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		switch {
+		case writePreflightError(w, err):
 		case errors.Is(err, runs.ErrInvalidState):
 			writeError(w, http.StatusConflict, err.Error())
 		default:

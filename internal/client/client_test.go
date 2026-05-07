@@ -11,6 +11,7 @@ import (
 
 	"github.com/syndg/tack/internal/domain"
 	"github.com/syndg/tack/internal/insightreport"
+	"github.com/syndg/tack/internal/validation"
 )
 
 func TestDoReturnsErrorForNon2xx(t *testing.T) {
@@ -26,6 +27,35 @@ func TestDoReturnsErrorForNon2xx(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "HTTP 400") {
 		t.Fatalf("expected HTTP status in error, got %v", err)
+	}
+}
+
+func TestDoRendersStructuredValidationError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(ErrorResponse{
+			ErrorText: "preflight failed for blueprint \"standard\"",
+			Findings: []validation.Finding{{
+				Check:    "preflight.git_push_permission",
+				Status:   validation.StatusFail,
+				Summary:  "create_pr requires push permission to owner/repo",
+				Evidence: "permissions.push=false",
+				Fix:      "use a GitHub token with push permission for this repository, or remove create_pr from the selected blueprint",
+			}},
+		})
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL)
+	_, err := c.GetStatus(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	text := err.Error()
+	for _, want := range []string{"HTTP 422", "preflight failed", "create_pr requires push permission", "permissions.push=false", "remove create_pr"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("error missing %q:\n%s", want, text)
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/syndg/tack/internal/daemonauth"
@@ -15,6 +16,7 @@ import (
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/insightreport"
 	"github.com/syndg/tack/internal/services/merge"
+	"github.com/syndg/tack/internal/validation"
 )
 
 // Client communicates with the Tack daemon over HTTP.
@@ -37,6 +39,49 @@ type StatusResponse struct {
 	Status     string         `json:"status"`
 	Uptime     string         `json:"uptime"`
 	Objectives map[string]int `json:"objectives"`
+}
+
+type ErrorResponse struct {
+	StatusCode int                  `json:"-"`
+	ErrorText  string               `json:"error"`
+	Findings   []validation.Finding `json:"findings,omitempty"`
+}
+
+func (e ErrorResponse) Error() string {
+	var b strings.Builder
+	if e.StatusCode > 0 {
+		_, _ = fmt.Fprintf(&b, "HTTP %d", e.StatusCode)
+	}
+	if e.ErrorText != "" {
+		if b.Len() > 0 {
+			b.WriteString(": ")
+		}
+		b.WriteString(e.ErrorText)
+	}
+	for _, finding := range e.Findings {
+		b.WriteString("\n- ")
+		if finding.Check != "" {
+			b.WriteString(finding.Check)
+			b.WriteString(": ")
+		}
+		if finding.Summary != "" {
+			b.WriteString(finding.Summary)
+		} else {
+			b.WriteString(string(finding.Status))
+		}
+		if finding.Evidence != "" {
+			b.WriteString("\n  evidence: ")
+			b.WriteString(finding.Evidence)
+		}
+		if finding.Fix != "" {
+			b.WriteString("\n  fix: ")
+			b.WriteString(finding.Fix)
+		}
+	}
+	if b.Len() == 0 {
+		return "HTTP error"
+	}
+	return b.String()
 }
 
 // New creates a new Client targeting the given daemon base URL.
@@ -692,6 +737,11 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close() //nolint:errcheck // error path, body is read-only
 		respBody, _ := io.ReadAll(resp.Body)
+		var errorResp ErrorResponse
+		if err := json.Unmarshal(respBody, &errorResp); err == nil && (errorResp.ErrorText != "" || len(errorResp.Findings) > 0) {
+			errorResp.StatusCode = resp.StatusCode
+			return nil, errorResp
+		}
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 

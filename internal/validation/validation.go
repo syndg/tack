@@ -28,6 +28,7 @@ const (
 type Finding struct {
 	Check    string            `json:"check"`
 	Status   Status            `json:"status"`
+	Summary  string            `json:"summary,omitempty"`
 	Source   string            `json:"source,omitempty"`
 	Evidence string            `json:"evidence,omitempty"`
 	Severity Severity          `json:"severity"`
@@ -81,6 +82,11 @@ func RenderHuman(w io.Writer, report Report) error {
 	for _, finding := range report.Findings {
 		if _, err := fmt.Fprintf(w, "[%s] %s", finding.Status, finding.Check); err != nil {
 			return err
+		}
+		if finding.Summary != "" {
+			if _, err := fmt.Fprintf(w, ": %s", finding.Summary); err != nil {
+				return err
+			}
 		}
 		parts := []string{}
 		if finding.Source != "" {

@@ -259,3 +259,27 @@ func TestCheckDaytonaRequiresAuthAndExternalURL(t *testing.T) {
 		t.Fatalf("error = %q, want daytona fixes", err.Error())
 	}
 }
+
+func TestFailureExposesValidationFindings(t *testing.T) {
+	failure := Failure{BlueprintID: "standard", Problems: []Problem{{
+		Requirement: "git_push_permission",
+		Summary:     "create_pr requires push permission to owner/repo",
+		Evidence:    "permissions.push=false",
+		Fix:         "use a GitHub token with push permission for this repository, or remove create_pr from the selected blueprint",
+	}}}
+
+	findings := failure.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("findings = %d, want 1", len(findings))
+	}
+	finding := findings[0]
+	if finding.Check != "preflight.git_push_permission" || finding.Summary != "create_pr requires push permission to owner/repo" {
+		t.Fatalf("finding = %#v", finding)
+	}
+	if finding.Details["blueprint_id"] != "standard" || finding.Details["requirement"] != "git_push_permission" {
+		t.Fatalf("details = %#v", finding.Details)
+	}
+	if !failure.Report().Failed {
+		t.Fatal("report should fail")
+	}
+}

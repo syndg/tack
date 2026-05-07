@@ -216,6 +216,7 @@ func (d *Daemon) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case isPlanNotFound(err):
 			writeError(w, http.StatusNotFound, "plan not found")
+		case writePreflightError(w, err):
 		case errors.Is(err, runs.ErrInvalidState):
 			writeError(w, http.StatusConflict, err.Error())
 		default:

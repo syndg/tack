@@ -2,11 +2,14 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/harness/preflight"
+	"github.com/syndg/tack/internal/validation"
 )
 
 // registerRoutes sets up all HTTP route handlers on the daemon's mux.
@@ -165,7 +168,29 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 func writeError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+	if err := json.NewEncoder(w).Encode(errorResponse{Error: message}); err != nil {
 		slog.Error("encoding JSON error response", "status", status, "error", err)
 	}
+}
+
+type errorResponse struct {
+	Error    string               `json:"error"`
+	Findings []validation.Finding `json:"findings,omitempty"`
+}
+
+func writeValidationError(w http.ResponseWriter, status int, message string, findings []validation.Finding) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(errorResponse{Error: message, Findings: findings}); err != nil {
+		slog.Error("encoding JSON validation error response", "status", status, "error", err)
+	}
+}
+
+func writePreflightError(w http.ResponseWriter, err error) bool {
+	var failure preflight.Failure
+	if !errors.As(err, &failure) {
+		return false
+	}
+	writeValidationError(w, http.StatusUnprocessableEntity, failure.Error(), failure.Findings())
+	return true
 }

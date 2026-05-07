@@ -196,6 +196,7 @@ func (d *Daemon) handleExecuteObjective(w http.ResponseWriter, r *http.Request) 
 	snap, err := projectCtx.RunsService.Ensure(r.Context(), id)
 	if err != nil {
 		switch {
+		case writePreflightError(w, err):
 		case errors.Is(err, dispatch.ErrNotFound):
 			writeError(w, http.StatusNotFound, "objective not found")
 		case errors.Is(err, dispatch.ErrInvalidState), errors.Is(err, runs.ErrInvalidState):
