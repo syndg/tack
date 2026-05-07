@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
@@ -72,6 +74,40 @@ func TestInjectEnvUsesCanonicalProviderRef(t *testing.T) {
 	}
 	if CredentialRefForProvider("openai-codex") != "openai-codex" {
 		t.Fatalf("CredentialRefForProvider(openai-codex) = %q, want openai-codex", CredentialRefForProvider("openai-codex"))
+	}
+}
+
+func TestResolveCredentialBindingReportsSource(t *testing.T) {
+	store, err := credentials.Load(filepath.Join(t.TempDir(), "credentials.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	store.SetModelProvider("openai-codex", credentials.ProviderCredential{
+		Type:         credentials.TypeOAuth,
+		AccessToken:  "access-token",
+		RefreshToken: "refresh-token",
+		ExpiresAt:    time.Now().Add(time.Hour).UnixMilli(),
+	})
+	binding := config.RuntimeAuthConfig{Mode: ModeTack, Runtime: "pi", Provider: "openai-codex", Method: MethodOAuth}
+	report, err := ResolveCredentialBinding(binding, store)
+	if err != nil {
+		t.Fatalf("ResolveCredentialBinding: %v", err)
+	}
+	if report.Provider != "openai-codex" || report.Method != MethodOAuth || report.CredentialRef != "openai-codex" || report.CredentialType != credentials.TypeOAuth || report.Source != "credentials:openai-codex" {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestResolveCredentialBindingRejectsTypeMismatch(t *testing.T) {
+	store, err := credentials.Load(filepath.Join(t.TempDir(), "credentials.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	store.SetModelProvider("openai-codex", credentials.ProviderCredential{Type: credentials.TypeAPIKey, APIKey: "sk-test"})
+	binding := config.RuntimeAuthConfig{Mode: ModeTack, Runtime: "pi", Provider: "openai-codex", Method: MethodOAuth}
+	err = InjectEnv(binding, store, nil, map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "requires oauth credential") {
+		t.Fatalf("InjectEnv error = %v, want credential type mismatch", err)
 	}
 }
 

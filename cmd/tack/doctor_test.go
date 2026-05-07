@@ -100,13 +100,16 @@ func TestDoctorJSONOutput(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("Unmarshal doctor JSON: %v\n%s", err, stdout.String())
 	}
-	if len(report.Findings) != 5 {
-		t.Fatalf("findings = %d, want 5", len(report.Findings))
+	if len(report.Findings) != 6 {
+		t.Fatalf("findings = %d, want 6", len(report.Findings))
 	}
 	if report.Findings[0].Check != "project_config" || report.Findings[0].Status == "" {
 		t.Fatalf("first finding = %#v", report.Findings[0])
 	}
-	if report.Findings[3].Check != "pi_runtime" || report.Findings[3].Status != validation.StatusFail {
-		t.Fatalf("pi_runtime finding = %#v", report.Findings[3])
+	if report.Findings[3].Check != "runtime_auth" || report.Findings[3].Status == "" {
+		t.Fatalf("runtime_auth finding = %#v", report.Findings[3])
+	}
+	if report.Findings[4].Check != "pi_runtime" || report.Findings[4].Status != validation.StatusFail {
+		t.Fatalf("pi_runtime finding = %#v", report.Findings[4])
 	}
 }

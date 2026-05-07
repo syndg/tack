@@ -336,13 +336,15 @@ func New(cfg Config) (*Service, error) {
 		// Coordinator: drives blueprint execution, owns agent tracker.
 		// Agent and blueprint_ref step handlers are registered inside NewCoordinator.
 		preflightChecker := preflight.New(preflight.Options{
-			Blueprints:          cfg.Engine,
-			ProjectRoot:         cfg.ProjectRoot,
-			Credentials:         cfg.Credentials,
-			RuntimeAuthMode:     cfg.RuntimeAuth.Mode,
-			RuntimeAuthProvider: cfg.RuntimeAuth.Provider,
-			SandboxProvider:     cfg.SandboxProviderName,
-			DaemonExternalURL:   cfg.DaemonExternalURL,
+			Blueprints:               cfg.Engine,
+			ProjectRoot:              cfg.ProjectRoot,
+			Credentials:              cfg.Credentials,
+			RuntimeAuthMode:          cfg.RuntimeAuth.Mode,
+			RuntimeAuthProvider:      cfg.RuntimeAuth.Provider,
+			RuntimeAuthMethod:        cfg.RuntimeAuth.Method,
+			RuntimeAuthCredentialRef: cfg.RuntimeAuth.CredentialRef,
+			SandboxProvider:          cfg.SandboxProviderName,
+			DaemonExternalURL:        cfg.DaemonExternalURL,
 		})
 		var err error
 		coordinator, err = dispatch.NewCoordinator(dispatch.Config{

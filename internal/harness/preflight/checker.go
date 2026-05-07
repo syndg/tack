@@ -7,8 +7,10 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
 	"github.com/syndg/tack/internal/harness/blueprint"
+	"github.com/syndg/tack/internal/runtimeauth"
 )
 
 type BlueprintLookup interface {
@@ -16,40 +18,46 @@ type BlueprintLookup interface {
 }
 
 type Options struct {
-	Blueprints          BlueprintLookup
-	ProjectRoot         string
-	Credentials         *credentials.Store
-	RuntimeAuthMode     string
-	RuntimeAuthProvider string
-	SandboxProvider     string
-	DaemonExternalURL   string
-	GitRemote           func(context.Context, string) (string, error)
-	LookPath            func(string) (string, error)
+	Blueprints               BlueprintLookup
+	ProjectRoot              string
+	Credentials              *credentials.Store
+	RuntimeAuthMode          string
+	RuntimeAuthProvider      string
+	RuntimeAuthMethod        string
+	RuntimeAuthCredentialRef string
+	SandboxProvider          string
+	DaemonExternalURL        string
+	GitRemote                func(context.Context, string) (string, error)
+	LookPath                 func(string) (string, error)
 }
 
 type Checker struct {
-	blueprints          BlueprintLookup
-	projectRoot         string
-	credentials         *credentials.Store
-	runtimeAuthMode     string
-	runtimeAuthProvider string
-	sandboxProvider     string
-	daemonExternalURL   string
-	gitRemote           func(context.Context, string) (string, error)
-	lookPath            func(string) (string, error)
+	blueprints               BlueprintLookup
+	projectRoot              string
+	credentials              *credentials.Store
+	runtimeAuthMode          string
+	runtimeAuthProvider      string
+	runtimeAuthMethod        string
+	runtimeAuthCredentialRef string
+	sandboxProvider          string
+	daemonExternalURL        string
+	gitRemote                func(context.Context, string) (string, error)
+	lookPath                 func(string) (string, error)
 }
 
 func New(opts Options) *Checker {
 	c := &Checker{
-		blueprints:          opts.Blueprints,
-		projectRoot:         opts.ProjectRoot,
-		credentials:         opts.Credentials,
-		runtimeAuthMode:     opts.RuntimeAuthMode,
-		runtimeAuthProvider: opts.RuntimeAuthProvider,
-		sandboxProvider:     opts.SandboxProvider,
-		daemonExternalURL:   opts.DaemonExternalURL,
-		gitRemote:           opts.GitRemote,
-		lookPath:            opts.LookPath,
+		blueprints:               opts.Blueprints,
+		projectRoot:              opts.ProjectRoot,
+		credentials:              opts.Credentials,
+		runtimeAuthMode:          opts.RuntimeAuthMode,
+		runtimeAuthProvider:      opts.RuntimeAuthProvider,
+		runtimeAuthMethod:        opts.RuntimeAuthMethod,
+		runtimeAuthCredentialRef: opts.RuntimeAuthCredentialRef,
+		sandboxProvider:          opts.SandboxProvider,
+		daemonExternalURL:        opts.DaemonExternalURL,
+		gitRemote:                opts.GitRemote,
+		lookPath:                 opts.LookPath,
 	}
 	if c.gitRemote == nil {
 		c.gitRemote = gitOriginRemote
@@ -162,8 +170,14 @@ func (c *Checker) checkRuntimeAuth() []Problem {
 	if c.credentials == nil {
 		return []Problem{{Requirement: "runtime_auth", Summary: fmt.Sprintf("agent steps require %s credentials", provider), Fix: "tack auth add " + provider}}
 	}
-	if _, err := c.credentials.ModelProvider(provider); err != nil {
-		return []Problem{{Requirement: "runtime_auth", Summary: fmt.Sprintf("agent steps require %s credentials", provider), Fix: "tack auth add " + provider}}
+	_, err := runtimeauth.ResolveCredentialBinding(config.RuntimeAuthConfig{
+		Mode:          c.runtimeAuthMode,
+		Provider:      provider,
+		Method:        c.runtimeAuthMethod,
+		CredentialRef: c.runtimeAuthCredentialRef,
+	}, c.credentials)
+	if err != nil {
+		return []Problem{{Requirement: "runtime_auth", Summary: fmt.Sprintf("agent steps require usable %s credentials: %v", provider, err), Fix: "tack auth add " + provider}}
 	}
 	return nil
 }

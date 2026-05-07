@@ -34,6 +34,14 @@ type ProviderOption struct {
 	Label string
 }
 
+type CredentialReport struct {
+	Provider       string
+	Method         string
+	CredentialRef  string
+	CredentialType string
+	Source         string
+}
+
 type ProbeResult struct {
 	Runtime            string
 	RuntimeAvailable   bool
@@ -191,26 +199,57 @@ func ValidateBinding(adapter Adapter, binding config.RuntimeAuthConfig, sandboxP
 	return nil
 }
 
-func InjectEnv(binding config.RuntimeAuthConfig, store *credentials.Store, logger *slog.Logger, envVars map[string]string) error {
+func ResolveCredentialBinding(binding config.RuntimeAuthConfig, store *credentials.Store) (*CredentialReport, error) {
 	if binding.Mode == "" || binding.Mode == ModeNative {
-		return nil
+		return nil, nil
+	}
+	if binding.Mode != ModeTack {
+		return nil, fmt.Errorf("runtime_auth.mode must be %q or %q", ModeNative, ModeTack)
 	}
 	if store == nil {
-		return fmt.Errorf("credentials store not available for runtime_auth.mode=tack")
+		return nil, fmt.Errorf("credentials store not available for runtime_auth.mode=tack")
+	}
+	method := binding.Method
+	if method == "" {
+		method = MethodAPIKey
 	}
 	ref := binding.CredentialRef
 	if ref == "" {
 		ref = canonicalCredentialRef(binding.Provider)
 	}
-	cred, err := store.ModelProvider(ref)
+	cred, err := store.GetProviderCredential(ref)
 	if err != nil {
-		return fmt.Errorf("resolving credential_ref %q: %w", ref, err)
+		return nil, fmt.Errorf("resolving credential_ref %q: %w", ref, err)
+	}
+	if cred.Type != method {
+		return nil, fmt.Errorf("runtime_auth.method=%s requires %s credential at credential_ref %q, found %s", method, method, ref, cred.Type)
+	}
+	return &CredentialReport{
+		Provider:       binding.Provider,
+		Method:         method,
+		CredentialRef:  ref,
+		CredentialType: cred.Type,
+		Source:         "credentials:" + ref,
+	}, nil
+}
+
+func InjectEnv(binding config.RuntimeAuthConfig, store *credentials.Store, logger *slog.Logger, envVars map[string]string) error {
+	if binding.Mode == "" || binding.Mode == ModeNative {
+		return nil
+	}
+	report, err := ResolveCredentialBinding(binding, store)
+	if err != nil {
+		return err
+	}
+	cred, err := store.ModelProvider(report.CredentialRef)
+	if err != nil {
+		return fmt.Errorf("resolving credential_ref %q: %w", report.CredentialRef, err)
 	}
 	for key, value := range envForResolvedProvider(binding.Provider, cred.Type, cred.Value) {
 		envVars[key] = value
 	}
 	if len(envVars) == 0 && logger != nil {
-		logger.Warn("runtime auth produced no environment variables", "provider", binding.Provider, "credential_ref", ref)
+		logger.Warn("runtime auth produced no environment variables", "provider", binding.Provider, "credential_ref", report.CredentialRef)
 	}
 	return nil
 }

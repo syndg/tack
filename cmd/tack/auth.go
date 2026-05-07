@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -14,9 +15,22 @@ import (
 )
 
 func init() {
+	authAddCmd.Flags().StringVar(&authAddMethod, "method", "", "credential method: api_key or oauth")
+	authAddCmd.Flags().StringVar(&authAddAPIKey, "api-key", "", "API key value for non-interactive credential setup")
+	authAddCmd.Flags().StringVar(&authAddOAuthAccessToken, "oauth-access-token", "", "OAuth access token for non-interactive credential setup")
+	authAddCmd.Flags().StringVar(&authAddOAuthRefreshToken, "oauth-refresh-token", "", "OAuth refresh token for non-interactive credential setup")
+	authAddCmd.Flags().StringVar(&authAddOAuthExpiresAt, "oauth-expires-at", "", "OAuth expiry as Unix milliseconds for non-interactive credential setup")
 	authCmd.AddCommand(authAddCmd, authRemoveCmd, authListCmd, authTestCmd)
 	rootCmd.AddCommand(authCmd)
 }
+
+var (
+	authAddMethod            string
+	authAddAPIKey            string
+	authAddOAuthAccessToken  string
+	authAddOAuthRefreshToken string
+	authAddOAuthExpiresAt    string
+)
 
 func loadCredentialsStore() (*credentials.Store, error) {
 	home, err := os.UserHomeDir()
@@ -29,6 +43,14 @@ func loadCredentialsStore() (*credentials.Store, error) {
 var authCmd = &cobra.Command{
 	Use:   "auth",
 	Short: "Manage credentials",
+}
+
+var notifyDaemonAuthChanged = func(ctx context.Context) error {
+	provider, err := newDaemonServiceProvider()
+	if err != nil {
+		return err
+	}
+	return provider.Reload(ctx)
 }
 
 var authAddCmd = &cobra.Command{
@@ -56,6 +78,9 @@ var authAddCmd = &cobra.Command{
 }
 
 func addModelProvider(store *credentials.Store, provider string) error {
+	if authAddAPIKey != "" || authAddMethod != "" || authAddOAuthAccessToken != "" || authAddOAuthRefreshToken != "" || authAddOAuthExpiresAt != "" {
+		return addModelProviderNonInteractive(store, provider)
+	}
 	if provider == "openai-codex" {
 		var method string
 		err := huh.NewSelect[string]().
@@ -91,7 +116,52 @@ func addModelProvider(store *credentials.Store, provider string) error {
 	if err := store.Save(); err != nil {
 		return err
 	}
+	noteAuthReload(context.Background())
 	fmt.Printf("Stored %s credential in %s\n", provider, store.Path())
+	return nil
+}
+
+func addModelProviderNonInteractive(store *credentials.Store, provider string) error {
+	method := authAddMethod
+	if method == "" && authAddAPIKey != "" {
+		method = credentials.TypeAPIKey
+	}
+	switch method {
+	case credentials.TypeAPIKey:
+		if authAddAPIKey == "" {
+			return fmt.Errorf("non-interactive api_key credential setup requires --api-key")
+		}
+		store.SetModelProvider(provider, credentials.ProviderCredential{Type: credentials.TypeAPIKey, APIKey: authAddAPIKey})
+	case credentials.TypeOAuth:
+		if provider != "openai-codex" {
+			return fmt.Errorf("oauth credentials are only supported for openai-codex")
+		}
+		var missing []string
+		if authAddOAuthAccessToken == "" {
+			missing = append(missing, "--oauth-access-token")
+		}
+		if authAddOAuthRefreshToken == "" {
+			missing = append(missing, "--oauth-refresh-token")
+		}
+		if authAddOAuthExpiresAt == "" {
+			missing = append(missing, "--oauth-expires-at")
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("non-interactive oauth credential setup requires %s", strings.Join(missing, ", "))
+		}
+		expiresAt, err := strconv.ParseInt(authAddOAuthExpiresAt, 10, 64)
+		if err != nil {
+			return fmt.Errorf("parsing --oauth-expires-at: %w", err)
+		}
+		store.SetModelProvider(provider, credentials.ProviderCredential{Type: credentials.TypeOAuth, AccessToken: authAddOAuthAccessToken, RefreshToken: authAddOAuthRefreshToken, ExpiresAt: expiresAt})
+	default:
+		return fmt.Errorf("credential method must be api_key or oauth")
+	}
+	if err := store.Save(); err != nil {
+		return err
+	}
+	noteAuthReload(context.Background())
+	fmt.Printf("Stored %s %s credential in %s\n", provider, method, store.Path())
 	return nil
 }
 
@@ -121,6 +191,7 @@ func addOpenAICodexOAuth(store *credentials.Store) error {
 	if err := store.Save(); err != nil {
 		return err
 	}
+	noteAuthReload(context.Background())
 	fmt.Printf("Stored openai-codex oauth credential in %s\n", store.Path())
 	return nil
 }
@@ -158,6 +229,7 @@ func addGitCredential(store *credentials.Store, provider string) error {
 	if err := store.Save(); err != nil {
 		return err
 	}
+	noteAuthReload(context.Background())
 	fmt.Printf("Stored git credential for %s in %s\n", host, store.Path())
 	return nil
 }
@@ -181,6 +253,7 @@ func addSandboxCredential(store *credentials.Store, provider string) error {
 	if err := store.Save(); err != nil {
 		return err
 	}
+	noteAuthReload(context.Background())
 	fmt.Printf("Stored %s credential in %s\n", provider, store.Path())
 	return nil
 }
@@ -208,9 +281,19 @@ var authRemoveCmd = &cobra.Command{
 		if err := store.Save(); err != nil {
 			return err
 		}
+		noteAuthReload(cmd.Context())
 		fmt.Printf("Removed %s credential\n", provider)
 		return nil
 	},
+}
+
+func noteAuthReload(ctx context.Context) {
+	if notifyDaemonAuthChanged == nil {
+		return
+	}
+	if err := notifyDaemonAuthChanged(ctx); err == nil {
+		fmt.Println("Triggered daemon reload")
+	}
 }
 
 var authListCmd = &cobra.Command{

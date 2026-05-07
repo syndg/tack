@@ -83,6 +83,29 @@ func TestCheckDoesNotRequireGitAuthWithoutCreatePR(t *testing.T) {
 	}
 }
 
+func TestCheckRuntimeAuthRejectsCredentialTypeMismatch(t *testing.T) {
+	store, err := credentials.Load(t.TempDir() + "/credentials.yaml")
+	if err != nil {
+		t.Fatalf("Load credentials: %v", err)
+	}
+	store.SetModelProvider("openai-codex", credentials.ProviderCredential{Type: credentials.TypeAPIKey, APIKey: "sk-test"})
+	checker := New(Options{
+		Blueprints: blueprints{"build": {
+			ID:    "build",
+			Steps: []blueprint.Step{{ID: "build", Type: blueprint.StepTypeAgent, Role: "builder"}},
+		}},
+		Credentials:         store,
+		RuntimeAuthMode:     "tack",
+		RuntimeAuthProvider: "openai-codex",
+		RuntimeAuthMethod:   "oauth",
+	})
+
+	err = checker.Check(context.Background(), "build")
+	if err == nil || !strings.Contains(err.Error(), "requires oauth credential") {
+		t.Fatalf("error = %v, want credential type mismatch", err)
+	}
+}
+
 func TestCheckDaytonaRequiresAuthAndExternalURL(t *testing.T) {
 	checker := New(Options{
 		Blueprints:      blueprints{"build": {ID: "build", Steps: []blueprint.Step{{ID: "build", Type: blueprint.StepTypeAgent, Role: "builder"}}}},
