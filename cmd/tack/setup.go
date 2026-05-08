@@ -14,6 +14,7 @@ import (
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
 	"github.com/syndg/tack/internal/runtimecatalog"
+	"github.com/syndg/tack/internal/validation"
 	"gopkg.in/yaml.v3"
 )
 
@@ -307,53 +308,18 @@ func selectedBlueprintNeedsGitHub(id string) bool {
 }
 
 func validateSetupState(ctx context.Context, state setupConfigFile) error {
-	var missing []string
-	if state.Setup.Service == "" {
-		missing = append(missing, "setup.service")
-	}
-	if state.Daemon.Listen == "" {
-		missing = append(missing, "daemon.listen")
-	}
-	if state.Agents.Runtime == "" {
-		missing = append(missing, "agents.runtime")
-	}
-	if state.RuntimeAuth.Provider == "" {
-		missing = append(missing, "runtime_auth.provider")
-	}
-	if state.RuntimeAuth.Mode == "" {
-		missing = append(missing, "runtime_auth.mode")
-	}
-	if state.Models.Planner == "" {
-		missing = append(missing, "models.planner")
-	}
-	if state.Models.Agent == "" {
-		missing = append(missing, "models.agent")
-	}
-	if state.Models.SmallTasks == "" {
-		missing = append(missing, "models.small_tasks")
-	}
-	if state.Sandbox.Provider == "" {
-		missing = append(missing, "sandbox.provider")
-	}
-	if state.Blueprint == "" {
-		missing = append(missing, "blueprint")
-	}
-	if len(state.QualityGates) == 0 {
-		missing = append(missing, "quality_gates")
-	}
+	missing := setupMissingFields(state)
 	if len(missing) > 0 {
 		return fmt.Errorf("setup validation failed: missing %s", strings.Join(missing, ", "))
 	}
 	if state.Agents.Runtime == "pi" {
-		probe := runtimecatalog.ProbePi(ctx, setupRuntimeRunner)
-		if !probe.Installed {
-			return fmt.Errorf("setup validation failed: pi executable was not found in PATH")
+		findings, probe := validation.PIRuntimeFindings(ctx, setupRuntimeRunner, state.Agents.Runtime)
+		if err := setupFindingError(findings); err != nil {
+			return err
 		}
-		if probe.CatalogError != "" {
-			return fmt.Errorf("setup validation failed: %s", probe.CatalogError)
-		}
-		if err := validatePiModelSelections(state.RuntimeAuth.Provider, state.Models, probe.Catalog); err != nil {
-			return fmt.Errorf("setup validation failed: %w", err)
+		findings = validation.PiModelCatalogFindings(setupPiModelSelection(state), probe)
+		if err := setupFindingError(findings); err != nil {
+			return err
 		}
 		if ok, evidence := setupDaemonCanSeePiFunc(ctx, state.Daemon.Listen); !ok {
 			return fmt.Errorf("setup validation failed: daemon cannot validate Pi visibility: %s", evidence)
@@ -362,29 +328,106 @@ func validateSetupState(ctx context.Context, state setupConfigFile) error {
 	return nil
 }
 
-func validatePiModelSelections(provider string, models config.ModelsConfig, catalog []runtimecatalog.ProviderCatalog) error {
-	provider = strings.TrimSpace(provider)
-	if !runtimecatalog.CatalogHasProvider(catalog, provider) {
-		available := strings.Join(runtimecatalog.CatalogProviderNames(catalog), ", ")
-		if available == "" {
-			available = "none"
-		}
-		return fmt.Errorf("provider %q is not in Pi catalog (available providers: %s)", provider, available)
+func setupMissingFields(state setupConfigFile) []string {
+	var missing []string
+	if state.Setup.Service == "" {
+		missing = append(missing, "setup.service")
 	}
-	for role, model := range map[string]string{
-		"planner":     models.Planner,
-		"agent":       models.Agent,
-		"small_tasks": models.SmallTasks,
-	} {
-		if !runtimecatalog.CatalogHasModel(catalog, provider, model) {
-			available := strings.Join(runtimecatalog.CatalogModelIDs(catalog, provider), ", ")
-			if available == "" {
-				available = "none"
+	if state.Daemon.Listen == "" {
+		missing = append(missing, "daemon.listen")
+	}
+	for _, finding := range validation.EffectiveConfigFindings(setupEffectiveConfig(state)) {
+		if finding.Status == validation.StatusFail && strings.HasSuffix(finding.Evidence, " is not set by global setup or project config") {
+			field := strings.TrimSuffix(finding.Evidence, " is not set by global setup or project config")
+			if state.RuntimeAuth.Mode != "tack" && (field == "runtime_auth.method" || field == "runtime_auth.credential_ref") {
+				continue
 			}
-			return fmt.Errorf("%s model %q is not in Pi catalog for provider %q (available models: %s)", role, model, provider, available)
+			missing = append(missing, field)
 		}
+	}
+	return missing
+}
+
+func setupEffectiveConfig(state setupConfigFile) *config.EffectiveConfig {
+	stringValue := func(value string) config.EffectiveString {
+		if strings.TrimSpace(value) == "" {
+			return config.EffectiveString{Source: config.ValueSourceMissing}
+		}
+		return config.EffectiveString{Value: value, Source: config.ValueSourceGlobal, Set: true}
+	}
+	sliceValue := func(value []string) config.EffectiveStringSlice {
+		if len(value) == 0 {
+			return config.EffectiveStringSlice{Source: config.ValueSourceMissing}
+		}
+		return config.EffectiveStringSlice{Value: append([]string(nil), value...), Source: config.ValueSourceGlobal, Set: true}
+	}
+	return &config.EffectiveConfig{
+		Runtime:         stringValue(state.Agents.Runtime),
+		Provider:        stringValue(state.RuntimeAuth.Provider),
+		AuthMode:        stringValue(state.RuntimeAuth.Mode),
+		AuthMethod:      stringValue(state.RuntimeAuth.Method),
+		CredentialRef:   stringValue(state.RuntimeAuth.CredentialRef),
+		SandboxProvider: stringValue(state.Sandbox.Provider),
+		Blueprint:       stringValue(state.Blueprint),
+		AgentModel:      stringValue(state.Models.Agent),
+		PlannerModel:    stringValue(state.Models.Planner),
+		SmallTaskModel:  stringValue(state.Models.SmallTasks),
+		QualityGates:    sliceValue(state.QualityGates),
+	}
+}
+
+func setupPiModelSelection(state setupConfigFile) validation.PiModelSelection {
+	effective := setupEffectiveConfig(state)
+	return validation.PiModelSelection{
+		Runtime:        effective.Runtime,
+		Provider:       effective.Provider,
+		PlannerModel:   effective.PlannerModel,
+		AgentModel:     effective.AgentModel,
+		SmallTaskModel: effective.SmallTaskModel,
+	}
+}
+
+func setupFindingError(findings []validation.Finding) error {
+	for _, finding := range findings {
+		if finding.Status != validation.StatusFail {
+			continue
+		}
+		if strings.Contains(finding.Evidence, "pi executable was not found") || strings.HasPrefix(finding.Evidence, "querying Pi model catalog:") {
+			return fmt.Errorf("setup validation failed: %s", finding.Evidence)
+		}
+		if strings.HasPrefix(finding.Evidence, "provider=") {
+			provider, available := evidenceValue(finding.Evidence, "provider"), evidenceValue(finding.Evidence, "available_providers")
+			return fmt.Errorf("setup validation failed: provider %q is not in Pi catalog (available providers: %s)", provider, fallback(available, "none"))
+		}
+		for _, role := range []string{"planner", "agent", "small_tasks"} {
+			field := "models." + role
+			if strings.Contains(finding.Evidence, field+"=") {
+				model := evidenceValue(finding.Evidence, field)
+				provider := evidenceValue(finding.Evidence, "provider")
+				available := evidenceValue(finding.Evidence, "available_models")
+				return fmt.Errorf("setup validation failed: %s model %q is not in Pi catalog for provider %q (available models: %s)", role, model, provider, fallback(available, "none"))
+			}
+		}
+		return fmt.Errorf("setup validation failed: %s", finding.Evidence)
 	}
 	return nil
+}
+
+func evidenceValue(evidence, key string) string {
+	prefix := key + "="
+	for _, part := range strings.Fields(evidence) {
+		if strings.HasPrefix(part, prefix) {
+			return strings.TrimPrefix(part, prefix)
+		}
+	}
+	return ""
+}
+
+func fallback(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func persistSetupPhase(path string, state *setupConfigFile, stat *os.FileInfo, phase string) error {
@@ -476,15 +519,7 @@ func saveSetupCredentials(state setupConfigFile) error {
 }
 
 func firstIncompleteSetupPhase(state setupConfigFile) string {
-	if state.Setup.Complete {
-		return ""
-	}
-	for _, phase := range setupPhaseOrder {
-		if !state.Setup.Phases[phase].Complete {
-			return phase
-		}
-	}
-	return "final_validation"
+	return validation.FirstIncompleteSetupPhase(state.Setup, setupPhaseOrder)
 }
 
 func startSetupIndex(phase string) int {

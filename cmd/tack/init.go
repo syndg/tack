@@ -20,6 +20,7 @@ import (
 	"github.com/syndg/tack/internal/harness/preflight"
 	"github.com/syndg/tack/internal/providerauth"
 	"github.com/syndg/tack/internal/runtimeauth"
+	"github.com/syndg/tack/internal/validation"
 	"gopkg.in/yaml.v3"
 )
 
@@ -737,31 +738,7 @@ func validateProjectInit(ctx context.Context, root string, global setupConfigFil
 	if err != nil {
 		return err
 	}
-	var missing []string
-	if strings.TrimSpace(merged.Agents.Runtime) == "" {
-		missing = append(missing, "agents.runtime")
-	}
-	if strings.TrimSpace(merged.RuntimeAuth.Provider) == "" {
-		missing = append(missing, "runtime_auth.provider")
-	}
-	if strings.TrimSpace(merged.RuntimeAuth.Mode) == "" {
-		missing = append(missing, "runtime_auth.mode")
-	}
-	if strings.TrimSpace(merged.Models.Agent) == "" {
-		missing = append(missing, "models.agent")
-	}
-	if strings.TrimSpace(merged.Models.Planner) == "" {
-		missing = append(missing, "models.planner")
-	}
-	if strings.TrimSpace(merged.Models.SmallTasks) == "" {
-		missing = append(missing, "models.small_tasks")
-	}
-	if strings.TrimSpace(merged.Sandbox.Provider) == "" {
-		missing = append(missing, "sandbox.provider")
-	}
-	if strings.TrimSpace(merged.Blueprint) == "" {
-		missing = append(missing, "blueprint")
-	}
+	missing := initMissingEffectiveFields(merged)
 	for i, gate := range merged.QualityGates {
 		if strings.TrimSpace(gate) == "" {
 			missing = append(missing, fmt.Sprintf("quality_gates[%d]", i))
@@ -803,6 +780,45 @@ func validateProjectInit(ctx context.Context, root string, global setupConfigFil
 		}
 	}
 	return nil
+}
+
+func initMissingEffectiveFields(merged *config.Config) []string {
+	stringValue := func(value string) config.EffectiveString {
+		if strings.TrimSpace(value) == "" {
+			return config.EffectiveString{Source: config.ValueSourceMissing}
+		}
+		return config.EffectiveString{Value: value, Source: config.ValueSourceGlobal, Set: true}
+	}
+	sliceValue := func(value []string) config.EffectiveStringSlice {
+		if len(value) == 0 {
+			return config.EffectiveStringSlice{Source: config.ValueSourceMissing}
+		}
+		return config.EffectiveStringSlice{Value: append([]string(nil), value...), Source: config.ValueSourceGlobal, Set: true}
+	}
+	effective := &config.EffectiveConfig{
+		Runtime:         stringValue(merged.Agents.Runtime),
+		Provider:        stringValue(merged.RuntimeAuth.Provider),
+		AuthMode:        stringValue(merged.RuntimeAuth.Mode),
+		AuthMethod:      stringValue(merged.RuntimeAuth.Method),
+		CredentialRef:   stringValue(merged.RuntimeAuth.CredentialRef),
+		SandboxProvider: stringValue(merged.Sandbox.Provider),
+		Blueprint:       stringValue(merged.Blueprint),
+		AgentModel:      stringValue(merged.Models.Agent),
+		PlannerModel:    stringValue(merged.Models.Planner),
+		SmallTaskModel:  stringValue(merged.Models.SmallTasks),
+		QualityGates:    sliceValue(merged.QualityGates),
+	}
+	var missing []string
+	for _, finding := range validation.EffectiveConfigFindings(effective) {
+		if finding.Status == validation.StatusFail && strings.HasSuffix(finding.Evidence, " is not set by global setup or project config") {
+			field := strings.TrimSuffix(finding.Evidence, " is not set by global setup or project config")
+			if merged.RuntimeAuth.Mode != "tack" && (field == "runtime_auth.method" || field == "runtime_auth.credential_ref") {
+				continue
+			}
+			missing = append(missing, field)
+		}
+	}
+	return missing
 }
 
 func validateInitQualityGates(ctx context.Context, root string, gates []string) error {
