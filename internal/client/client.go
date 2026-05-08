@@ -592,6 +592,16 @@ func (c *Client) GetStatus(ctx context.Context) (*StatusResponse, error) {
 	return &status, nil
 }
 
+// Reload asks a running daemon to reload safe auth/config/project context in place.
+func (c *Client) Reload(ctx context.Context) error {
+	resp, err := c.do(ctx, http.MethodPost, "/reload", nil)
+	if err != nil {
+		return fmt.Errorf("reloading daemon: %w", err)
+	}
+	closeBody(resp)
+	return nil
+}
+
 // ListMergeQueue returns merge queue entries, optionally filtered by objective.
 func (c *Client) ListMergeQueue(ctx context.Context, objectiveID string) ([]domain.MergeEntry, error) {
 	path := "/merge-queue"

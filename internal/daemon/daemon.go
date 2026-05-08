@@ -97,8 +97,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 	mergeQueueStore := db.NewMergeQueueStore(conn)
 	eventBus := events.NewPersistentBus(eventStore, logger)
 
-	home, _ := os.UserHomeDir()
-	credsPath := filepath.Join(home, ".config", "tack", "credentials.yaml")
+	credsPath := credentialsPath()
 	creds, err := credentials.Load(credsPath)
 	if err != nil {
 		logger.Warn("loading credentials store", "path", credsPath, "error", err)
@@ -197,6 +196,34 @@ func (d *Daemon) Start() error {
 	return err
 }
 
+func (d *Daemon) Reload(ctx context.Context) error {
+	newCfg, err := config.Load("", d.projectCtxs.userConfigPath)
+	if err != nil {
+		return fmt.Errorf("loading user config: %w", err)
+	}
+	newCfg.ExpandPaths()
+	if newCfg.Daemon.Listen != d.cfg.Daemon.Listen {
+		return fmt.Errorf("daemon.listen changed from %q to %q; restart required", d.cfg.Daemon.Listen, newCfg.Daemon.Listen)
+	}
+	if newCfg.Daemon.DataDir != d.cfg.Daemon.DataDir {
+		return fmt.Errorf("daemon.data_dir changed from %q to %q; restart required", d.cfg.Daemon.DataDir, newCfg.Daemon.DataDir)
+	}
+
+	credsPath := credentialsPath()
+	newCreds, err := credentials.Load(credsPath)
+	if err != nil {
+		return fmt.Errorf("loading credentials: %w", err)
+	}
+	d.cfg = newCfg
+	d.creds = newCreds
+	d.projectCtxs.Reload(newCfg, newCreds, deriveDaemonURL(newCfg, d.logger))
+	if err := d.projectCtxs.StartAll(ctx); err != nil {
+		return err
+	}
+	d.logger.Info("live daemon reload completed")
+	return nil
+}
+
 // localWorktreeDir returns the worktree directory for the local sandbox provider.
 func localWorktreeDir(cfg *config.Config) string {
 	if cfg.Sandbox.WorktreeDir != "" {
@@ -215,6 +242,11 @@ func deriveDaemonURL(cfg *config.Config, logger *slog.Logger) string {
 		return "http://127.0.0.1:" + listenAddr[len("0.0.0.0:"):]
 	}
 	return "http://" + listenAddr
+}
+
+func credentialsPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "tack", "credentials.yaml")
 }
 
 func daemonURLIsLoopback(raw string) bool {

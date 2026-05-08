@@ -2,12 +2,16 @@ package runtimecatalog
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/syndg/tack/internal/daemonauth"
 )
 
 const PiPackage = "@mariozechner/pi-coding-agent"
@@ -28,6 +32,7 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 type PiProbe struct {
 	Installed       bool
 	Path            string
+	Version         string
 	PackageManagers []string
 	Catalog         []ProviderCatalog
 	CatalogError    string
@@ -62,6 +67,9 @@ func ProbePi(ctx context.Context, runner Runner) PiProbe {
 	if path, err := runner.LookPath("pi"); err == nil && path != "" {
 		probe.Installed = true
 		probe.Path = path
+		if out, err := runner.Run(ctx, "pi", "--version"); err == nil {
+			probe.Version = strings.TrimSpace(string(out))
+		}
 		catalog, err := QueryPiCatalog(ctx, runner)
 		if err != nil {
 			probe.CatalogError = err.Error()
@@ -212,9 +220,12 @@ func DaemonCanSeePi(ctx context.Context, listen string) (bool, string) {
 	if listen == "" {
 		return false, "daemon.listen is empty"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listen+"/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listen+"/runtime/pi/visibility", nil)
 	if err != nil {
 		return false, err.Error()
+	}
+	if token, err := daemonauth.Load(); err == nil && token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	client := http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Do(req)
@@ -222,10 +233,21 @@ func DaemonCanSeePi(ctx context.Context, listen string) (bool, string) {
 		return false, err.Error()
 	}
 	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Sprintf("daemon health returned HTTP %d", resp.StatusCode)
+		return false, fmt.Sprintf("daemon Pi visibility returned HTTP %d", resp.StatusCode)
 	}
-	return true, "daemon is healthy; Pi visibility is validated by the daemon process environment at execution time"
+	var probe PiProbe
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return false, fmt.Sprintf("decoding daemon Pi visibility: %v", err)
+	}
+	if !probe.Installed {
+		return false, "pi executable was not found in daemon PATH"
+	}
+	if probe.Version == "" {
+		return true, fmt.Sprintf("daemon can see Pi at %s", probe.Path)
+	}
+	return true, fmt.Sprintf("daemon can see Pi at %s (%s)", probe.Path, probe.Version)
 }
 
 func availablePackageManagers(runner Runner) []string {

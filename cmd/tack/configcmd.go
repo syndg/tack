@@ -15,11 +15,7 @@ var configUser bool
 var configProject bool
 
 var notifyDaemonConfigChanged = func(ctx context.Context) error {
-	provider, err := newDaemonServiceProvider()
-	if err != nil {
-		return err
-	}
-	return provider.Reload(ctx)
+	return reloadDaemonLiveThenService(ctx)
 }
 
 func init() {

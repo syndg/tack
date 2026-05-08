@@ -9,6 +9,7 @@ import (
 
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/harness/preflight"
+	"github.com/syndg/tack/internal/runtimecatalog"
 	"github.com/syndg/tack/internal/validation"
 )
 
@@ -84,6 +85,8 @@ func (d *Daemon) registerRoutes() {
 	d.mux.HandleFunc("GET /events", d.handleSSE)
 	d.mux.HandleFunc("GET /health", d.handleHealth)
 	d.mux.HandleFunc("GET /status", d.handleStatus)
+	d.mux.HandleFunc("POST /reload", d.handleReload)
+	d.mux.HandleFunc("GET /runtime/pi/visibility", d.handlePiVisibility)
 }
 
 // handleHealth responds with a simple health check.
@@ -119,6 +122,20 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (d *Daemon) handleReload(w http.ResponseWriter, r *http.Request) {
+	if err := d.Reload(r.Context()); err != nil {
+		d.logger.Warn("live daemon reload failed", "error", err)
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
+}
+
+func (d *Daemon) handlePiVisibility(w http.ResponseWriter, r *http.Request) {
+	probe := runtimecatalog.ProbePi(r.Context(), runtimecatalog.ExecRunner{})
+	writeJSON(w, http.StatusOK, probe)
 }
 
 // handleListBlueprints returns all available blueprints as a JSON array.

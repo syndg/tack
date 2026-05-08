@@ -165,6 +165,20 @@ func (m *ProjectContextManager) Stop() {
 	}
 }
 
+func (m *ProjectContextManager) Reload(baseCfg *config.Config, creds *credentials.Store, daemonURL string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, ctx := range m.contexts {
+		if ctx.RunsService != nil {
+			ctx.RunsService.Stop()
+		}
+		delete(m.contexts, id)
+	}
+	m.baseConfig = baseCfg
+	m.creds = creds
+	m.daemonURL = daemonURL
+}
+
 func (m *ProjectContextManager) Invalidate(projectID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

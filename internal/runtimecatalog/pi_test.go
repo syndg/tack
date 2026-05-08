@@ -2,6 +2,7 @@ package runtimecatalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -84,10 +85,13 @@ func TestPlanPiInstallRunsAfterConsent(t *testing.T) {
 func TestProbePiParsesLiveCatalog(t *testing.T) {
 	runner := &fakeRunner{
 		paths: map[string]string{"pi": "/usr/local/bin/pi"},
-		out:   map[string][]byte{"pi --list-models": []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\nopenai gpt-5 272K 128K yes no\n")},
+		out: map[string][]byte{
+			"pi --version":     []byte("pi 1.2.3\n"),
+			"pi --list-models": []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\nopenai gpt-5 272K 128K yes no\n"),
+		},
 	}
 	probe := ProbePi(context.Background(), runner)
-	if !probe.Installed || probe.Path != "/usr/local/bin/pi" {
+	if !probe.Installed || probe.Path != "/usr/local/bin/pi" || probe.Version != "pi 1.2.3" {
 		t.Fatalf("probe = %#v", probe)
 	}
 	if len(probe.Catalog) != 2 || probe.Catalog[0].Provider != "anthropic" || probe.Catalog[0].Models[0].ID != "claude-opus-4-1" {
@@ -125,16 +129,27 @@ func TestCatalogLookupHelpers(t *testing.T) {
 	}
 }
 
-func TestDaemonCanSeePiReportsHealth(t *testing.T) {
+func TestDaemonCanSeePiReportsDaemonRuntimeVisibility(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" {
-			t.Fatalf("path = %q, want /health", r.URL.Path)
+		if r.URL.Path != "/runtime/pi/visibility" {
+			t.Fatalf("path = %q, want /runtime/pi/visibility", r.URL.Path)
 		}
-		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(PiProbe{Installed: true, Path: "/opt/bin/pi", Version: "pi 1.2.3"})
 	}))
 	t.Cleanup(server.Close)
 	ok, evidence := DaemonCanSeePi(context.Background(), server.URL)
-	if !ok || evidence == "" {
+	if !ok || evidence != "daemon can see Pi at /opt/bin/pi (pi 1.2.3)" {
+		t.Fatalf("ok=%t evidence=%q", ok, evidence)
+	}
+}
+
+func TestDaemonCanSeePiReportsMissingPiInDaemonPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(PiProbe{Installed: false})
+	}))
+	t.Cleanup(server.Close)
+	ok, evidence := DaemonCanSeePi(context.Background(), server.URL)
+	if ok || evidence != "pi executable was not found in daemon PATH" {
 		t.Fatalf("ok=%t evidence=%q", ok, evidence)
 	}
 }
@@ -145,7 +160,7 @@ func TestDaemonCanSeePiReportsFailure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	ok, evidence := DaemonCanSeePi(context.Background(), server.URL)
-	if ok || evidence != "daemon health returned HTTP 503" {
+	if ok || evidence != "daemon Pi visibility returned HTTP 503" {
 		t.Fatalf("ok=%t evidence=%q", ok, evidence)
 	}
 }

@@ -46,11 +46,7 @@ var authCmd = &cobra.Command{
 }
 
 var notifyDaemonAuthChanged = func(ctx context.Context) error {
-	provider, err := newDaemonServiceProvider()
-	if err != nil {
-		return err
-	}
-	return provider.Reload(ctx)
+	return reloadDaemonLiveThenService(ctx)
 }
 
 var authAddCmd = &cobra.Command{
