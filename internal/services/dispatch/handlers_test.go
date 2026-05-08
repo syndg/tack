@@ -397,6 +397,109 @@ func TestCreatePR_UsesGitHubAPIWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestCreatePR_FailsWithoutGitHubCredential(t *testing.T) {
+	env := setupDispatchEnv(t)
+	env.createObjective(t, "obj-missing-git-auth", domain.ObjectiveStatusExecuting)
+	streams := env.createPlan(t, "plan-missing-git-auth", "obj-missing-git-auth", []string{"stream-1"})
+	advanceStreamForHandlersTest(t, env, streams[0].ID, domain.StreamStatusMerged)
+
+	creds, err := credentials.Load(t.TempDir() + "/credentials.yaml")
+	if err != nil {
+		t.Fatalf("Load creds: %v", err)
+	}
+
+	sb := &handlersTestSandbox{
+		id: "merger-sb",
+		execFn: func(cmd string) (sandbox.ExecResult, error) {
+			switch cmd {
+			case "git remote get-url origin":
+				return sandbox.ExecResult{ExitCode: 0, Stdout: "git@github.com:syndg/repo.git\n"}, nil
+			case "git rev-parse --abbrev-ref HEAD":
+				return sandbox.ExecResult{ExitCode: 0, Stdout: "tack/obj-missing-git-auth/merge\n"}, nil
+			default:
+				if strings.HasPrefix(cmd, "gh pr create") {
+					t.Fatalf("sandbox gh fallback should not be used")
+				}
+				return sandbox.ExecResult{ExitCode: 0}, nil
+			}
+		},
+	}
+
+	h := &Handlers{
+		mergeProcessor:  &handlersTestMergeHelper{mergerID: sb.ID()},
+		plans:           env.plans,
+		streams:         env.streams,
+		objectives:      env.objectives,
+		sandboxProvider: &handlersTestSandboxProvider{sb: sb},
+		baseBranch:      "main",
+		creds:           creds,
+		logger:          env.logger,
+	}
+
+	result, err := h.createPR(context.Background(), &blueprint.Execution{ID: "exec-missing-git-auth", ObjectiveID: "obj-missing-git-auth"}, &blueprint.Step{ID: "create_pr"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != blueprint.StepStatusFailed {
+		t.Fatalf("status = %s, want failed", result.Status)
+	}
+	if !strings.Contains(result.Error, "create_pr requires stored git credentials for github.com") || !strings.Contains(result.Error, "tack auth add github") {
+		t.Fatalf("error = %q, want preflight-aligned git auth message", result.Error)
+	}
+}
+
+func TestCreatePR_FailsForNonGitHubRemoteWithoutGHFallback(t *testing.T) {
+	env := setupDispatchEnv(t)
+	env.createObjective(t, "obj-gitlab-pr", domain.ObjectiveStatusExecuting)
+	streams := env.createPlan(t, "plan-gitlab-pr", "obj-gitlab-pr", []string{"stream-1"})
+	advanceStreamForHandlersTest(t, env, streams[0].ID, domain.StreamStatusMerged)
+
+	creds, err := credentials.Load(t.TempDir() + "/credentials.yaml")
+	if err != nil {
+		t.Fatalf("Load creds: %v", err)
+	}
+	creds.SetGit(credentials.GitCredential{Type: credentials.TypePAT, Host: "github.com", Token: "test-token"})
+
+	sb := &handlersTestSandbox{
+		id: "merger-sb",
+		execFn: func(cmd string) (sandbox.ExecResult, error) {
+			switch cmd {
+			case "git remote get-url origin":
+				return sandbox.ExecResult{ExitCode: 0, Stdout: "https://gitlab.com/syndg/repo.git\n"}, nil
+			case "git rev-parse --abbrev-ref HEAD":
+				return sandbox.ExecResult{ExitCode: 0, Stdout: "tack/obj-gitlab-pr/merge\n"}, nil
+			default:
+				if strings.HasPrefix(cmd, "gh pr create") {
+					t.Fatalf("sandbox gh fallback should not be used")
+				}
+				return sandbox.ExecResult{ExitCode: 0}, nil
+			}
+		},
+	}
+
+	h := &Handlers{
+		mergeProcessor:  &handlersTestMergeHelper{mergerID: sb.ID()},
+		plans:           env.plans,
+		streams:         env.streams,
+		objectives:      env.objectives,
+		sandboxProvider: &handlersTestSandboxProvider{sb: sb},
+		baseBranch:      "main",
+		creds:           creds,
+		logger:          env.logger,
+	}
+
+	result, err := h.createPR(context.Background(), &blueprint.Execution{ID: "exec-gitlab-pr", ObjectiveID: "obj-gitlab-pr"}, &blueprint.Step{ID: "create_pr"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != blueprint.StepStatusFailed {
+		t.Fatalf("status = %s, want failed", result.Status)
+	}
+	if !strings.Contains(result.Error, "create_pr supports GitHub remotes only") || !strings.Contains(result.Error, "origin=https://gitlab.com/syndg/repo.git") {
+		t.Fatalf("error = %q, want preflight-aligned unsupported remote message", result.Error)
+	}
+}
+
 func TestCreatePR_UsesRuntimeGeneratedMessages(t *testing.T) {
 	env := setupDispatchEnv(t)
 	env.createObjective(t, "obj-runtime-pr", domain.ObjectiveStatusExecuting)

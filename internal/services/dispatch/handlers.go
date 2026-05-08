@@ -481,7 +481,7 @@ func (h *Handlers) markComplete(ctx context.Context, exec *blueprint.Execution) 
 }
 
 // createPR implements the "create_pr" deterministic action.
-// Pushes the agent's branch to origin and creates a GitHub PR via `gh pr create`.
+// Creates a GitHub pull request for the already-pushed merged branch.
 func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step *blueprint.Step) (blueprint.StepResult, error) {
 	obj, err := h.objectives.Get(ctx, exec.ObjectiveID)
 	if err != nil {
@@ -601,41 +601,12 @@ func (h *Handlers) createPR(ctx context.Context, exec *blueprint.Execution, step
 			"objective_id", exec.ObjectiveID,
 		)
 		return blueprint.StepResult{Status: blueprint.StepStatusCompleted, Output: prURL}, nil
-	} else if apiErr != errPRAPIUnsupported {
+	} else {
 		return blueprint.StepResult{
 			Status: blueprint.StepStatusFailed,
-			Error:  fmt.Sprintf("creating PR via api: %s", apiErr),
+			Error:  fmt.Sprintf("creating PR via GitHub API: %s", apiErr),
 		}, nil
 	}
-
-	// Fallback to gh CLI inside the sandbox for unsupported remotes.
-	escapedTitle := naming.ShellQuote(title)
-	escapedBody := naming.ShellQuote(body)
-	prCmd := fmt.Sprintf("gh pr create --title %s --body %s --head %s --base %s", escapedTitle, escapedBody, naming.ShellQuote(branch), naming.ShellQuote(h.baseBranch))
-
-	prResult, err := sb.Exec(ctx, prCmd, sandbox.ExecOpts{})
-	if err != nil || prResult.ExitCode != 0 {
-		stderr := ""
-		if prResult.Stderr != "" {
-			stderr = prResult.Stderr
-		}
-		return blueprint.StepResult{
-			Status: blueprint.StepStatusFailed,
-			Error:  fmt.Sprintf("creating PR: %s", stderr),
-		}, nil
-	}
-
-	prURL := strings.TrimSpace(prResult.Stdout)
-	h.logger.Info("PR created",
-		"url", prURL,
-		"branch", branch,
-		"objective_id", exec.ObjectiveID,
-	)
-
-	return blueprint.StepResult{
-		Status: blueprint.StepStatusCompleted,
-		Output: prURL,
-	}, nil
 }
 
 // findSandboxForObjective locates an active agent sandbox for the given objective.
@@ -706,8 +677,6 @@ func (h *Handlers) findMergerSandbox(ctx context.Context, objectiveID string) (s
 	return h.findSandboxForObjective(ctx, objectiveID)
 }
 
-var errPRAPIUnsupported = fmt.Errorf("pull request api unsupported")
-
 type githubPullRequestResponse struct {
 	HTMLURL string `json:"html_url"`
 	Message string `json:"message"`
@@ -716,14 +685,17 @@ type githubPullRequestResponse struct {
 func (h *Handlers) createPullRequestViaAPI(ctx context.Context, remoteURL, head, title, body string) (string, error) {
 	owner, repo, host, err := parseGitRemote(remoteURL)
 	if err != nil {
-		return "", errPRAPIUnsupported
+		return "", fmt.Errorf("create_pr could not parse origin remote %q: %w; fix: set origin to a supported GitHub SSH or HTTPS remote", remoteURL, err)
 	}
-	if host != "github.com" || h.creds == nil {
-		return "", errPRAPIUnsupported
+	if host != "github.com" {
+		return "", fmt.Errorf("create_pr supports GitHub remotes only; origin host %q is unsupported; evidence: origin=%s; fix: set origin to a GitHub repository or remove create_pr from the selected blueprint", host, remoteURL)
 	}
-	tok, err := h.creds.GitToken(host)
+	if h.creds == nil {
+		return "", fmt.Errorf("create_pr requires stored git credentials for github.com; evidence: origin=%s; fix: tack auth add github", remoteURL)
+	}
+	tok, err := h.creds.GitToken("github.com")
 	if err != nil {
-		return "", errPRAPIUnsupported
+		return "", fmt.Errorf("create_pr requires stored git credentials for github.com; evidence: origin=%s; %v; fix: tack auth add github", remoteURL, err)
 	}
 
 	payload := map[string]string{
