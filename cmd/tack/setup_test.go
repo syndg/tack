@@ -155,6 +155,36 @@ func TestSetupGitHubTokenOnlyRequiredForPRBlueprint(t *testing.T) {
 	}
 }
 
+func TestSetupGitHubTokenUsesGlobalBlueprintOverride(t *testing.T) {
+	root := t.TempDir()
+	userConfig := filepath.Join(root, "config.yaml")
+	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
+	t.Setenv("HOME", root)
+	resetSetupTestState(t)
+	writeSetupBlueprint(t, filepath.Join(root, "blueprints", "standard.yaml"), `id: standard
+steps:
+  - id: complete
+    type: deterministic
+    action: mark_complete
+`)
+	setupDaemonService = "foreground"
+	setupDaemonListen = "127.0.0.1:9900"
+	setupRuntime = "claude-code"
+	setupProvider = "anthropic"
+	setupAuthMode = "native"
+	setupPlannerModel = "planner-model"
+	setupAgentModel = "agent-model"
+	setupSmallTaskModel = "small-model"
+	setupSandboxProvider = "local"
+	setupQualityGates = []string{"go test ./..."}
+	setupBlueprint = "standard"
+
+	missing := strings.Join(missingSetupInputs(setupConfigFile{}), ",")
+	if strings.Contains(missing, "--github-token") {
+		t.Fatalf("standard global override missing inputs = %s, want no github token", missing)
+	}
+}
+
 func TestValidateSetupStateFailsPiModelOutsideCatalog(t *testing.T) {
 	resetSetupTestState(t)
 	setupRuntimeRunner = fakeDoctorRuntimeRunner{
@@ -237,4 +267,14 @@ func resetSetupTestState(t *testing.T) {
 		setupRuntimeRunner = runtimecatalog.ExecRunner{}
 		setupDaemonCanSeePiFunc = runtimecatalog.DaemonCanSeePi
 	})
+}
+
+func writeSetupBlueprint(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 }

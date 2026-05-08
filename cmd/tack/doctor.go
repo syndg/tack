@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/syndg/tack/internal/blueprintconfig"
 	"github.com/syndg/tack/internal/config"
-	"github.com/syndg/tack/internal/harness/blueprint"
 	"github.com/syndg/tack/internal/harness/preflight"
 	"github.com/syndg/tack/internal/runtimeauth"
 	"github.com/syndg/tack/internal/runtimecatalog"
@@ -78,16 +78,16 @@ func checkBlueprintPreflight(ctx context.Context) ([]validation.Finding, error) 
 	if err != nil {
 		return nil, err
 	}
-	reg := blueprint.NewRegistry()
-	if err := reg.LoadDefaults(); err != nil {
-		return nil, fmt.Errorf("loading shipped blueprints: %w", err)
+	reg, err := blueprintconfig.LoadActiveRegistry(userConfigPath(), effective.ProjectRoot)
+	if err != nil {
+		return nil, err
 	}
 	if _, ok := reg.Get(effective.Blueprint.Value); !ok {
 		return []validation.Finding{{
 			Status:   validation.StatusFail,
 			Source:   string(effective.Blueprint.Source),
 			Evidence: fmt.Sprintf("blueprint=%s", effective.Blueprint.Value),
-			Fix:      "select a shipped blueprint or repair the project blueprint override",
+			Fix:      "select an available blueprint or repair the active blueprint override",
 		}}, nil
 	}
 	store, err := loadCredentialsStore()

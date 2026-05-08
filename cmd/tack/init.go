@@ -677,13 +677,16 @@ func validateProjectInit(ctx context.Context, root string, global setupConfigFil
 		return err
 	}
 
-	reg := blueprint.NewRegistry()
-	if err := reg.LoadDefaults(); err != nil {
-		return fmt.Errorf("loading shipped blueprints: %w", err)
+	reg, err := blueprintconfig.LoadActiveRegistry(userConfigPath(), root)
+	if err != nil {
+		return err
 	}
-	bp, ok := reg.Get(merged.Blueprint)
+	_, ok := reg.Get(merged.Blueprint)
 	if ok {
-		requirements := blueprintconfig.ExtractRequirements(bp)
+		requirements, err := blueprintconfig.ExtractRequirementsFromLookup(registryBlueprintLookup{reg: reg}, merged.Blueprint)
+		if err != nil {
+			return err
+		}
 		if requirements.QualityGates && len(merged.QualityGates) == 0 {
 			return fmt.Errorf("project init validation failed: blueprint %q requires quality_gates", merged.Blueprint)
 		}

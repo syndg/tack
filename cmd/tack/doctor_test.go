@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -249,6 +250,61 @@ func TestDoctorChecksBlueprintPreflightRequirements(t *testing.T) {
 	}
 	if !report.Failed {
 		t.Fatalf("report.Failed = false, want true")
+	}
+}
+
+func TestDoctorBlueprintPreflightUsesProjectOverride(t *testing.T) {
+	root := t.TempDir()
+	projectConfig := filepath.Join(root, ".tack", "config.yaml")
+	if err := os.MkdirAll(filepath.Join(root, ".tack", "blueprints"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(projectConfig, []byte("blueprint: standard\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile project config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".tack", "blueprints", "standard.yaml"), []byte(`id: standard
+steps:
+  - id: complete
+    type: deterministic
+    action: mark_complete
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile blueprint override: %v", err)
+	}
+	userConfig := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(userConfig, []byte("setup:\n  complete: true\n  service: service\ndaemon:\n  listen: 127.0.0.1:9901\nagents:\n  runtime: pi\nruntime_auth:\n  provider: anthropic\n  mode: native\n  method: api_key\n  credential_ref: anthropic-main\nmodels:\n  agent: global-agent\n  planner: global-planner\n  small_tasks: global-small\nsandbox:\n  provider: local\nquality_gates:\n  - go test ./...\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile user config: %v", err)
+	}
+	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
+	t.Setenv("HOME", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetArgs([]string{"--config", projectConfig, "doctor", "--json"})
+	doctorRuntimeRunner = fakeDoctorRuntimeRunner{paths: map[string]string{"pi": "/tmp/pi"}, out: map[string][]byte{"pi --list-models": []byte("provider model context max-out thinking images\nanthropic claude-opus-4-1 200K 32K yes yes\n")}}
+	doctorDaemonCanSeePi = func(context.Context, string) (bool, string) { return true, "daemon can see Pi" }
+	doctorGitRemote = func(context.Context, string) (string, error) { return "", fmt.Errorf("should not inspect git remote") }
+	setDoctorDaemonService(t, daemonservice.Status{Provider: "launchd", Installed: true, Enabled: true, Running: true, Healthy: true, ConfigPath: userConfig}, nil)
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		doctorJSON = false
+		cfgPath = ""
+		doctorRuntimeRunner = runtimecatalog.ExecRunner{}
+		doctorDaemonCanSeePi = runtimecatalog.DaemonCanSeePi
+		doctorGitRemote = nil
+		doctorDaemonServiceProvider = newDaemonServiceProvider
+	})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("doctor --json: %v\nstderr: %s", err, stderr.String())
+	}
+	var report validation.Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("Unmarshal doctor JSON: %v\n%s", err, stdout.String())
+	}
+	for _, finding := range report.Findings {
+		if finding.Check == "preflight.git_auth" || finding.Check == "preflight.git_remote_origin" {
+			t.Fatalf("doctor used shipped create_pr requirements despite project override: %#v", finding)
+		}
 	}
 }
 

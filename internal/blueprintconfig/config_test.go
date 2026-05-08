@@ -97,6 +97,83 @@ func TestSaveGlobalOverrideShape(t *testing.T) {
 	}
 }
 
+func TestActiveRegistryRequirementsUseShippedStandard(t *testing.T) {
+	reg, err := LoadActiveRegistry(filepath.Join(t.TempDir(), "config.yaml"), "")
+	if err != nil {
+		t.Fatalf("LoadActiveRegistry: %v", err)
+	}
+	req, err := ExtractRequirementsFromLookup(regLookup{reg: reg}, StandardBlueprintID)
+	if err != nil {
+		t.Fatalf("ExtractRequirementsFromLookup: %v", err)
+	}
+	if !req.CreatePR || !req.QualityGates {
+		t.Fatalf("shipped standard requirements = %#v, want create_pr and quality_gates", req)
+	}
+}
+
+func TestActiveRegistryRequirementsUseGlobalOverride(t *testing.T) {
+	root := t.TempDir()
+	userConfig := filepath.Join(root, "config.yaml")
+	writeBlueprint(t, filepath.Join(root, "blueprints", "standard.yaml"), noPRBlueprintYAML("standard"))
+
+	reg, err := LoadActiveRegistry(userConfig, "")
+	if err != nil {
+		t.Fatalf("LoadActiveRegistry: %v", err)
+	}
+	req, err := ExtractRequirementsFromLookup(regLookup{reg: reg}, StandardBlueprintID)
+	if err != nil {
+		t.Fatalf("ExtractRequirementsFromLookup: %v", err)
+	}
+	if req.CreatePR || req.QualityGates {
+		t.Fatalf("global override requirements = %#v, want no create_pr or quality_gates", req)
+	}
+}
+
+func TestActiveRegistryRequirementsUseProjectOverride(t *testing.T) {
+	projectRoot := t.TempDir()
+	writeBlueprint(t, filepath.Join(projectRoot, ".tack", "blueprints", "standard.yaml"), noPRBlueprintYAML("standard"))
+
+	reg, err := LoadActiveRegistry(filepath.Join(t.TempDir(), "config.yaml"), projectRoot)
+	if err != nil {
+		t.Fatalf("LoadActiveRegistry: %v", err)
+	}
+	req, err := ExtractRequirementsFromLookup(regLookup{reg: reg}, StandardBlueprintID)
+	if err != nil {
+		t.Fatalf("ExtractRequirementsFromLookup: %v", err)
+	}
+	if req.CreatePR || req.QualityGates {
+		t.Fatalf("project override requirements = %#v, want no create_pr or quality_gates", req)
+	}
+}
+
+func TestExtractRequirementsFromLookupTraversesNestedBlueprintRefs(t *testing.T) {
+	projectRoot := t.TempDir()
+	writeBlueprint(t, filepath.Join(projectRoot, ".tack", "blueprints", "standard.yaml"), `id: standard
+steps:
+  - id: execute
+    type: blueprint_ref
+    ref: nested
+`)
+	writeBlueprint(t, filepath.Join(projectRoot, ".tack", "blueprints", "nested.yaml"), `id: nested
+steps:
+  - id: pr
+    type: deterministic
+    action: create_pr
+`)
+
+	reg, err := LoadActiveRegistry(filepath.Join(t.TempDir(), "config.yaml"), projectRoot)
+	if err != nil {
+		t.Fatalf("LoadActiveRegistry: %v", err)
+	}
+	req, err := ExtractRequirementsFromLookup(regLookup{reg: reg}, StandardBlueprintID)
+	if err != nil {
+		t.Fatalf("ExtractRequirementsFromLookup: %v", err)
+	}
+	if !req.CreatePR || !req.Git {
+		t.Fatalf("nested requirements = %#v, want create_pr and git", req)
+	}
+}
+
 func contains(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
@@ -113,4 +190,31 @@ func findStep(bp *blueprint.Blueprint, id string) *blueprint.Step {
 		}
 	}
 	return nil
+}
+
+type regLookup struct {
+	reg *blueprint.Registry
+}
+
+func (r regLookup) GetBlueprint(id string) (*blueprint.Blueprint, bool) {
+	return r.reg.Get(id)
+}
+
+func writeBlueprint(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func noPRBlueprintYAML(id string) string {
+	return "id: " + id + `
+steps:
+  - id: complete
+    type: deterministic
+    action: mark_complete
+`
 }

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/syndg/tack/internal/blueprintconfig"
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/credentials"
 	"github.com/syndg/tack/internal/harness/blueprint"
@@ -111,30 +112,9 @@ func (c *Checker) Check(ctx context.Context, blueprintID string) error {
 }
 
 func (c *Checker) stepsForBlueprint(blueprintID string) ([]blueprint.Step, error) {
-	seen := map[string]bool{}
-	var steps []blueprint.Step
-	var visit func(string) error
-	visit = func(id string) error {
-		if seen[id] {
-			return nil
-		}
-		seen[id] = true
-		bp, ok := c.blueprints.GetBlueprint(id)
-		if !ok {
-			return fmt.Errorf("preflight failed: blueprint %q not found", id)
-		}
-		for _, step := range bp.Steps {
-			steps = append(steps, step)
-			if step.Type == blueprint.StepTypeBlueprintRef && step.Ref != "" {
-				if err := visit(step.Ref); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	if err := visit(blueprintID); err != nil {
-		return nil, err
+	steps, err := blueprintconfig.StepsForBlueprint(c.blueprints, blueprintID)
+	if err != nil {
+		return nil, fmt.Errorf("preflight failed: %w", err)
 	}
 	return steps, nil
 }

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/harness/blueprint"
 	"gopkg.in/yaml.v3"
 )
@@ -31,6 +32,10 @@ type Requirements struct {
 	Git          bool `json:"git" yaml:"git"`
 	QualityGates bool `json:"quality_gates" yaml:"quality_gates"`
 	CreatePR     bool `json:"create_pr" yaml:"create_pr"`
+}
+
+type BlueprintLookup interface {
+	GetBlueprint(id string) (*blueprint.Blueprint, bool)
 }
 
 func (r Requirements) Names() []string {
@@ -66,6 +71,46 @@ func LoadShippedStandard() (*blueprint.Blueprint, error) {
 		return nil, fmt.Errorf("shipped %q blueprint not found", StandardBlueprintID)
 	}
 	return Clone(bp), nil
+}
+
+func LoadActiveRegistry(userConfigPath, projectRoot string) (*blueprint.Registry, error) {
+	reg := blueprint.NewRegistry()
+	if err := reg.LoadDefaults(); err != nil {
+		return nil, fmt.Errorf("loading default blueprints: %w", err)
+	}
+	for _, dir := range []string{UserBlueprintsDir(userConfigPath), ProjectBlueprintsDir(projectRoot)} {
+		if dir == "" {
+			continue
+		}
+		info, err := os.Stat(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("checking blueprint directory %s: %w", dir, err)
+		}
+		if !info.IsDir() {
+			continue
+		}
+		if err := reg.LoadFromDir(dir); err != nil {
+			return nil, fmt.Errorf("loading blueprint directory %s: %w", dir, err)
+		}
+	}
+	return reg, nil
+}
+
+func UserBlueprintsDir(userConfigPath string) string {
+	if strings.TrimSpace(userConfigPath) == "" {
+		userConfigPath = config.UserConfigPath
+	}
+	return filepath.Join(filepath.Dir(expandPath(userConfigPath)), "blueprints")
+}
+
+func ProjectBlueprintsDir(projectRoot string) string {
+	if strings.TrimSpace(projectRoot) == "" {
+		return ""
+	}
+	return filepath.Join(projectRoot, config.ProjectConfigDir, "blueprints")
 }
 
 func Clone(bp *blueprint.Blueprint) *blueprint.Blueprint {
@@ -159,6 +204,50 @@ func ExtractRequirements(bp *blueprint.Blueprint) Requirements {
 		req = mergeRequirements(req, requirementsForStep(step))
 	}
 	return req
+}
+
+func ExtractRequirementsFromLookup(lookup BlueprintLookup, blueprintID string) (Requirements, error) {
+	var req Requirements
+	steps, err := StepsForBlueprint(lookup, blueprintID)
+	if err != nil {
+		return req, err
+	}
+	for _, step := range steps {
+		req = mergeRequirements(req, requirementsForStep(step))
+	}
+	return req, nil
+}
+
+func StepsForBlueprint(lookup BlueprintLookup, blueprintID string) ([]blueprint.Step, error) {
+	if lookup == nil {
+		return nil, fmt.Errorf("blueprint lookup is unavailable")
+	}
+	seen := map[string]bool{}
+	var steps []blueprint.Step
+	var visit func(string) error
+	visit = func(id string) error {
+		if seen[id] {
+			return nil
+		}
+		seen[id] = true
+		bp, ok := lookup.GetBlueprint(id)
+		if !ok {
+			return fmt.Errorf("blueprint %q not found", id)
+		}
+		for _, step := range bp.Steps {
+			steps = append(steps, step)
+			if step.Type == blueprint.StepTypeBlueprintRef && step.Ref != "" {
+				if err := visit(step.Ref); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := visit(blueprintID); err != nil {
+		return nil, err
+	}
+	return steps, nil
 }
 
 func SaveGlobalOverride(path string, bp *blueprint.Blueprint) error {
@@ -294,4 +383,14 @@ func stepNext(bp *blueprint.Blueprint, id string) string {
 		}
 	}
 	return ""
+}
+
+func expandPath(path string) string {
+	path = os.ExpandEnv(path)
+	if strings.HasPrefix(path, "~") {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return filepath.Join(home, strings.TrimPrefix(path, "~"))
+		}
+	}
+	return path
 }

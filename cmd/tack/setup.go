@@ -266,14 +266,15 @@ func missingSetupInputs(state setupConfigFile) []string {
 }
 
 func selectedBlueprintNeedsGitHub(id string) bool {
-	if id != blueprintconfig.StandardBlueprintID {
-		return false
-	}
-	bp, err := blueprintconfig.LoadShippedStandard()
+	reg, err := blueprintconfig.LoadActiveRegistry(userConfigPath(), "")
 	if err != nil {
 		return false
 	}
-	return blueprintconfig.ExtractRequirements(bp).CreatePR
+	requirements, err := blueprintconfig.ExtractRequirementsFromLookup(registryBlueprintLookup{reg: reg}, id)
+	if err != nil {
+		return false
+	}
+	return requirements.CreatePR
 }
 
 func validateSetupState(ctx context.Context, state setupConfigFile) error {
