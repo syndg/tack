@@ -36,6 +36,7 @@ var (
 	setupSandboxProvider    string
 	setupBlueprint          string
 	setupQualityGates       []string
+	setupQualityGatesInput  string
 	setupGitHubToken        string
 	setupInstallPi          bool
 	setupRuntimeRunner      runtimecatalog.Runner = runtimecatalog.ExecRunner{}
@@ -94,73 +95,92 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	if state.Setup.Phases == nil {
 		state.Setup.Phases = map[string]config.SetupPhase{}
 	}
-	firstPhase := firstIncompleteSetupPhase(state)
+	firstPhase := firstSetupPhaseToRun(state)
 	if firstPhase == "" {
 		fmt.Fprintln(cmd.OutOrStdout(), "Global setup is complete")
 		return nil
 	}
 
 	if setupNonInteractive {
-		if err := applyNonInteractiveSetup(cmd.Context(), &state); err != nil {
-			return err
+		if err := missingSetupInputs(state); len(err) > 0 {
+			return fmt.Errorf("non-interactive setup requires %s", strings.Join(err, ", "))
 		}
-	} else if err := applyInteractiveSetup(&state, firstPhase); err != nil {
-		return err
 	}
 
-	completed := setupPhaseOrder[startSetupIndex(firstPhase):]
-	for _, phase := range completed {
-		state.Setup.Phases[phase] = config.SetupPhase{Complete: true}
-	}
-	state.Setup.Complete = true
-	if err := validateSetupState(cmd.Context(), state); err != nil {
-		state.Setup.Phases["final_validation"] = config.SetupPhase{}
-		state.Setup.Complete = false
-		return err
-	}
-	if err := saveSetupCredentials(state); err != nil {
-		return err
-	}
-	if err := writeSetupConfigFileAtomic(path, state, stat); err != nil {
-		return err
+	for _, phase := range setupPhaseOrder[startSetupIndex(firstPhase):] {
+		if phase == "final_validation" {
+			if err := validateSetupState(cmd.Context(), state); err != nil {
+				state.Setup.Phases["final_validation"] = config.SetupPhase{}
+				state.Setup.Complete = false
+				_ = writeSetupConfigFileAtomic(path, state, stat)
+				return err
+			}
+			if err := saveSetupCredentials(state); err != nil {
+				return err
+			}
+			state.Setup.Complete = true
+			if err := persistSetupPhase(path, &state, &stat, phase); err != nil {
+				return err
+			}
+			break
+		}
+		if setupNonInteractive {
+			if err := applyNonInteractiveSetupPhase(cmd.Context(), &state, phase); err != nil {
+				return err
+			}
+		} else if err := applyInteractiveSetupPhase(&state, phase); err != nil {
+			return err
+		}
+		if err := saveSetupCredentials(state); err != nil {
+			return err
+		}
+		if err := persistSetupPhase(path, &state, &stat, phase); err != nil {
+			return err
+		}
 	}
 	renderSetupSummary(cmd, state)
 	return nil
 }
 
-func applyNonInteractiveSetup(ctx context.Context, state *setupConfigFile) error {
-	missing := missingSetupInputs(*state)
-	if len(missing) > 0 {
-		return fmt.Errorf("non-interactive setup requires %s", strings.Join(missing, ", "))
-	}
-	state.Daemon.Listen = setupDaemonListen
-	state.Setup.Service = setupDaemonService
-	state.Agents.Runtime = setupRuntime
-	state.RuntimeAuth.Runtime = setupRuntime
-	state.RuntimeAuth.Provider = setupProvider
-	state.RuntimeAuth.Mode = setupAuthMode
-	state.RuntimeAuth.Method = setupAuthMethod
-	state.RuntimeAuth.CredentialRef = setupCredentialRef
-	state.Models.Agent = setupAgentModel
-	state.Models.Planner = setupPlannerModel
-	state.Models.SmallTasks = setupSmallTaskModel
-	state.Sandbox.Provider = setupSandboxProvider
-	state.Blueprint = setupBlueprint
-	state.QualityGates = append([]string(nil), setupQualityGates...)
-	if setupRuntime == "pi" {
-		plan, err := runtimecatalog.PlanPiInstall(ctx, setupRuntimeRunner, setupInstallPi)
-		if err != nil {
-			return err
+func applyNonInteractiveSetupPhase(ctx context.Context, state *setupConfigFile, phase string) error {
+	switch phase {
+	case "daemon_service":
+		state.Daemon.Listen = setupDaemonListen
+		state.Setup.Service = setupDaemonService
+	case "runtime":
+		state.Agents.Runtime = setupRuntime
+		if setupRuntime == "pi" {
+			plan, err := runtimecatalog.PlanPiInstall(ctx, setupRuntimeRunner, setupInstallPi)
+			if err != nil {
+				return err
+			}
+			if plan.RequiresConsent {
+				return fmt.Errorf("Pi installation requires explicit consent with --install-pi")
+			}
 		}
-		if plan.RequiresConsent {
-			return fmt.Errorf("Pi installation requires explicit consent with --install-pi")
-		}
+	case "provider_auth":
+		state.RuntimeAuth.Runtime = setupRuntime
+		state.RuntimeAuth.Provider = setupProvider
+		state.RuntimeAuth.Mode = setupAuthMode
+		state.RuntimeAuth.Method = setupAuthMethod
+		state.RuntimeAuth.CredentialRef = setupCredentialRef
+	case "models":
+		state.Models.Agent = setupAgentModel
+		state.Models.Planner = setupPlannerModel
+		state.Models.SmallTasks = setupSmallTaskModel
+	case "blueprint":
+		state.Sandbox.Provider = setupSandboxProvider
+		state.Blueprint = setupBlueprint
+		state.QualityGates = append([]string(nil), setupQualityGates...)
+	case "github_pr":
+		// Credentials are persisted by saveSetupCredentials after the phase succeeds.
 	}
 	return nil
 }
 
-func applyInteractiveSetup(state *setupConfigFile, firstPhase string) error {
-	if startSetupIndex(firstPhase) <= startSetupIndex("daemon_service") {
+func applyInteractiveSetupPhase(state *setupConfigFile, phase string) error {
+	switch phase {
+	case "daemon_service":
 		if err := huh.NewSelect[string]().Title("Daemon service mode").Options(huh.NewOption("Service", "service"), huh.NewOption("Foreground", "foreground")).Value(&setupDaemonService).Run(); err != nil {
 			return err
 		}
@@ -172,8 +192,7 @@ func applyInteractiveSetup(state *setupConfigFile, firstPhase string) error {
 		}
 		state.Setup.Service = setupDaemonService
 		state.Daemon.Listen = setupDaemonListen
-	}
-	if startSetupIndex(firstPhase) <= startSetupIndex("runtime") {
+	case "runtime":
 		if state.Agents.Runtime != "" {
 			fmt.Printf("Existing runtime: %s\n", state.Agents.Runtime)
 		}
@@ -181,8 +200,7 @@ func applyInteractiveSetup(state *setupConfigFile, firstPhase string) error {
 			return err
 		}
 		state.Agents.Runtime = setupRuntime
-	}
-	if startSetupIndex(firstPhase) <= startSetupIndex("provider_auth") {
+	case "provider_auth":
 		if err := huh.NewInput().Title("Provider").Value(&setupProvider).Run(); err != nil {
 			return err
 		}
@@ -198,8 +216,7 @@ func applyInteractiveSetup(state *setupConfigFile, firstPhase string) error {
 			}
 		}
 		state.RuntimeAuth = config.RuntimeAuthConfig{Runtime: state.Agents.Runtime, Provider: setupProvider, Mode: setupAuthMode, Method: setupAuthMethod, CredentialRef: setupCredentialRef}
-	}
-	if startSetupIndex(firstPhase) <= startSetupIndex("models") {
+	case "models":
 		if err := huh.NewInput().Title("Planner model").Value(&setupPlannerModel).Run(); err != nil {
 			return err
 		}
@@ -210,16 +227,28 @@ func applyInteractiveSetup(state *setupConfigFile, firstPhase string) error {
 			return err
 		}
 		state.Models = config.ModelsConfig{Planner: setupPlannerModel, Agent: setupAgentModel, SmallTasks: setupSmallTaskModel}
-	}
-	if startSetupIndex(firstPhase) <= startSetupIndex("blueprint") {
+	case "blueprint":
 		if err := huh.NewInput().Title("Sandbox provider").Value(&setupSandboxProvider).Run(); err != nil {
 			return err
 		}
 		if err := huh.NewInput().Title("Blueprint").Value(&setupBlueprint).Run(); err != nil {
 			return err
 		}
+		if err := huh.NewInput().Title("Quality gate command").Value(&setupQualityGatesInput).Run(); err != nil {
+			return err
+		}
 		state.Sandbox.Provider = setupSandboxProvider
 		state.Blueprint = setupBlueprint
+		state.QualityGates = []string{setupQualityGatesInput}
+	case "github_pr":
+		if selectedBlueprintNeedsGitHub(state.Blueprint) && setupGitHubToken == "" {
+			store, err := loadCredentialsStore()
+			if err != nil || !store.HasGit() {
+				if err := huh.NewInput().Title("GitHub token").Value(&setupGitHubToken).Run(); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -356,6 +385,66 @@ func validatePiModelSelections(provider string, models config.ModelsConfig, cata
 		}
 	}
 	return nil
+}
+
+func persistSetupPhase(path string, state *setupConfigFile, stat *os.FileInfo, phase string) error {
+	state.Setup.Phases[phase] = config.SetupPhase{Complete: true}
+	if phase != "final_validation" {
+		state.Setup.Complete = false
+	}
+	if err := writeSetupConfigFileAtomic(path, *state, *stat); err != nil {
+		return err
+	}
+	current, err := os.Stat(expandSetupPath(path))
+	if err != nil {
+		return err
+	}
+	*stat = current
+	return nil
+}
+
+func firstSetupPhaseToRun(state setupConfigFile) string {
+	if state.Setup.Phases == nil {
+		return setupPhaseOrder[0]
+	}
+	for _, phase := range setupPhaseOrder[:len(setupPhaseOrder)-1] {
+		if !state.Setup.Phases[phase].Complete || !setupPhaseValid(state, phase) {
+			return phase
+		}
+	}
+	if state.Setup.Complete && state.Setup.Phases["final_validation"].Complete && validateSetupState(context.Background(), state) == nil {
+		return ""
+	}
+	return "final_validation"
+}
+
+func setupPhaseValid(state setupConfigFile, phase string) bool {
+	switch phase {
+	case "daemon_service":
+		return state.Setup.Service != "" && state.Daemon.Listen != ""
+	case "runtime":
+		return state.Agents.Runtime != ""
+	case "provider_auth":
+		if state.RuntimeAuth.Provider == "" || state.RuntimeAuth.Mode == "" {
+			return false
+		}
+		if state.RuntimeAuth.Mode == "tack" {
+			return state.RuntimeAuth.Method != "" && state.RuntimeAuth.CredentialRef != ""
+		}
+		return true
+	case "models":
+		return state.Models.Planner != "" && state.Models.Agent != "" && state.Models.SmallTasks != ""
+	case "blueprint":
+		return state.Sandbox.Provider != "" && state.Blueprint != "" && len(state.QualityGates) > 0
+	case "github_pr":
+		if !selectedBlueprintNeedsGitHub(state.Blueprint) {
+			return true
+		}
+		store, err := loadCredentialsStore()
+		return err == nil && store.HasGit()
+	default:
+		return false
+	}
 }
 
 func saveSetupCredentials(state setupConfigFile) error {

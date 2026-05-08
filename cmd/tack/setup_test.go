@@ -115,6 +115,59 @@ func TestSetupNonInteractiveAggregatesMissingOAuthInputs(t *testing.T) {
 	}
 }
 
+func TestSetupPersistsCompletedPhasesBeforeFinalValidationFailure(t *testing.T) {
+	root := t.TempDir()
+	userConfig := filepath.Join(root, "config.yaml")
+	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
+	t.Setenv("HOME", root)
+	resetSetupTestState(t)
+	setupDaemonCanSeePiFunc = func(context.Context, string) (bool, string) { return false, "pi missing from daemon PATH" }
+
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"setup", "--non-interactive",
+		"--daemon-service", "foreground",
+		"--daemon-listen", "127.0.0.1:9900",
+		"--runtime", "pi",
+		"--provider", "anthropic",
+		"--auth-mode", "native",
+		"--planner-model", "model",
+		"--agent-model", "model",
+		"--small-task-model", "model",
+		"--sandbox-provider", "local",
+		"--blueprint", "custom-no-pr",
+		"--quality-gate", "go test ./...",
+	})
+
+	err := rootCmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "daemon cannot validate Pi visibility") {
+		t.Fatalf("setup error = %v, want final validation failure", err)
+	}
+	var saved setupConfigFile
+	data, readErr := os.ReadFile(userConfig)
+	if readErr != nil {
+		t.Fatalf("ReadFile user config: %v", readErr)
+	}
+	if err := yaml.Unmarshal(data, &saved); err != nil {
+		t.Fatalf("Unmarshal saved config: %v\n%s", err, string(data))
+	}
+	if saved.Setup.Complete {
+		t.Fatalf("setup.complete = true after failed final validation: %#v", saved.Setup)
+	}
+	for _, phase := range []string{"daemon_service", "runtime", "provider_auth", "models", "blueprint", "github_pr"} {
+		if !saved.Setup.Phases[phase].Complete {
+			t.Fatalf("phase %s not persisted complete: %#v", phase, saved.Setup.Phases)
+		}
+	}
+	if saved.Setup.Phases["final_validation"].Complete {
+		t.Fatalf("final_validation persisted complete after failure: %#v", saved.Setup.Phases)
+	}
+	if got := firstSetupPhaseToRun(saved); got != "final_validation" {
+		t.Fatalf("firstSetupPhaseToRun = %q, want final_validation", got)
+	}
+}
+
 func TestSetupResumesFromFirstIncompletePhase(t *testing.T) {
 	state := setupConfigFile{Setup: config.SetupConfig{Phases: map[string]config.SetupPhase{
 		"daemon_service": {Complete: true},
@@ -126,6 +179,21 @@ func TestSetupResumesFromFirstIncompletePhase(t *testing.T) {
 	state.Setup.Complete = true
 	if got := firstIncompleteSetupPhase(state); got != "" {
 		t.Fatalf("complete setup phase = %q, want empty", got)
+	}
+}
+
+func TestSetupRetriesInvalidCompletedPhase(t *testing.T) {
+	state := setupConfigFile{Setup: config.SetupConfig{Phases: map[string]config.SetupPhase{
+		"daemon_service": {Complete: true},
+		"runtime":        {Complete: true},
+	}}}
+	if got := firstSetupPhaseToRun(state); got != "daemon_service" {
+		t.Fatalf("firstSetupPhaseToRun = %q, want daemon_service", got)
+	}
+	state.Setup.Service = "foreground"
+	state.Daemon.Listen = "127.0.0.1:9900"
+	if got := firstSetupPhaseToRun(state); got != "runtime" {
+		t.Fatalf("firstSetupPhaseToRun = %q, want runtime", got)
 	}
 }
 
@@ -255,6 +323,7 @@ func resetSetupTestState(t *testing.T) {
 	setupSandboxProvider = ""
 	setupBlueprint = ""
 	setupQualityGates = nil
+	setupQualityGatesInput = ""
 	setupGitHubToken = ""
 	setupInstallPi = false
 	setupRuntimeRunner = fakeDoctorRuntimeRunner{paths: map[string]string{"pi": "/tmp/pi"}, out: map[string][]byte{"pi --list-models": []byte("provider model context max-out thinking images\nanthropic model 200K 32K yes yes\n")}}
