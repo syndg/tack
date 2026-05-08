@@ -113,7 +113,7 @@ func TestInitValidationFailureWritesNoProjectState(t *testing.T) {
 	resetInitTestState(t)
 	initGateRunner = func(context.Context, string, string) error { return nil }
 	writeInitUserConfig(t, userConfig, setupConfigFile{
-		Setup:       config.SetupConfig{Complete: true},
+		Setup:       config.SetupConfig{Complete: true, Service: "foreground"},
 		Daemon:      config.DaemonConfig{Listen: "127.0.0.1:9900"},
 		Agents:      config.AgentsConfig{Runtime: "claude-code"},
 		RuntimeAuth: config.RuntimeAuthConfig{Runtime: "claude-code", Provider: "anthropic", Mode: "native"},
@@ -126,8 +126,8 @@ func TestInitValidationFailureWritesNoProjectState(t *testing.T) {
 	rootCmd.SetErr(&strings.Builder{})
 	rootCmd.SetArgs([]string{"init", "--non-interactive"})
 	err := rootCmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), "requires quality_gates") {
-		t.Fatalf("init error = %v, want quality gate validation", err)
+	if err == nil || !strings.Contains(err.Error(), "missing quality_gates") {
+		t.Fatalf("init error = %v, want global quality gate validation", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, ".tack")); !os.IsNotExist(statErr) {
 		t.Fatalf(".tack exists after failed init: %v", statErr)
@@ -147,7 +147,7 @@ func TestInitQualityGateFailureWritesNoProjectState(t *testing.T) {
 		return nil
 	}
 	writeInitUserConfig(t, userConfig, setupConfigFile{
-		Setup:        config.SetupConfig{Complete: true},
+		Setup:        config.SetupConfig{Complete: true, Service: "foreground"},
 		Daemon:       config.DaemonConfig{Listen: "127.0.0.1:9900"},
 		Agents:       config.AgentsConfig{Runtime: "claude-code"},
 		RuntimeAuth:  config.RuntimeAuthConfig{Runtime: "claude-code", Provider: "anthropic", Mode: "native"},
@@ -169,6 +169,119 @@ func TestInitQualityGateFailureWritesNoProjectState(t *testing.T) {
 	}
 }
 
+func TestInitRollbackAfterConfigWriteRemovesNewTackState(t *testing.T) {
+	root, userConfig := setupInitRollbackTest(t)
+	initAfterConfigWriteHook = func() error { return fmt.Errorf("boom after config") }
+
+	err := executeInitForRollbackTest(t)
+	if err == nil || !strings.Contains(err.Error(), "boom after config") {
+		t.Fatalf("init error = %v, want injected config write failure", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".tack")); !os.IsNotExist(statErr) {
+		t.Fatalf(".tack exists after rollback: %v", statErr)
+	}
+	if _, err := os.Stat(userConfig); err != nil {
+		t.Fatalf("global config should be preserved: %v", err)
+	}
+}
+
+func TestInitRollbackAfterDaemonRegistrationRemovesCreatedRegistration(t *testing.T) {
+	root, _ := setupInitRollbackTest(t)
+	var deleted string
+	server := initRollbackDaemonServer(t, &deleted)
+	defer server.Close()
+	daemonURL = server.URL
+	initAfterDaemonRegisterHook = func() error { return fmt.Errorf("boom after register") }
+
+	err := executeInitForRollbackTest(t)
+	if err == nil || !strings.Contains(err.Error(), "boom after register") {
+		t.Fatalf("init error = %v, want injected registration failure", err)
+	}
+	if deleted == "" {
+		t.Fatal("expected rollback to remove daemon project registration")
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".tack")); !os.IsNotExist(statErr) {
+		t.Fatalf(".tack exists after rollback: %v", statErr)
+	}
+}
+
+func TestInitRollbackAfterProjectIDWriteRemovesCreatedProjectID(t *testing.T) {
+	root, _ := setupInitRollbackTest(t)
+	var deleted string
+	server := initRollbackDaemonServer(t, &deleted)
+	defer server.Close()
+	daemonURL = server.URL
+	initAfterProjectIDWriteHook = func() error { return fmt.Errorf("boom after project id") }
+
+	err := executeInitForRollbackTest(t)
+	if err == nil || !strings.Contains(err.Error(), "boom after project id") {
+		t.Fatalf("init error = %v, want injected project id failure", err)
+	}
+	if deleted == "" {
+		t.Fatal("expected rollback to remove daemon project registration")
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".tack", "project-id")); !os.IsNotExist(statErr) {
+		t.Fatalf("project-id exists after rollback: %v", statErr)
+	}
+}
+
+func TestInitRollbackAfterGitignoreRestoresPreviousContent(t *testing.T) {
+	root, _ := setupInitRollbackTest(t)
+	gitignorePath := filepath.Join(root, ".gitignore")
+	original := "node_modules/\n"
+	if err := os.WriteFile(gitignorePath, []byte(original), 0o644); err != nil {
+		t.Fatalf("WriteFile .gitignore: %v", err)
+	}
+	var deleted string
+	server := initRollbackDaemonServer(t, &deleted)
+	defer server.Close()
+	daemonURL = server.URL
+	initAfterGitignoreHook = func() error { return fmt.Errorf("boom after gitignore") }
+
+	err := executeInitForRollbackTest(t)
+	if err == nil || !strings.Contains(err.Error(), "boom after gitignore") {
+		t.Fatalf("init error = %v, want injected gitignore failure", err)
+	}
+	data, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		t.Fatalf("ReadFile .gitignore: %v", err)
+	}
+	if string(data) != original {
+		t.Fatalf(".gitignore = %q, want %q", string(data), original)
+	}
+	if deleted == "" {
+		t.Fatal("expected rollback to remove daemon project registration")
+	}
+}
+
+func TestInitTransactionRollbackRestoresExistingConfig(t *testing.T) {
+	root := t.TempDir()
+	tackDir := filepath.Join(root, ".tack")
+	if err := os.MkdirAll(tackDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	configPath := filepath.Join(tackDir, "config.yaml")
+	original := []byte("agents:\n  runtime: old\n")
+	if err := os.WriteFile(configPath, original, 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	txn, err := newInitTransaction(root)
+	if err != nil {
+		t.Fatalf("newInitTransaction: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("agents:\n  runtime: new\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	txn.rollback(context.Background())
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile config: %v", err)
+	}
+	if string(data) != string(original) {
+		t.Fatalf("config = %q, want %q", string(data), string(original))
+	}
+}
+
 func TestInitRegistersProjectAndReportsSources(t *testing.T) {
 	root := t.TempDir()
 	userConfig := filepath.Join(root, "user.yaml")
@@ -177,7 +290,7 @@ func TestInitRegistersProjectAndReportsSources(t *testing.T) {
 	resetInitTestState(t)
 	initGateRunner = func(context.Context, string, string) error { return nil }
 	writeInitUserConfig(t, userConfig, setupConfigFile{
-		Setup:        config.SetupConfig{Complete: true},
+		Setup:        config.SetupConfig{Complete: true, Service: "foreground"},
 		Daemon:       config.DaemonConfig{Listen: "127.0.0.1:9900"},
 		Agents:       config.AgentsConfig{Runtime: "claude-code"},
 		RuntimeAuth:  config.RuntimeAuthConfig{Runtime: "claude-code", Provider: "anthropic", Mode: "native"},
@@ -243,6 +356,54 @@ func writeInitUserConfig(t *testing.T, path string, state setupConfigFile) {
 	}
 }
 
+func setupInitRollbackTest(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	userConfig := filepath.Join(root, "user.yaml")
+	t.Setenv("TACK_USER_CONFIG_PATH", userConfig)
+	t.Chdir(root)
+	resetInitTestState(t)
+	initGateRunner = func(context.Context, string, string) error { return nil }
+	writeInitUserConfig(t, userConfig, setupConfigFile{
+		Setup:        config.SetupConfig{Complete: true, Service: "foreground"},
+		Daemon:       config.DaemonConfig{Listen: "127.0.0.1:9900"},
+		Agents:       config.AgentsConfig{Runtime: "claude-code"},
+		RuntimeAuth:  config.RuntimeAuthConfig{Runtime: "claude-code", Provider: "anthropic", Mode: "native"},
+		Models:       config.ModelsConfig{Planner: "planner", Agent: "agent", SmallTasks: "small"},
+		Sandbox:      config.SandboxConfig{Provider: "local"},
+		Blueprint:    "custom-no-pr",
+		QualityGates: []string{"go test ./..."},
+	})
+	return root, userConfig
+}
+
+func executeInitForRollbackTest(t *testing.T) error {
+	t.Helper()
+	rootCmd.SetOut(&strings.Builder{})
+	rootCmd.SetErr(&strings.Builder{})
+	rootCmd.SetArgs([]string{"init", "--non-interactive"})
+	return rootCmd.Execute()
+}
+
+func initRollbackDaemonServer(t *testing.T, deleted *string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/projects/register":
+			var registered clientProjectRegistration
+			if err := json.NewDecoder(r.Body).Decode(&registered); err != nil {
+				t.Fatalf("Decode registration: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(domain.Project{ID: registered.ProjectID, RootPath: registered.RootPath, ConfigPath: registered.ConfigPath, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/projects/"):
+			*deleted = strings.TrimPrefix(r.URL.Path, "/projects/")
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
 func resetInitTestState(t *testing.T) {
 	t.Helper()
 	rootCmd.SetArgs(nil)
@@ -264,11 +425,19 @@ func resetInitTestState(t *testing.T) {
 	initSetupCommands = nil
 	initSetupVerify = nil
 	initGateRunner = runInitQualityGate
+	initAfterConfigWriteHook = nil
+	initAfterDaemonRegisterHook = nil
+	initAfterProjectIDWriteHook = nil
+	initAfterGitignoreHook = nil
 	t.Cleanup(func() {
 		rootCmd.SetArgs(nil)
 		cfgPath = ""
 		daemonURL = defaultDaemonURL
 		projectID = ""
 		initGateRunner = runInitQualityGate
+		initAfterConfigWriteHook = nil
+		initAfterDaemonRegisterHook = nil
+		initAfterProjectIDWriteHook = nil
+		initAfterGitignoreHook = nil
 	})
 }

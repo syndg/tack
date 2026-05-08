@@ -24,21 +24,25 @@ import (
 )
 
 var (
-	initNonInteractive  bool
-	initRuntime         string
-	initProvider        string
-	initAuthMode        string
-	initAuthMethod      string
-	initCredentialRef   string
-	initAgentModel      string
-	initPlannerModel    string
-	initSmallTaskModel  string
-	initSandboxProvider string
-	initBlueprint       string
-	initQualityGates    []string
-	initSetupCommands   []string
-	initSetupVerify     []string
-	initGateRunner      = runInitQualityGate
+	initNonInteractive          bool
+	initRuntime                 string
+	initProvider                string
+	initAuthMode                string
+	initAuthMethod              string
+	initCredentialRef           string
+	initAgentModel              string
+	initPlannerModel            string
+	initSmallTaskModel          string
+	initSandboxProvider         string
+	initBlueprint               string
+	initQualityGates            []string
+	initSetupCommands           []string
+	initSetupVerify             []string
+	initGateRunner              = runInitQualityGate
+	initAfterConfigWriteHook    func() error
+	initAfterDaemonRegisterHook func() error
+	initAfterProjectIDWriteHook func() error
+	initAfterGitignoreHook      func() error
 )
 
 func init() {
@@ -148,19 +152,16 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	createdTackDir := false
-	if _, err := os.Stat(tackDir); os.IsNotExist(err) {
-		createdTackDir = true
+	txn, err := newInitTransaction(cwd)
+	if err != nil {
+		return err
+	}
+	fail := func(err error) error {
+		txn.rollback(cmd.Context())
+		return err
 	}
 	if err := os.MkdirAll(tackDir, 0o755); err != nil {
 		return fmt.Errorf("creating .tack directory: %w", err)
-	}
-	cleanupProjectState := func() {
-		_ = os.Remove(configPath)
-		_ = os.Remove(config.ProjectIDPath(cwd))
-		if createdTackDir {
-			_ = os.Remove(tackDir)
-		}
 	}
 
 	cfgYAML, err := yaml.Marshal(projectCfg)
@@ -168,39 +169,56 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
 	if err := os.WriteFile(configPath, cfgYAML, 0o644); err != nil {
-		cleanupProjectState()
-		return fmt.Errorf("writing config: %w", err)
+		return fail(fmt.Errorf("writing config: %w", err))
+	}
+	if initAfterConfigWriteHook != nil {
+		if err := initAfterConfigWriteHook(); err != nil {
+			return fail(err)
+		}
 	}
 
 	if err := store.Save(); err != nil {
-		cleanupProjectState()
-		return fmt.Errorf("saving credentials: %w", err)
+		return fail(fmt.Errorf("saving credentials: %w", err))
 	}
 	daemonClient, err := newDaemonClient(cmd, false)
 	if err != nil {
-		cleanupProjectState()
-		return err
+		return fail(err)
 	}
+	txn.daemonClient = daemonClient
 	registered, err := daemonClient.RegisterProject(cmd.Context(), client.ProjectRegistration{
 		ProjectID:  projectUUID,
 		RootPath:   cwd,
 		ConfigPath: configPath,
 	})
 	if err != nil {
-		cleanupProjectState()
-		return fmt.Errorf("registering project with daemon: %w", err)
+		return fail(fmt.Errorf("registering project with daemon: %w", err))
+	}
+	if !txn.hadProjectID {
+		txn.registeredProjectID = registered.ID
+	}
+	if initAfterDaemonRegisterHook != nil {
+		if err := initAfterDaemonRegisterHook(); err != nil {
+			return fail(err)
+		}
 	}
 	if err := writeStableProjectID(cwd, projectUUID); err != nil {
-		cleanupProjectState()
-		return err
+		return fail(err)
+	}
+	if initAfterProjectIDWriteHook != nil {
+		if err := initAfterProjectIDWriteHook(); err != nil {
+			return fail(err)
+		}
 	}
 	if err := ensureProjectGitignore(cwd); err != nil {
-		cleanupProjectState()
-		return err
+		return fail(err)
+	}
+	if initAfterGitignoreHook != nil {
+		if err := initAfterGitignoreHook(); err != nil {
+			return fail(err)
+		}
 	}
 	if err := validateProjectInit(cmd.Context(), cwd, globalSetup, projectCfg, store); err != nil {
-		cleanupProjectState()
-		return err
+		return fail(err)
 	}
 
 	fmt.Printf("\nCreated %s\n", configPath)
@@ -218,6 +236,82 @@ var tackGitignoreBlock = []string{
 	"/.tack/*.db-wal",
 	"/.tack/*.db-shm",
 	"/.tack/data/",
+}
+
+type initTransaction struct {
+	root                string
+	tackDir             string
+	configPath          string
+	projectIDPath       string
+	gitignorePath       string
+	hadTackDir          bool
+	hadConfig           bool
+	configContent       []byte
+	hadProjectID        bool
+	projectIDContent    []byte
+	hadGitignore        bool
+	gitignoreContent    []byte
+	daemonClient        *client.Client
+	registeredProjectID string
+}
+
+func newInitTransaction(root string) (*initTransaction, error) {
+	txn := &initTransaction{
+		root:          root,
+		tackDir:       filepath.Join(root, config.ProjectConfigDir),
+		configPath:    config.ProjectConfigPath(root),
+		projectIDPath: config.ProjectIDPath(root),
+		gitignorePath: filepath.Join(root, ".gitignore"),
+	}
+	if _, err := os.Stat(txn.tackDir); err == nil {
+		txn.hadTackDir = true
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("reading .tack directory state: %w", err)
+	}
+	if err := txn.snapshotFile(txn.configPath, &txn.hadConfig, &txn.configContent); err != nil {
+		return nil, err
+	}
+	if err := txn.snapshotFile(txn.projectIDPath, &txn.hadProjectID, &txn.projectIDContent); err != nil {
+		return nil, err
+	}
+	if err := txn.snapshotFile(txn.gitignorePath, &txn.hadGitignore, &txn.gitignoreContent); err != nil {
+		return nil, err
+	}
+	return txn, nil
+}
+
+func (t *initTransaction) snapshotFile(path string, existed *bool, content *[]byte) error {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		*existed = true
+		*content = append([]byte(nil), data...)
+		return nil
+	}
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return fmt.Errorf("reading %s: %w", path, err)
+}
+
+func (t *initTransaction) rollback(ctx context.Context) {
+	if t.daemonClient != nil && t.registeredProjectID != "" {
+		_ = t.daemonClient.RemoveProject(ctx, t.registeredProjectID)
+	}
+	t.restoreFile(t.configPath, t.hadConfig, t.configContent)
+	t.restoreFile(t.projectIDPath, t.hadProjectID, t.projectIDContent)
+	t.restoreFile(t.gitignorePath, t.hadGitignore, t.gitignoreContent)
+	if !t.hadTackDir {
+		_ = os.Remove(t.tackDir)
+	}
+}
+
+func (t *initTransaction) restoreFile(path string, existed bool, content []byte) {
+	if existed {
+		_ = os.MkdirAll(filepath.Dir(path), 0o755)
+		_ = os.WriteFile(path, content, 0o644)
+		return
+	}
+	_ = os.Remove(path)
 }
 
 func ensureProjectGitignore(root string) error {
@@ -274,6 +368,9 @@ func completedGlobalSetup() (setupConfigFile, error) {
 	}
 	if !state.Setup.Complete {
 		return state, fmt.Errorf("global setup is incomplete; run tack setup before tack init")
+	}
+	if err := validateSetupState(context.Background(), state); err != nil {
+		return state, err
 	}
 	return state, nil
 }
