@@ -4,7 +4,7 @@
 
 Tack is an open-source harness for deterministic, repository-aware agentic code execution. You describe what you want built. Tack turns that into a bounded workflow: discovery, planning, isolated execution, quality gates, recovery, merge, and PR creation.
 
-Tack is in public alpha. The best-supported launch path is local git worktrees with the Pi runtime. Expect rough edges, file sharp issues, and do not point Tack at repositories you would not run locally.
+Tack is in public alpha. It can run agents in local git worktrees or Daytona sandboxes, using the runtime and model provider you select during setup. Expect rough edges, file sharp issues, and do not point Tack at repositories you would not run locally.
 
 ```
 $ tack plan "Add pagination to all list endpoints and a PATCH /expenses/:id endpoint"
@@ -103,10 +103,20 @@ Remove `<repo>/.tack/` from any project where you no longer want Tack config or 
 # Verify install
 tack version
 
-# Start the daemon, then initialize a project
+# Configure machine-level settings
+tack setup
+
+# Start the daemon service or run the foreground daemon
+tack daemon install
+tack daemon start
+# or: tack daemon
+
+# Initialize and register a project
 cd your-project
-tack daemon &
 tack init
+
+# Check readiness
+tack doctor
 
 # Submit an objective
 tack plan "Add a health check endpoint at GET /health that returns 200 OK"
@@ -140,9 +150,10 @@ Good objectives are specific, scoped, grounded in codebase terms, and testable. 
 | Problem | Check |
 |---------|-------|
 | `tack` command not found | Confirm the binary is on `$PATH`: `which tack` |
-| Daemon not reachable | Start it in another terminal: `tack daemon` |
+| Daemon not reachable | Check `tack daemon status`, then start with `tack daemon start` or `tack daemon` |
+| Setup or init validation fails | Run `tack doctor` or `tack doctor --json` |
 | Init cannot authenticate | Run `tack auth list` and `tack auth test <provider>` |
-| Agent cannot push or create PR | Add git credentials: `tack auth add git` |
+| PR workflow cannot publish | Add a GitHub token with push permission: `tack auth add github` |
 | Worktree creation fails | Commit or stash local changes before running objectives |
 | Plan looks wrong | Reject it: `tack reject <plan-id>`, then resubmit a clearer objective |
 | Agent gets stuck | Check `tack watch --summary`, then `tack logs <agent-id>` |
@@ -221,7 +232,7 @@ Quality gates run against the full project, but Tack only fails a stream for err
 
 ### Blueprints
 
-Workflow steps are YAML state machines. Steps can be `agent`, `deterministic`, `human`, or `blueprint_ref` (nested). Tack ships neutral defaults. Override them or add your own in `.tack/blueprints/`.
+Workflow steps are YAML state machines. Steps can be `agent`, `deterministic`, `human`, or `blueprint_ref` (nested). Tack ships blueprints and also loads user or project overrides from config.
 
 ```yaml
 id: build-review
@@ -326,8 +337,11 @@ See the [full security audit](docs/security-audit-2026-04-10.md) for details.
 
 | Command | Description |
 |---------|-------------|
-| `tack daemon` | Start the machine-wide Tack daemon |
-| `tack init` | Bootstrap Tack for a repo (interactive wizard) |
+| `tack setup` | Configure machine-level Tack settings |
+| `tack init` | Bootstrap and register a repo |
+| `tack doctor` | Validate setup, project, daemon, runtime, auth, and readiness |
+| `tack daemon` | Start the foreground Tack daemon |
+| `tack daemon install/start/stop/restart/status/reload` | Manage the user service on supported platforms |
 | `tack plan <description>` | Create an objective and generate a plan |
 | `tack plans` | List all plans |
 | `tack show <plan-id>` | Show plan details with streams |
@@ -365,7 +379,7 @@ See the [full security audit](docs/security-audit-2026-04-10.md) for details.
 
 | Runtime | Status | RPC | Hooks | File Scope |
 |---------|--------|-----|-------|------------|
-| [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | First-class | Yes | Yes | Enforced via tool-call hooks |
+| [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | RPC runtime | Yes | Yes | Enforced via tool-call hooks |
 | Claude Code | Minimal compatibility | No | No | Prompt-level guidance only |
 | Codex CLI | Planned | Limited | No | Prompt-level |
 
@@ -401,7 +415,7 @@ See the [full security audit](docs/security-audit-2026-04-10.md) for details.
 
 - Public alpha: APIs, config, and workflow details may change.
 - Local mode is not OS sandboxing; agents run as your user.
-- Pi is the first-class runtime; Claude Code is a minimal compatibility path.
+- Pi supports bidirectional RPC and tool-call file scope enforcement; Claude Code runs through a prompt-and-wait compatibility path.
 - Docker, E2B, and semantic AI merge are planned, not launch promises.
 - Official Homebrew core is not available yet; use the `syndg/tack` cask tap.
 - First-run reliability depends on provider credentials, git credentials, and project setup commands being correct.

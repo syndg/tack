@@ -14,6 +14,7 @@ import (
 
 	"github.com/syndg/tack/internal/config"
 	"github.com/syndg/tack/internal/domain"
+	"github.com/syndg/tack/internal/runtimeauth"
 	"gopkg.in/yaml.v3"
 )
 
@@ -59,6 +60,38 @@ func TestBuildProjectConfigWritesRuntimeAuthAndModels(t *testing.T) {
 	}
 	if len(verify) != 1 || verify[0] != "test -d node_modules" {
 		t.Fatalf("verify = %#v", verify)
+	}
+}
+
+func TestInitPromptOptionConstructionIsNeutral(t *testing.T) {
+	runtimeOptions := initRuntimeOptions()
+	if len(runtimeOptions) != 2 || runtimeOptions[0].Value == "" || runtimeOptions[1].Value == "" {
+		t.Fatalf("runtime options = %#v", runtimeOptions)
+	}
+	for _, option := range runtimeOptions {
+		if strings.EqualFold(option.Key, "quick") || strings.EqualFold(option.Key, "default") || strings.Contains(strings.ToLower(option.Key), "recommended") {
+			t.Fatalf("runtime option has non-neutral label: %#v", option)
+		}
+	}
+
+	sandboxOptions := initSandboxOptions()
+	if len(sandboxOptions) != 2 || sandboxOptions[0].Value == "" || sandboxOptions[1].Value == "" {
+		t.Fatalf("sandbox options = %#v", sandboxOptions)
+	}
+	for _, option := range sandboxOptions {
+		if strings.EqualFold(option.Key, "quick") || strings.EqualFold(option.Key, "default") || strings.Contains(strings.ToLower(option.Key), "recommended") {
+			t.Fatalf("sandbox option has non-neutral label: %#v", option)
+		}
+	}
+
+	modelOptions := initModelOptions([]runtimeauth.ModelOption{{ID: "model-a", Label: "model-a"}, {ID: "model-b", Label: "model-b"}})
+	if len(modelOptions) != 2 {
+		t.Fatalf("model options = %#v", modelOptions)
+	}
+	for _, option := range modelOptions {
+		if strings.Contains(strings.ToLower(option.Key), "same as") || strings.Contains(strings.ToLower(option.Key), "default") {
+			t.Fatalf("model option has implicit-default label: %#v", option)
+		}
 	}
 }
 

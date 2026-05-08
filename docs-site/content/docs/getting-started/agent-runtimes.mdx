@@ -9,7 +9,7 @@ Tack does not implement its own AI agent. It orchestrates existing agent runtime
 
 | Runtime | Status | RPC | File Scope |
 |---------|--------|-----|------------|
-| **Pi** | First-class | Yes (bidirectional JSON over stdin/stdout) | Enforced via tool_call hooks |
+| **Pi** | RPC runtime | Yes (bidirectional JSON over stdin/stdout) | Enforced via tool_call hooks |
 | **Claude Code** | Minimal compatibility | No (fire-and-forget) | Prompt-level guidance only |
 
 ## Choosing a Runtime
@@ -18,11 +18,11 @@ Tack does not implement its own AI agent. It orchestrates existing agent runtime
 
 Pi is an open-source coding agent/runtime from the [pi-mono project](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent). It supports bidirectional JSON-RPC communication, which lets Tack enforce file scope boundaries at the tool level and exchange structured messages in real time.
 
-**Pi provides:**
-- You want deterministic file scope enforcement (agents physically cannot edit files outside their scope)
-- You want real-time RPC communication for status updates and message exchange
-- You need per-step model control via Pi's provider system
-- You are running multiple streams and want tight isolation guarantees
+**Pi characteristics:**
+- Tool-call hooks can enforce file scope boundaries
+- JSON-RPC communication supports status updates and message exchange
+- Provider settings can control models per role
+- Multiple streams can run with runtime-level scope checks
 
 **Pi supports these providers:**
 - `anthropic` — Claude models (Opus, Sonnet, Haiku)
@@ -49,9 +49,9 @@ When Pi is selected during setup and missing, Tack can install it after explicit
 Claude Code is supported as a minimal compatibility path. Tack invokes it with a prompt and waits for it to finish. There is no bidirectional communication.
 
 **Claude Code characteristics:**
-- You already depend on Claude Code in your own workflow
-- You understand the limitations versus Pi
-- You do not need first-class file-scope enforcement or RPC integration
+- Uses the Claude Code CLI already installed on the machine
+- Runs through prompt-and-wait execution rather than Tack RPC
+- Relies on prompt-level file scope guidance
 
 **Configuration:**
 

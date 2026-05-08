@@ -345,7 +345,6 @@ func ensureProjectGitignore(root string) error {
 }
 
 type initWizardResult struct {
-	Profile         string
 	Runtime         string
 	SandboxProvider string
 	Provider        string
@@ -402,33 +401,17 @@ func initConfigFromFlags() initWizardResult {
 }
 
 func runInitWizard(ctx context.Context, store *credentials.Store) (initWizardResult, error) {
-	result := initWizardResult{Runtime: "pi", SandboxProvider: "local"}
-	if err := huh.NewSelect[string]().
-		Title("Setup mode").
-		Options(
-			huh.NewOption("Quick", "quick"),
-			huh.NewOption("Advanced", "advanced"),
-		).
-		Value(&result.Profile).
-		Run(); err != nil {
-		return result, err
-	}
+	result := initWizardResult{}
 	if err := huh.NewSelect[string]().
 		Title("Runtime").
-		Options(
-			huh.NewOption("Pi", "pi"),
-			huh.NewOption("Claude Code", "claude-code"),
-		).
+		Options(initRuntimeOptions()...).
 		Value(&result.Runtime).
 		Run(); err != nil {
 		return result, err
 	}
 	if err := huh.NewSelect[string]().
 		Title("Sandbox provider").
-		Options(
-			huh.NewOption("Local (git worktrees)", "local"),
-			huh.NewOption("Daytona (cloud sandboxes)", "daytona"),
-		).
+		Options(initSandboxOptions()...).
 		Value(&result.SandboxProvider).
 		Run(); err != nil {
 		return result, err
@@ -443,16 +426,15 @@ func runInitWizard(ctx context.Context, store *credentials.Store) (initWizardRes
 		return result, err
 	}
 	if result.SandboxProvider == "local" && !probe.RuntimeAvailable {
-		return result, fmt.Errorf("%s is not installed locally; use Daytona or install the runtime first", result.Runtime)
+		return result, fmt.Errorf("local sandbox requires runtime %q to be installed locally", result.Runtime)
 	}
 
-	provider, err := selectInitProvider(adapter, probe, result.Runtime)
+	provider, err := selectInitProvider(adapter, probe)
 	if err != nil {
 		return result, err
 	}
 	result.Provider = provider
-	result.CredentialRef = runtimeauth.CredentialRefForProvider(provider)
-	if err := selectInitAuthMethod(ctx, store, &result); err != nil {
+	if err := selectInitAuthMethod(ctx, store, &result, probe); err != nil {
 		return result, err
 	}
 
@@ -513,10 +495,7 @@ func confirmInitPlan(result initWizardResult) error {
 	return nil
 }
 
-func selectInitProvider(adapter runtimeauth.Adapter, probe runtimeauth.ProbeResult, runtimeName string) (string, error) {
-	if runtimeName == "claude-code" {
-		return "anthropic", nil
-	}
+func selectInitProvider(adapter runtimeauth.Adapter, probe runtimeauth.ProbeResult) (string, error) {
 	options := make([]huh.Option[string], 0, len(probe.SupportedProviders))
 	for _, provider := range probe.SupportedProviders {
 		options = append(options, huh.NewOption(provider.Label, provider.ID))
@@ -535,7 +514,7 @@ func selectInitProvider(adapter runtimeauth.Adapter, probe runtimeauth.ProbeResu
 	return provider, nil
 }
 
-func selectInitAuthMethod(ctx context.Context, store *credentials.Store, result *initWizardResult) error {
+func selectInitAuthMethod(ctx context.Context, store *credentials.Store, result *initWizardResult, probe runtimeauth.ProbeResult) error {
 	providerName := runtimeauth.ProviderDisplayName(result.Provider)
 
 	type authChoice struct {
@@ -545,72 +524,86 @@ func selectInitAuthMethod(ctx context.Context, store *credentials.Store, result 
 		Method string
 	}
 	var choices []authChoice
+	if method, ok := probe.NativeMethods[result.Provider]; ok && method != "" {
+		choices = append(choices, authChoice{Value: "native", Label: "Runtime-native auth", Mode: runtimeauth.ModeNative, Method: method})
+	}
 
 	switch result.Provider {
 	case "anthropic":
-		if store.HasProvider(result.CredentialRef) {
-			choices = append(choices, authChoice{Value: "existing-api-key", Label: "Use existing Tack Anthropic API key", Mode: runtimeauth.ModeTack, Method: runtimeauth.MethodAPIKey})
-		}
-		choices = append(choices, authChoice{Value: "new-api-key", Label: "Enter Anthropic API key", Mode: runtimeauth.ModeTack, Method: runtimeauth.MethodAPIKey})
+		choices = append(choices, authChoice{Value: "tack-api-key", Label: "Tack credential: API key", Mode: runtimeauth.ModeTack, Method: runtimeauth.MethodAPIKey})
 	case "openai":
-		if store.HasProvider(result.CredentialRef) {
-			choices = append(choices, authChoice{Value: "existing-openai-key", Label: "Use existing Tack OpenAI API key", Mode: runtimeauth.ModeTack, Method: runtimeauth.MethodAPIKey})
-		}
-		choices = append(choices, authChoice{Value: "new-openai-key", Label: "Enter OpenAI API key", Mode: runtimeauth.ModeTack, Method: runtimeauth.MethodAPIKey})
+		choices = append(choices, authChoice{Value: "tack-api-key", Label: "Tack credential: API key", Mode: runtimeauth.ModeTack, Method: runtimeauth.MethodAPIKey})
 	case "openai-codex":
-		if store.HasProvider(result.CredentialRef) {
-			choices = append(choices, authChoice{Value: "existing-codex-auth", Label: "Use existing Tack OpenAI Codex auth", Mode: runtimeauth.ModeTack, Method: existingAuthMethod(store, result.CredentialRef)})
-		}
 		choices = append(choices,
-			authChoice{Value: "new-codex-key", Label: "Enter OpenAI API key", Mode: runtimeauth.ModeTack, Method: runtimeauth.MethodAPIKey},
-			authChoice{Value: "new-codex-oauth", Label: "Sign in with OpenAI Codex", Mode: runtimeauth.ModeTack, Method: runtimeauth.MethodOAuth},
+			authChoice{Value: "tack-api-key", Label: "Tack credential: API key", Mode: runtimeauth.ModeTack, Method: runtimeauth.MethodAPIKey},
+			authChoice{Value: "tack-oauth", Label: "Tack credential: OAuth", Mode: runtimeauth.ModeTack, Method: runtimeauth.MethodOAuth},
 		)
 	}
+	if len(choices) == 0 {
+		return fmt.Errorf("no auth methods available for provider %s", result.Provider)
+	}
 
-	if len(choices) == 1 {
-		result.RuntimeAuthMode = choices[0].Mode
-		result.AuthMethod = choices[0].Method
-		result.AuthMethodLabel = choices[0].Label
-	} else {
-		options := make([]huh.Option[string], 0, len(choices))
-		for _, choice := range choices {
-			options = append(options, huh.NewOption(choice.Label, choice.Value))
+	options := make([]huh.Option[string], 0, len(choices))
+	for _, choice := range choices {
+		options = append(options, huh.NewOption(choice.Label, choice.Value))
+	}
+	var picked string
+	if err := huh.NewSelect[string]().
+		Title(fmt.Sprintf("Auth method for %s", providerName)).
+		Options(options...).
+		Value(&picked).
+		Run(); err != nil {
+		return err
+	}
+	for _, choice := range choices {
+		if choice.Value == picked {
+			result.RuntimeAuthMode = choice.Mode
+			result.AuthMethod = choice.Method
+			result.AuthMethodLabel = choice.Label
+			break
 		}
-		var picked string
-		if err := huh.NewSelect[string]().
-			Title(fmt.Sprintf("Auth method for %s", providerName)).
-			Options(options...).
-			Value(&picked).
+	}
+
+	if result.RuntimeAuthMode == runtimeauth.ModeTack {
+		if err := huh.NewInput().
+			Title("Credential reference").
+			Value(&result.CredentialRef).
 			Run(); err != nil {
 			return err
 		}
-		for _, choice := range choices {
-			if choice.Value == picked {
-				result.RuntimeAuthMode = choice.Mode
-				result.AuthMethod = choice.Method
-				result.AuthMethodLabel = choice.Label
-				break
+		if strings.TrimSpace(result.CredentialRef) == "" {
+			return fmt.Errorf("credential reference is required for Tack-managed auth")
+		}
+		if !store.HasProvider(result.CredentialRef) {
+			switch result.AuthMethod {
+			case runtimeauth.MethodAPIKey:
+				if err := promptAPIKeyCredential(store, result.CredentialRef, providerName); err != nil {
+					return err
+				}
+			case runtimeauth.MethodOAuth:
+				if result.Provider != "openai-codex" {
+					return fmt.Errorf("OAuth credential setup is not supported for provider %s", result.Provider)
+				}
+				if err := promptOpenAICodexOAuth(ctx, store, result.CredentialRef); err != nil {
+					return err
+				}
 			}
-		}
-	}
-
-	switch result.AuthMethodLabel {
-	case "Enter Anthropic API key", "Enter OpenAI API key":
-		if err := promptAPIKeyCredential(store, result.CredentialRef, providerName); err != nil {
-			return err
-		}
-	case "Sign in with OpenAI Codex":
-		if err := promptOpenAICodexOAuth(ctx, store, result.CredentialRef); err != nil {
-			return err
 		}
 	}
 	return nil
 }
 
 func promptModelSelections(result *initWizardResult, models []runtimeauth.ModelOption) error {
-	options := make([]huh.Option[string], 0, len(models))
-	for _, model := range models {
-		options = append(options, huh.NewOption(model.Label, model.ID))
+	options := initModelOptions(models)
+	if len(options) == 0 {
+		return fmt.Errorf("no model options available")
+	}
+	if err := huh.NewSelect[string]().
+		Title("Planner model").
+		Options(options...).
+		Value(&result.PlannerModel).
+		Run(); err != nil {
+		return err
 	}
 	if err := huh.NewSelect[string]().
 		Title("Agent model").
@@ -619,33 +612,36 @@ func promptModelSelections(result *initWizardResult, models []runtimeauth.ModelO
 		Run(); err != nil {
 		return err
 	}
-	if result.Profile == "advanced" {
-		plannerOptions := append([]huh.Option[string]{huh.NewOption("Same as agent", result.AgentModel)}, options...)
-		if err := huh.NewSelect[string]().
-			Title("Planner model").
-			Options(plannerOptions...).
-			Value(&result.PlannerModel).
-			Run(); err != nil {
-			return err
-		}
-		if result.PlannerModel == "" {
-			result.PlannerModel = result.AgentModel
-		}
-	} else {
-		result.PlannerModel = result.AgentModel
-	}
-	smallTaskOptions := append([]huh.Option[string]{huh.NewOption("Same as agent", result.AgentModel)}, options...)
 	if err := huh.NewSelect[string]().
 		Title("Small-task model").
-		Options(smallTaskOptions...).
+		Options(options...).
 		Value(&result.SmallTaskModel).
 		Run(); err != nil {
 		return err
 	}
-	if result.SmallTaskModel == "" {
-		result.SmallTaskModel = result.AgentModel
-	}
 	return nil
+}
+
+func initRuntimeOptions() []huh.Option[string] {
+	return []huh.Option[string]{
+		huh.NewOption("Pi", "pi"),
+		huh.NewOption("Claude Code", "claude-code"),
+	}
+}
+
+func initSandboxOptions() []huh.Option[string] {
+	return []huh.Option[string]{
+		huh.NewOption("Local (git worktrees)", "local"),
+		huh.NewOption("Daytona (cloud sandboxes)", "daytona"),
+	}
+}
+
+func initModelOptions(models []runtimeauth.ModelOption) []huh.Option[string] {
+	options := make([]huh.Option[string], 0, len(models))
+	for _, model := range models {
+		options = append(options, huh.NewOption(model.Label, model.ID))
+	}
+	return options
 }
 
 func buildProjectConfig(result initWizardResult) map[string]interface{} {
